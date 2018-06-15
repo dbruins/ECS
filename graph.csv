@@ -1,0 +1,8 @@
+Running,stop,Ready
+Running,poweroff,Shutdown
+Ready,start,Running
+Ready,poweroff,Shutdown
+Ready,reconfigure,Uncofigured
+Uncofigured,configure,Ready
+Uncofigured,poweroff,Shutdown
+Shutdown,poweron,Uncofigured

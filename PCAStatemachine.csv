@@ -1,0 +1,9 @@
+Ready,reconfigure,NotReady
+Ready,error,NotReady
+Ready,start,Running
+NotReady,configured,Ready
+Running,stop,Ready
+Running,critical_error,NotReady
+Running,error,RunningInError
+RunningInError,resolved,Running
+RunningInError,stop,NotReady
