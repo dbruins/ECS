@@ -3,6 +3,7 @@ import sys
 import time
 import _thread
 import struct
+from random import randint
 
 stateMap = {}
 
@@ -64,7 +65,14 @@ def waitForUpdates():
 
     #watch subscription for further updates
     while True:
-        id, sequence, state = socketSubscription.recv_multipart()
+        m = socketSubscription.recv_multipart()
+        if len(m) != 3:
+            print (m)
+        else:
+            id = m[0]
+            sequence = m[1]
+            state = m[2]
+        #id, sequence, state = socketSubscription.recv_multipart()
         id = struct.unpack("!i",id)[0]
         sequence = struct.unpack("!i",sequence)[0]
         print("received update",id, sequence, state)
@@ -74,6 +82,7 @@ def waitForCommand():
     while True:
         m = socketReceiver.recv()
         print (m)
+        time.sleep(randint(2,6))
         #m = input()
         socketReceiver.send_string("OK")
 
@@ -85,8 +94,10 @@ _thread.start_new_thread(waitForUpdates,())
 id = int(address) - 5557
 print (id)
 while True:
-    x = input()
-
+    try:
+        x = input()
+    except EOFError:
+        continue
     socketPushUpdate.send_string("%i %s" % (id, x))
     #socketSender.send(x)
     #print (socketSender.recv())

@@ -2,19 +2,19 @@ from Statemachine import Statemachine
 import csv
 from _thread import start_new_thread
 import zmq
+import logging
 
 class Detector:
     stateMachine = None
     id = None
     socketSender = None
     socketReceiver = None
-    socketPublish = None
+
     # selfState -> PCAState
     mapper = {}
-    def __init__(self,id,stateFile,mapFile,address,socketPublish):
-        self.stateMachine = Statemachine(stateFile,"Shutdown",printTransitions=False)
+    def __init__(self,id,stateFile,mapFile,address):
+        self.stateMachine = Statemachine(stateFile,"Shutdown")
         self.id = id
-        self.socketPublish = socketPublish
         with open(mapFile, 'r') as file:
             reader = csv.reader(file, delimiter=',')
             for row in reader:
@@ -32,12 +32,23 @@ class Detector:
             returnMessage = self.socketSender.recv_string()
             #if success transition Statemachine
             if returnMessage == "OK":
+                oldstate = self.stateMachine.currentState
                 self.stateMachine.transition(command)
+                logging.info("Detector "+str(self.id)+" transition: "+ oldstate +" -> " + self.stateMachine.currentState)
+                return True
+                #self.log("GLobal Statechange: "+oldstate+" -> "+self.stateMachine.currentState)
             else:
-                print ("Detector returned error")
+                logging.critical("Detector returned error")
+                return False
         else:
-            print ("command in current State not possible")
+            logging.critical("command in current State not possible")
+            return False
 
+    def log(self,logmessage,error=False):
+        if error:
+            self.logfile.write("Error: "+logmessage)
+        else:
+            self.logfile.write(logmessage)
 
     def getId(self):
         return self.id
@@ -57,6 +68,7 @@ class Detector:
             return False
 
     def publishState(self):
+        """most sophisticated publishing method ever made"""
         print (self.mapper[self.stateMachine.currentState])
 
     def getReady(self):
@@ -71,28 +83,21 @@ class Detector:
 class DetectorA(Detector):
     def getReady(self):
         self.powerOn()
-        self.configure()
-        return True
+        return self.configure()
 
 
     def powerOn(self):
-        self.transitionRequest("poweron")
-        return True
+        return self.transitionRequest("poweron")
     def start(self):
-        self.transitionRequest("start")
-        return True
+        return self.transitionRequest("start")
     def stop(self):
-        self.transitionRequest("stop")
-        return True
+        return self.transitionRequest("stop")
     def powerOff(self):
-        self.transitionRequest("poweroff")
-        return True
+        return self.transitionRequest("poweroff")
     def configure(self):
-        self.transitionRequest("configure")
-        return True
+        return self.transitionRequest("configure")
     def reconfigure(self):
-        self.transitionRequest("reconfigure")
-        return True
+        return self.transitionRequest("reconfigure")
 
 class DetectorB(Detector):
     def getReady(self):

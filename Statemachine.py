@@ -9,11 +9,8 @@ class Statemachine:
 
     currentState = None
 
-    printTransitions = None
-
-    def __init__(self,csvGraph,initState, printTransitions=False):
+    def __init__(self,csvGraph,initState):
         self.currentState = initState
-        self.printTransitions = printTransitions
         #read Graph from csv file ---- | state | transition | next State |
         with open(csvGraph, 'r') as file:
             reader = csv.reader(file, delimiter=',')
@@ -28,20 +25,14 @@ class Statemachine:
         lock.acquire()
         #check if command ist valid in the current state
         if self.checkIfPossible(command):
-            if self.printTransitions:
-                print (self.currentState + " -> " + self.graph[self.currentState][command])
             self.currentState = self.graph[self.currentState][command]
             lock.release()
             return True
         else:
-            if self.printTransitions:
-                print ("Transition not defined/possible " + self.currentState + " command: " + command)
             lock.release()
             return False
 
     def checkIfPossible(self,command):
-        #print self.currentState
-        #print self.graph
         if command in self.graph[self.currentState]:
             return True
         else:
