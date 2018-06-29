@@ -60,7 +60,7 @@ class PCA:
 
         #register Poller
         self.poller = zmq.Poller()
-        self.poller.register(self.socketPullUpdates, zmq.POLLIN)
+        #self.poller.register(self.socketPullUpdates, zmq.POLLIN)
         self.poller.register(self.socketServeCurrentStatus, zmq.POLLIN)
         self.poller.register(self.socketSingleRequest, zmq.POLLIN)
 
@@ -82,7 +82,8 @@ class PCA:
         #thread stuff
         self.sem = threading.Semaphore()
         self.publishQueue = Queue()
-        start_new_thread(self.waitForMessages,())
+        start_new_thread(self.waitForUpdates,())
+        start_new_thread(self.waitForRequests,())
         start_new_thread(self.checkCurrentState,())
         start_new_thread(self.publisher,())
 
@@ -96,7 +97,45 @@ class PCA:
             self.statusMap[id] = (self.sequence,state)
             self.send_status(self.socketPublish,id,self.sequence,state)
 
-    def waitForMessages(self):
+
+    def waitForUpdates(self):
+        while True:
+            message = self.socketPullUpdates.recv()
+            message = message.decode()
+            print (message)
+            id = None
+            command = None
+
+            if len(message.split()) != 2:
+                logging.critical("received empty or too long message")
+                continue
+
+            i,command = message.split()
+            if i.isdigit():
+                id = int(i)
+
+            if id == None or command == None:
+                logging.critical("received non-valid message")
+                continue
+            if id not in self.detectors:
+                logging.critical("received message with unknown id")
+                continue
+
+            det = self.detectors[id]
+            self.sem.acquire()
+            nextMappedState = det.getMappedStateForCommand(command)
+            #Detector may not start Running on it's own
+            if nextMappedState and nextMappedState != "Running":
+                oldstate = det.stateMachine.currentState
+                det.stateMachine.transition(command)
+                logging.info("Detector "+str(det.id)+" made transition on it's own "+ oldstate +" -> " + det.stateMachine.currentState )
+                self.publishQueue.put((det.id,det.getMappedState()))
+            else:
+                logging.critical("Detector"+ str(det.id) +" made an impossible Transition: " + command)
+                #todo Ok what now?
+            self.sem.release()
+
+    def waitForRequests(self):
         """waits for messages from detectors"""
         while True:
             try:
@@ -104,41 +143,6 @@ class PCA:
             except:
                 logging.critical("unexpected error while receiving messages")
                 break
-    	    #status update
-            if self.socketPullUpdates in items:
-                message = self.socketPullUpdates.recv()
-                message = message.decode()
-                print (message)
-                id = None
-                command = None
-
-                if len(message.split()) != 2:
-                    logging.critical("received empty or too long message")
-                    continue
-
-                i,command = message.split()
-                if i.isdigit():
-                    id = int(i)
-
-                if id == None or command == None:
-                    logging.critical("received non-valid message")
-                    continue
-                if id not in self.detectors:
-                    logging.critical("received message with unknown id")
-                    continue
-
-                det = self.detectors[id]
-                self.sem.acquire()
-                nextMappedState = det.getMappedStateForCommand(command)
-                #Detector may not start Running on it's own
-                if nextMappedState and nextMappedState != "Running":
-                    oldstate = det.stateMachine.currentState
-                    det.stateMachine.transition(command)
-                    logging.info("Detector "+str(det.id)+" made transition on it's own "+ oldstate +" -> " + det.stateMachine.currentState )
-                    self.publishQueue.put((det.id,det.getMappedState()))
-                else:
-                    logging.critical("Detector"+ str(det.id) +" made an impossible Transition: " + command)
-                self.sem.release()
 
             #request for entire statusMap e.g. if a new Detector/Client connects
             if self.socketServeCurrentStatus in items:
@@ -162,6 +166,7 @@ class PCA:
                 # Final message
                 self.socketServeCurrentStatus.send(origin, zmq.SNDMORE)
                 self.send_status(self.socketServeCurrentStatus,None,self.sequence,None)
+
             #request for single Detector
             if self.socketSingleRequest in items:
                 message = self.socketSingleRequest.recv().decode()
@@ -193,11 +198,14 @@ class PCA:
         socket.send_multipart([key_s,sequence_s,state_b])
 
     def addDetector(self,d):
+        """add Detector to Dictionary"""
+        #todo causes problems when some other Thread is iterating over detectors
         self.detectors[d.id] = d
         self.statusMap[d.id] = d.getMappedState()
         self.publishQueue.put((d.id,d.getMappedState()))
 
     def removeDetector(self,id):
+        """remove Detector from Dictionary"""
         #todo muss irgendwie richtig mitgeteilt werden
         self.publishQueue.put((d.id,"shutdown"))
         del self.detectors[id]
@@ -208,6 +216,7 @@ class PCA:
         while True:
             if len(self.detectors.items()) <= 0:
                 continue
+            #don't check your state while it's beeing changed that might induce chaos
             self.sem.acquire()
             if self.stateMachine.currentState == "NotReady":
                 ready = True
@@ -222,8 +231,9 @@ class PCA:
             		#The PCA is not allowed to move into the Running State on his own
             		#only ready -> not ready is possible
                     if d.getMappedState() != "Ready":
-                        # some Detecors are not ready anymore
+                        # some Detectors are not ready anymore
                         self.error()
+
 
             if self.stateMachine.currentState == "Running":
                 for i,d in self.detectors.items():
@@ -256,39 +266,89 @@ class PCA:
         """make an error transition"""
         self.transition("error")
 
-    def shutdown(self):
-        for i,d in self.detectors.items():
-            ret = d.powerOff()
-            if ret:
-                self.publishQueue.put((d.id,d.getMappedState()))
+    def threadFunctionCall(self,id,function,retq):
+        """calls a function from Detector(id) und puts result in a given Queue"""
+        r = function()
+        retq.put((id,r))
 
-    def makeReady(self):
+    def shutdown(self):
+        """tells all Detectors to shutdown"""
+        threadArray = []
+        returnQueue = Queue()
         for i,d in self.detectors.items():
-            ret = d.getReady()
-            if ret == True:
+            t = threading.Thread(name='doff'+str(i), target=self.threadFunctionCall, args=(d.id, d.powerOff, returnQueue))
+            threadArray.append(t)
+            t.start()
+        for t in threadArray:
+            ret = returnQueue.get()
+            d = self.detectors[ret[0]]
+            if ret[1] == True:
                 self.publishQueue.put((d.id,d.getMappedState()))
             else:
-                logging.info("error getting ready from Detector "+str(d.id))
-                break
+                #todo something needs to happen here
+                logging.info("error shuting down Detector "+str(d.id))
 
+    def makeReady(self):
+        """tells all Detectors to get ready to start"""
+        threadArray = []
+        returnQueue = Queue()
+        for i,d in self.detectors.items():
+            t = threading.Thread(name='dready'+str(i), target=self.threadFunctionCall, args=(d.id, d.getReady, returnQueue))
+            threadArray.append(t)
+            t.start()
+
+        for t in threadArray:
+            ret = returnQueue.get()
+            d = self.detectors[ret[0]]
+            if ret[1] == True:
+                self.publishQueue.put((d.id,d.getMappedState()))
+            else:
+                #todo something needs to happen here
+                logging.info("error getting ready from Detector "+str(d.id))
 
     def start(self):
+        """tells all Detectors to start running"""
         self.sem.acquire()
         if self.stateMachine.currentState != "Ready":
-            print ("start not possible")
+            print ("start not possible in current state")
+            self.sem.release()
+            return
+        threadArray = []
+        returnQueue = Queue()
         for i,d in self.detectors.items():
-            ret = d.start()
-            if ret == True:
+            t = threading.Thread(name='dstart'+str(i), target=self.threadFunctionCall, args=(d.id, d.start, returnQueue))
+            threadArray.append(t)
+            t.start()
+
+        for t in threadArray:
+            ret = returnQueue.get()
+            d = self.detectors[ret[0]]
+            if ret[1] == True:
                 self.publishQueue.put((d.id,d.getMappedState()))
+            else:
+                #todo something needs to happen here
+                logging.info("error while starting from Detector "+str(d.id))
         self.transition("start")
         self.sem.release()
 
     def stop(self):
+        """tells all Detectors to stop running"""
+        threadArray = []
+        returnQueue = Queue()
         self.sem.acquire()
         for i,d in self.detectors.items():
-            ret = d.stop()
-            if ret == True:
+            t = threading.Thread(name='dstop'+str(i), target=self.threadFunctionCall, args=(d.id, d.stop, returnQueue))
+            threadArray.append(t)
+            t.start()
+
+        for t in threadArray:
+            ret = returnQueue.get()
+            d = self.detectors[ret[0]]
+            if ret[1] == True:
                 self.publishQueue.put((d.id,d.getMappedState()))
+            else:
+                #todo something needs to happen here
+                logging.info("error while stopping from Detector "+str(d.id))
         self.transition("stop")
         self.sem.release()
 
