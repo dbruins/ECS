@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+<script>
+setInterval(function() {
+    $.ajax({
+        type: "GET",
+        url: "{% url 'GUI:update' %}"
+    })
+    .done(function(response) {
+        $('#stateTable').html(response);
+    });
+    $.ajax({
+        type: "GET",
+        url: "{% url 'GUI:logs' %}"
+    })
+    .done(function(response) {
+        if (response.length>1)
+          $('#log').append(response);
+    });
+}, 500)
+
+$(document).ready(function() {
+    $("#ready").click(function(e) {
+        e.preventDefault();
+        $.ajax({
+            type: "POST",
+            url: "{% url 'GUI:ready' %}",
+            data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
+            /*"success": function(result) {
+                console.log(result);
+            },*/
+        });
+    });
+    $("#start").click(function(e) {
+        e.preventDefault();
+        $.ajax({
+            type: "POST",
+            url: "{% url 'GUI:start' %}",
+            data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
+        });
+    });
+    $("#stop").click(function(e) {
+        e.preventDefault();
+        $.ajax({
+            type: "POST",
+            url: "{% url 'GUI:stop' %}",
+            data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
+        });
+    });
+    $("#shutdown").click(function(e) {
+        e.preventDefault();
+        $.ajax({
+            type: "POST",
+            url: "{% url 'GUI:shutdown' %}",
+            data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
+        });
+    });
+});
+</script>
+</head>
+
+<body>
+
+<h1>PCA Overview</h1>
+
+<table id="stateTable" style="width:100%">
+  <tr>
+    <th>Detector</th>
+    <th>Status</th>
+  </tr>
+  {% for state in stateMap.items %}
+  <tr>
+      <td>{{state.0}}</td>
+      <td>{{state.1.1}}</td>
+  </tr>
+  {% endfor %}
+</table>
+<div>
+  <button id="ready">readyAjax</button>
+  <button id="start">startAjax</button>
+  <button id="stop">stopAjax</button>
+  <button id="shutdown">shutdownAjax</button>
+</div>
+<textarea readonly id="log"></textarea>
+{%if error%}
+<p visibility:={{error}}>Error</p>
+{%endif%}
+</body>
+</html>

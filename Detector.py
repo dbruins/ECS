@@ -9,12 +9,14 @@ class Detector:
     id = None
     socketSender = None
     socketReceiver = None
+    logfunction = None
 
     # selfState -> PCAState
     mapper = {}
-    def __init__(self,id,stateFile,mapFile,address):
+    def __init__(self,id,stateFile,mapFile,address,logfunction):
         self.stateMachine = Statemachine(stateFile,"Shutdown")
         self.id = id
+        self.logfunction = logfunction
         with open(mapFile, 'r') as file:
             reader = csv.reader(file, delimiter=',')
             for row in reader:
@@ -34,21 +36,15 @@ class Detector:
             if returnMessage == "OK":
                 oldstate = self.stateMachine.currentState
                 self.stateMachine.transition(command)
-                logging.info("Detector "+str(self.id)+" transition: "+ oldstate +" -> " + self.stateMachine.currentState)
+                self.logfunction("Detector "+str(self.id)+" transition: "+ oldstate +" -> " + self.stateMachine.currentState)
                 return True
                 #self.log("GLobal Statechange: "+oldstate+" -> "+self.stateMachine.currentState)
             else:
-                logging.critical("Detector returned error")
+                self.logfunction("Detector returned error",True)
                 return False
         else:
-            logging.critical("command in current State not possible")
+            self.logfunction("command in current State not possible",True)
             return False
-
-    def log(self,logmessage,error=False):
-        if error:
-            self.logfile.write("Error: "+logmessage)
-        else:
-            self.logfile.write(logmessage)
 
     def getId(self):
         return self.id

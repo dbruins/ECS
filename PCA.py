@@ -27,6 +27,8 @@ class PCA:
     socketServeCurrentStatus = None
     #request of status of an id
     socketSingleRequest = None
+    #publish logmessages
+    socketLogPublish = None
     poller = None
     logfile = None
 
@@ -46,6 +48,10 @@ class PCA:
         self.socketPublish = context.socket(zmq.PUB)
         self.socketPublish.bind("tcp://*:5555")
 
+        #publish logmessages
+        self.socketLogPublish = context.socket(zmq.PUB)
+        self.socketLogPublish.bind("tcp://*:5551")
+
         #Socket to wait for Updates From Detectors
         self.socketPullUpdates = context.socket(zmq.PULL)
         self.socketPullUpdates.bind("tcp://*:5556")
@@ -57,6 +63,10 @@ class PCA:
         #socket for receiving Status Updates
         self.socketSingleRequest = context.socket(zmq.REP)
         self.socketSingleRequest.bind("tcp://*:%i" % 5553)
+
+        #socket for receiving Status Updates
+        self.remoteCommandSocket = context.socket(zmq.REP)
+        self.remoteCommandSocket.bind("tcp://*:%i" % 5552)
 
         #register Poller
         self.poller = zmq.Poller()
@@ -86,6 +96,27 @@ class PCA:
         start_new_thread(self.waitForRequests,())
         start_new_thread(self.checkCurrentState,())
         start_new_thread(self.publisher,())
+        start_new_thread(self.waitForRemoteCommand,())
+
+    def waitForRemoteCommand(self):
+        """wait for an external(start,stop etc.) command e.g. from that "gorgeous" WebGUI"""
+        while True:
+            m = self.remoteCommandSocket.recv().decode()
+            print (m)
+            self.remoteCommandSocket.send(b"OK")
+            if m=="ready":
+                self.makeReady()
+                continue
+            if m=="start":
+                self.start()
+                continue
+            if m=="stop":
+                self.stop()
+                continue
+            if m=="shutdown":
+                self.shutdown()
+                continue
+
 
     def publisher(self):
         """publishes all state changes inside the Queue"""
@@ -107,7 +138,7 @@ class PCA:
             command = None
 
             if len(message.split()) != 2:
-                logging.critical("received empty or too long message")
+                logging.critical("received empty or too long message",True)
                 continue
 
             i,command = message.split()
@@ -115,10 +146,10 @@ class PCA:
                 id = int(i)
 
             if id == None or command == None:
-                logging.critical("received non-valid message")
+                logging.critical("received non-valid message",True)
                 continue
             if id not in self.detectors:
-                logging.critical("received message with unknown id")
+                self.log("received message with unknown id",True)
                 continue
 
             det = self.detectors[id]
@@ -128,10 +159,10 @@ class PCA:
             if nextMappedState and nextMappedState != "Running":
                 oldstate = det.stateMachine.currentState
                 det.stateMachine.transition(command)
-                logging.info("Detector "+str(det.id)+" made transition on it's own "+ oldstate +" -> " + det.stateMachine.currentState )
+                self.log("Detector "+str(det.id)+" made transition on it's own "+ oldstate +" -> " + det.stateMachine.currentState )
                 self.publishQueue.put((det.id,det.getMappedState()))
             else:
-                logging.critical("Detector"+ str(det.id) +" made an impossible Transition: " + command)
+                logging.critical("Detector"+ str(det.id) +" made an impossible Transition: " + command,True)
                 #todo Ok what now?
             self.sem.release()
 
@@ -141,7 +172,7 @@ class PCA:
             try:
                 items = dict(self.poller.poll())
             except:
-                logging.critical("unexpected error while receiving messages")
+                self.log("unexpected error while receiving messages")
                 break
 
             #request for entire statusMap e.g. if a new Detector/Client connects
@@ -177,10 +208,10 @@ class PCA:
                         self.socketSingleRequest.send(self.statusMap[id][1].encode())
                     else:
                         self.socketSingleRequest.send(b"who?")
-                        logging.critical("received status request for unknown id")
+                        logging.critical("received status request for unknown id",True)
                 else:
                     self.socketSingleRequest.send(b"numbers only")
-                    logging.critical("received wrong message format in status request")
+                    self.log("received wrong message format in status request")
 
 
     def send_status(self,socket,key,sequence,state):
@@ -260,7 +291,7 @@ class PCA:
         oldstate = self.stateMachine.currentState
         if self.stateMachine.transition(command):
             self.publishQueue.put((0,self.stateMachine.currentState))
-            logging.info("GLobal Statechange: "+oldstate+" -> "+self.stateMachine.currentState)
+            self.log("GLobal Statechange: "+oldstate+" -> "+self.stateMachine.currentState)
 
     def error(self):
         """make an error transition"""
@@ -286,7 +317,7 @@ class PCA:
                 self.publishQueue.put((d.id,d.getMappedState()))
             else:
                 #todo something needs to happen here
-                logging.info("error shuting down Detector "+str(d.id))
+                self.log("error shuting down Detector "+str(d.id),True)
 
     def makeReady(self):
         """tells all Detectors to get ready to start"""
@@ -304,7 +335,7 @@ class PCA:
                 self.publishQueue.put((d.id,d.getMappedState()))
             else:
                 #todo something needs to happen here
-                logging.info("error getting ready from Detector "+str(d.id))
+                self.log("error getting ready from Detector "+str(d.id),True)
 
     def start(self):
         """tells all Detectors to start running"""
@@ -327,7 +358,7 @@ class PCA:
                 self.publishQueue.put((d.id,d.getMappedState()))
             else:
                 #todo something needs to happen here
-                logging.info("error while starting from Detector "+str(d.id))
+                self.log("error while starting from Detector "+str(d.id),True)
         self.transition("start")
         self.sem.release()
 
@@ -348,18 +379,17 @@ class PCA:
                 self.publishQueue.put((d.id,d.getMappedState()))
             else:
                 #todo something needs to happen here
-                logging.info("error while stopping from Detector "+str(d.id))
+                self.log("error while stopping from Detector "+str(d.id),True)
         self.transition("stop")
         self.sem.release()
 
     def log(self,logmessage,error=False):
-        with open(self.logfile,"a") as log:
-            if error:
-                print(logmessage)
-                log.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S")+": Error: "+logmessage+"\n")
-            else:
-                print(logmessage)
-                log.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S")+": "+logmessage+"\n")
+        str=datetime.now().strftime("%Y-%m-%d %H:%M:%S")+":" + logmessage
+        self.socketLogPublish.send(str.encode())
+        if error:
+            logging.critical(logmessage)
+        else:
+            logging.info(logmessage)
 
 
 
@@ -368,8 +398,8 @@ if __name__ == "__main__":
 
     test = PCA(debugMode=True)
 
-    a = Detector.DetectorA(1,"DetectorStatemachine.csv","map.csv",5558)
-    b = Detector.DetectorA(2,"DetectorStatemachine.csv","map.csv",5559)
+    a = Detector.DetectorA(1,"DetectorStatemachine.csv","map.csv",5558,test.log)
+    b = Detector.DetectorA(2,"DetectorStatemachine.csv","map.csv",5559,test.log)
 
     test.addDetector(a)
     test.addDetector(b)

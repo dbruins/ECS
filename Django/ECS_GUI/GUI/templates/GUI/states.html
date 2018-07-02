@@ -1,0 +1,10 @@
+  <tr>
+    <th>Detector</th>
+    <th>Status</th>
+  </tr>
+  {% for state in stateMap.items %}
+  <tr>
+      <td>{{state.0}}</td>
+      <td>{{state.1.1}}</td>
+  </tr>
+  {% endfor %}

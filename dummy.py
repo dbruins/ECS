@@ -71,7 +71,7 @@ def waitForUpdates():
         else:
             id = m[0]
             sequence = m[1]
-            state = m[2]
+            state = m[2].decode()
         #id, sequence, state = socketSubscription.recv_multipart()
         id = struct.unpack("!i",id)[0]
         sequence = struct.unpack("!i",sequence)[0]
