@@ -3,6 +3,7 @@ import csv
 from _thread import start_new_thread
 import zmq
 import logging
+import ECSCodes
 
 class Detector:
     stateMachine = None
@@ -10,10 +11,15 @@ class Detector:
     socketSender = None
     socketReceiver = None
     logfunction = None
+    address = None
+    zmqContext = None
+    receive_timeout = 0
 
     # selfState -> PCAState
     mapper = {}
-    def __init__(self,id,stateFile,mapFile,address,logfunction):
+    def __init__(self,id,stateFile,mapFile,address,logfunction,timeout = 10000):
+        self.receive_timeout = timeout
+        self.address = ("tcp://localhost:%i" % address)
         self.stateMachine = Statemachine(stateFile,"Shutdown")
         self.id = id
         self.logfunction = logfunction
@@ -22,23 +28,45 @@ class Detector:
             for row in reader:
                 self.mapper[row[0]] = row[1]
         #socket for sending Requests
-        context = zmq.Context()
+        self.zmqContext = zmq.Context()
+        self.createSendSocket()
+        """
         self.socketSender = context.socket(zmq.REQ)
-        self.socketSender.connect(("tcp://localhost:%i" % address))
+        self.socketSender.connect(address)
+        #set timeout 10 seconds
+        self.socketSender.setsockopt(zmq.RCVTIMEO,10000)
+        self.socketSender.setsockopt(zmq.LINGER,0)
+        """
+    def createSendSocket(self):
+        """init or reset the send Socket"""
+        if(self.socketSender):
+            #reset
+            #self.socketSender.setsockopt(zmq.LINGER, 0)
+            self.socketSender.close()
+        self.socketSender = self.zmqContext.socket(zmq.REQ)
+        self.socketSender.connect(self.address)
+        self.socketSender.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+        self.socketSender.setsockopt(zmq.LINGER,0)
 
+    def handletimeout(self):
+        self.createSendSocket()
 
     def transitionRequest(self,command):
         """request a transition to a Detector"""
         if self.stateMachine.checkIfPossible(command):
             self.socketSender.send(command.encode(encoding='utf_8'))
-            returnMessage = self.socketSender.recv_string()
+            try:
+                returnMessage = self.socketSender.recv()
+            except zmq.Again:
+                self.logfunction("timeout from Detector "+str(self.id)+" for "+ command,True)
+                self.handletimeout()
+                return False
             #if success transition Statemachine
-            if returnMessage == "OK":
+            if returnMessage == ECSCodes.ok:
                 oldstate = self.stateMachine.currentState
                 self.stateMachine.transition(command)
                 self.logfunction("Detector "+str(self.id)+" transition: "+ oldstate +" -> " + self.stateMachine.currentState)
                 return True
-                #self.log("GLobal Statechange: "+oldstate+" -> "+self.stateMachine.currentState)
             else:
                 self.logfunction("Detector returned error",True)
                 return False

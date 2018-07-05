@@ -18,8 +18,12 @@ setInterval(function() {
     .done(function(response) {
         if (response.length>1)
           $('#log').append(response);
+          //allways scroll directly to bottom
+          var textarea = document.getElementById('log');
+          textarea.scrollTop = textarea.scrollHeight;
     });
-}, 500)
+
+}, 6000)
 
 $(document).ready(function() {
     $("#ready").click(function(e) {
@@ -77,11 +81,11 @@ $(document).ready(function() {
   </tr>
   {% endfor %}
 </table>
-<div>
-  <button id="ready">readyAjax</button>
-  <button id="start">startAjax</button>
-  <button id="stop">stopAjax</button>
-  <button id="shutdown">shutdownAjax</button>
+<div visibility:{{PCAConnection}}>
+  <button id="ready">ready</button>
+  <button id="start">start</button>
+  <button id="stop">stop</button>
+  <button id="shutdown">shutdown</button>
 </div>
 <textarea readonly id="log"></textarea>
 {%if error%}

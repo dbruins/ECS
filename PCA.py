@@ -10,6 +10,48 @@ from datetime import datetime
 import threading
 import struct # for packing integers
 import logging
+import copy
+import ECSCodes
+
+
+class stateMapWrapper:
+    """thread safe handling of Map"""
+    semaphore = None
+    statusMap = {}
+
+    def __init__(self):
+        self.semaphore = threading.Semaphore()
+
+    def get(self,key):
+        """get value for key returns None if key doesn't exist"""
+        self.semaphore.acquire()
+        if key in self.statusMap:
+            ret = statusMap[key]
+        else:
+            ret = None
+        self.semaphore.release()
+        return ret
+
+    def set(self,key,value):
+        self.semaphore.acquire()
+        self.statusMap[key] = value
+        self.semaphore.release()
+
+    def itemsCopy(self):
+        """returns a deepcopy off all items for iteration"""
+        #create copy of statusMap so loop dosn't crash if there are changes on statusMap during the loop
+        #probably not the best solution, locks would be also not ideal
+        self.semaphore.acquire()
+        statusMap = copy.deepcopy(self.statusMap)
+        self.semaphore.release()
+        return statusMap.items()
+
+    def isIn(self,key):
+        """returns True if key exists in Map"""
+        self.semaphore.acquire()
+        ret = key in self.statusMap
+        self.semaphore.release()
+        return ret
 
 class PCA:
     detectors = None
@@ -40,7 +82,8 @@ class PCA:
         self.stateMachine = Statemachine("PCAStatemachine.csv","NotReady")
         self.detectors = {}
         self.sequence = 0
-        self.statusMap[0] = (self.sequence,self.stateMachine.currentState)
+        self.statusMap = stateMapWrapper()
+        self.statusMap.set(0,(self.sequence,self.stateMachine.currentState))
         self.logfile = logfile
 
         #ZMQ Socket to publish new state Updates
@@ -99,21 +142,26 @@ class PCA:
         start_new_thread(self.waitForRemoteCommand,())
 
     def waitForRemoteCommand(self):
-        """wait for an external(start,stop etc.) command e.g. from that "gorgeous" WebGUI"""
+        """wait for an external(start,stop etc.) command e.g. from that "gorgeous" WebGUI
+        sends an Ok for received command"""
         while True:
-            m = self.remoteCommandSocket.recv().decode()
-            print (m)
-            self.remoteCommandSocket.send(b"OK")
-            if m=="ready":
+            m = self.remoteCommandSocket.recv()
+            if m!=ECSCodes.ping:
+                print (m)
+            self.remoteCommandSocket.send(ECSCodes.ok)
+            if m==ECSCodes.ping:
+                #it's just a ping
+                continue
+            if m==b"ready":
                 self.makeReady()
                 continue
-            if m=="start":
+            if m==b"start":
                 self.start()
                 continue
-            if m=="stop":
+            if m==b"stop":
                 self.stop()
                 continue
-            if m=="shutdown":
+            if m==b"shutdown":
                 self.shutdown()
                 continue
 
@@ -125,7 +173,8 @@ class PCA:
             #self.publishStateUpdate(id,state)
             #race condition possible?
             self.sequence = self.sequence + 1
-            self.statusMap[id] = (self.sequence,state)
+            #self.statusMap[id] = (self.sequence,state)
+            self.statusMap.set(id,(self.sequence,state))
             self.send_status(self.socketPublish,id,self.sequence,state)
 
 
@@ -180,17 +229,17 @@ class PCA:
                 messsage = self.socketServeCurrentStatus.recv_multipart()
                 origin = messsage[0]
                 request = messsage[1]
-                if request != b"HI":
+                if request != ECSCodes.hello:
                     self.critical("wrong request in socketServeCurrentStatus \n")
                     continue
 
-                # Create Route from self to requester
-                #route = Route(socketServeCurrentStatus, origin)
-
+                #print (statusMap)
                 # send each Statusmap entry to origin
-                for key, value in self.statusMap.items():
+                items = self.statusMap.itemsCopy()
+                for key, value in items:
                     #send identity of origin first
                     self.socketServeCurrentStatus.send(origin,zmq.SNDMORE)
+                    print (key,value[0],value[1])
                     self.send_status(self.socketServeCurrentStatus,key,value[0],value[1])
                     #self.socketServeCurrentStatus.send_multipart([key,status[0],status[1]])
 
@@ -204,8 +253,9 @@ class PCA:
                 id = None
                 if message.isdigit():
                     id = int(message)
-                    if id in self.statusMap:
-                        self.socketSingleRequest.send(self.statusMap[id][1].encode())
+                    if self.statusMap.isIn(id):
+                        #self.socketSingleRequest.send(self.statusMap[id][1].encode())
+                        self.socketSingleRequest.send(self.statusMap.get(id)[1].encode())
                     else:
                         self.socketSingleRequest.send(b"who?")
                         logging.critical("received status request for unknown id",True)
@@ -221,6 +271,7 @@ class PCA:
         if key != None:
             #integers need to packed
             key_s = struct.pack("!i",key)
+
         sequence_s = struct.pack("!i",sequence)
         #python strings need to be encoded into binary strings
         state_b = b""
@@ -229,17 +280,21 @@ class PCA:
         socket.send_multipart([key_s,sequence_s,state_b])
 
     def addDetector(self,d):
-        """add Detector to Dictionary"""
-        #todo causes problems when some other Thread is iterating over detectors
+        """add Detector to Dictionary and pubish it's state"""
+        #semaphore is necessary otherwise threads iterating over map might crash
+        self.sem.acquire()
         self.detectors[d.id] = d
-        self.statusMap[d.id] = d.getMappedState()
+        #self.statusMap[d.id] = d.getMappedState()
         self.publishQueue.put((d.id,d.getMappedState()))
+        self.sem.release()
 
     def removeDetector(self,id):
         """remove Detector from Dictionary"""
         #todo muss irgendwie richtig mitgeteilt werden
+        self.sem.acquire()
         self.publishQueue.put((d.id,"shutdown"))
         del self.detectors[id]
+        self.sem.release()
 
 
     def checkCurrentState(self):
@@ -306,6 +361,7 @@ class PCA:
         """tells all Detectors to shutdown"""
         threadArray = []
         returnQueue = Queue()
+        self.sem.acquire()
         for i,d in self.detectors.items():
             t = threading.Thread(name='doff'+str(i), target=self.threadFunctionCall, args=(d.id, d.powerOff, returnQueue))
             threadArray.append(t)
@@ -318,11 +374,12 @@ class PCA:
             else:
                 #todo something needs to happen here
                 self.log("error shuting down Detector "+str(d.id),True)
-
+        self.sem.release()
     def makeReady(self):
         """tells all Detectors to get ready to start"""
         threadArray = []
         returnQueue = Queue()
+        self.sem.acquire()
         for i,d in self.detectors.items():
             t = threading.Thread(name='dready'+str(i), target=self.threadFunctionCall, args=(d.id, d.getReady, returnQueue))
             threadArray.append(t)
@@ -336,7 +393,7 @@ class PCA:
             else:
                 #todo something needs to happen here
                 self.log("error getting ready from Detector "+str(d.id),True)
-
+        self.sem.release()
     def start(self):
         """tells all Detectors to start running"""
         self.sem.acquire()

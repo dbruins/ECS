@@ -4,6 +4,7 @@ import time
 import _thread
 import struct
 from random import randint
+import ECSCodes
 
 stateMap = {}
 
@@ -52,7 +53,7 @@ def waitForUpdates():
     #get current state
     # Get state snapshot
     sequence = 0
-    socketGetCurrentStateTable.send_string("HI")
+    socketGetCurrentStateTable.send(ECSCodes.hello)
     while True:
         id, sequence, state = receive_status(socketGetCurrentStateTable)
         print (id,sequence,state)
@@ -60,7 +61,6 @@ def waitForUpdates():
             stateMap[id] = (sequence, state)
         #id should be None in final message
         else:
-            print ("Done :)")
             break
 
     #watch subscription for further updates
@@ -84,7 +84,7 @@ def waitForCommand():
         print (m)
         time.sleep(randint(2,6))
         #m = input()
-        socketReceiver.send_string("OK")
+        socketReceiver.send(ECSCodes.ok)
 
 
 _thread.start_new_thread(waitForCommand,())
