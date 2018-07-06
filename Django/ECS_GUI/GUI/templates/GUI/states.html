@@ -1,10 +1,21 @@
+
+<table id="table">
   <tr>
     <th>Detector</th>
     <th>Status</th>
   </tr>
   {% for state in stateMap.items %}
   <tr>
-      <td>{{state.0}}</td>
+      <td>
+        {% if state.0 == 0%}
+          Global State
+        {%else%}
+          {{state.0}}
+        {% endif %}
+      </td>
       <td>{{state.1.1}}</td>
   </tr>
   {% endfor %}
+</table>
+<div id="log">{% for log in logs %}{{log}}
+{% endfor %}</div>

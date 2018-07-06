@@ -4,6 +4,7 @@ from _thread import start_new_thread
 import zmq
 import logging
 import ECSCodes
+import configparser
 
 class Detector:
     stateMachine = None
@@ -17,26 +18,27 @@ class Detector:
 
     # selfState -> PCAState
     mapper = {}
-    def __init__(self,id,stateFile,mapFile,address,logfunction,timeout = 10000):
-        self.receive_timeout = timeout
-        self.address = ("tcp://localhost:%i" % address)
-        self.stateMachine = Statemachine(stateFile,"Shutdown")
+    def __init__(self,id,confSection,logfunction):
+        configParser = configparser.ConfigParser()
+        configParser.read("detector.cfg")
+        conf = configParser[confSection]
+
+        basePort = conf["basePort"]
+        myPort = int(basePort) + id
+        print (myPort)
+        self.receive_timeout = int(conf["timeout"])
+        self.address = ("tcp://localhost:%i" % myPort)
+        self.stateMachine = Statemachine(conf["stateFile"],"Shutdown")
         self.id = id
         self.logfunction = logfunction
-        with open(mapFile, 'r') as file:
+        with open(conf["mapFile"], 'r') as file:
             reader = csv.reader(file, delimiter=',')
             for row in reader:
                 self.mapper[row[0]] = row[1]
         #socket for sending Requests
         self.zmqContext = zmq.Context()
         self.createSendSocket()
-        """
-        self.socketSender = context.socket(zmq.REQ)
-        self.socketSender.connect(address)
-        #set timeout 10 seconds
-        self.socketSender.setsockopt(zmq.RCVTIMEO,10000)
-        self.socketSender.setsockopt(zmq.LINGER,0)
-        """
+
     def createSendSocket(self):
         """init or reset the send Socket"""
         if(self.socketSender):
@@ -140,8 +142,3 @@ class DetectorB(Detector):
         self.stateMachine.transition("configure")
     def reconfigure(self):
         self.stateMachine.transition("reconfigure")
-
-if __name__ == "__main__":
-    d1 = DetectorA(1,"graph.csv","map.csv")
-    d1.reqnsitionRequest("configure")
-    x = raw_input()

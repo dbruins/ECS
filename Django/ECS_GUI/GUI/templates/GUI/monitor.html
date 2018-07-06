@@ -9,8 +9,23 @@ setInterval(function() {
         url: "{% url 'GUI:update' %}"
     })
     .done(function(response) {
-        $('#stateTable').html(response);
+        var htmlObject = document.createElement('div');
+        htmlObject.innerHTML = response
+        var jqueryObject = $(htmlObject);
+
+        //update state Table
+        $('#stateTable').html(jqueryObject.find("#table").html());
+
+        //update log
+        logs = jqueryObject.find("#log").html()
+        //don't append empty rows
+        if (logs.length>0)
+          $('#log').append(logs);
+          //allways scroll directly to bottom
+          var textarea = document.getElementById('log');
+          textarea.scrollTop = textarea.scrollHeight;
     });
+    /*
     $.ajax({
         type: "GET",
         url: "{% url 'GUI:logs' %}"
@@ -22,7 +37,7 @@ setInterval(function() {
           var textarea = document.getElementById('log');
           textarea.scrollTop = textarea.scrollHeight;
     });
-
+    */
 }, 6000)
 
 $(document).ready(function() {
@@ -69,18 +84,26 @@ $(document).ready(function() {
 
 <h1>PCA Overview</h1>
 
-<table id="stateTable" style="width:100%">
-  <tr>
-    <th>Detector</th>
-    <th>Status</th>
-  </tr>
-  {% for state in stateMap.items %}
-  <tr>
-      <td>{{state.0}}</td>
-      <td>{{state.1.1}}</td>
-  </tr>
-  {% endfor %}
-</table>
+<div id="stateTable">
+  <table>
+    <tr>
+      <th>Detector</th>
+      <th>Status</th>
+    </tr>
+    {% for state in stateMap.items %}
+    <tr>
+        <td>
+          {% if state.0 == 0%}
+            Global State
+          {%else%}
+            {{state.0}}
+          {% endif %}
+        </td>
+        <td>{{state.1.1}}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
 <div visibility:{{PCAConnection}}>
   <button id="ready">ready</button>
   <button id="start">start</button>

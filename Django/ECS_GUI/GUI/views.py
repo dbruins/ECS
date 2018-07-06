@@ -3,14 +3,17 @@ from django.http import HttpResponse, HttpResponseRedirect
 from GUI.models import Question, Choice
 from django.template import loader
 from django.urls import reverse
+from django.conf import settings
+
 import zmq
 import threading
 import struct
 from multiprocessing import Queue
 import time
+import configparser
 
 import sys
-projectPath = "/home/daniel/Dokumente/Masterarbeit/Statemachine" #<---- BÖSE!!!!
+projectPath = settings.PCACODESPATH
 sys.path.append(projectPath)
 import ECSCodes
 
@@ -22,40 +25,44 @@ class PCAHandler:
     context = None
     socketSubscription = None
     socketGetCurrentStateTable = None
+    getCurrentStateTableAddress = ""
     socketSubLog  = None
     commandSocket = None
+    commandSocketAdress = ""
 
     PCAConnection = False
     pingIntervall = 0
     receive_timeout = 0
     pingTimeout = 0
 
-    def __init__(self,timeout=10000,pingIntervall = 2,pingTimeout = 2000):
-
+    def __init__(self):
         self.logQueue = Queue()
         self.commandSocketQueue = Queue()
         self.stateMap = {}
 
-        self.receive_timeout = timeout
-        self.pingTimeout = pingTimeout
-        self.pingIntervall = pingIntervall
-        self.pingTimeout = pingTimeout
+        self.receive_timeout = settings.TIMEOUT
+        self.pingTimeout = settings.PINGTIMEOUT
+        self.pingIntervall = settings.PINGINTERVALL
 
+        config = configparser.ConfigParser()
+        config.read(settings.PCACONFIGPATH)
+        ports = config["ZMQPorts"]
+        self.getCurrentStateTableAddress = "tcp://localhost:%s" % ports["serveCurrentStatus"]
+        self.commandSocketAdress = "tcp://localhost:%s" % ports["commandSocket"]
+
+        #state Change subscription
         self.context = zmq.Context()
         self.socketSubscription = self.context.socket(zmq.SUB)
-        self.socketSubscription.connect("tcp://localhost:%i" % 5555)
+        self.socketSubscription.connect("tcp://localhost:%s" % ports["statePublish"])
         #subscribe to everything
         self.socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
         #self.socketSubscription.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
 
-        self.socketGetCurrentStateTable = self.context.socket(zmq.DEALER)
-        self.socketGetCurrentStateTable.connect("tcp://localhost:%i" % 5557)
-        self.socketGetCurrentStateTable.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-        self.socketGetCurrentStateTable.setsockopt(zmq.LINGER,0)
+        self.createGetCurrentStateTableSocket()
 
-        #subscribe to everything
+        #logsubscription
         self.socketSubLog = self.context.socket(zmq.SUB)
-        self.socketSubLog.connect("tcp://localhost:%i" % 5551)
+        self.socketSubLog.connect("tcp://localhost:%s" % ports["logPublish"])
         self.socketSubLog.setsockopt(zmq.SUBSCRIBE, b'')
 
         self.createCommandSocket()
@@ -77,10 +84,11 @@ class PCAHandler:
             if not self.commandSocketQueue.empty():
                 m = self.commandSocketQueue.get()
                 if m == ECSCodes.ping:
-                    self.socketGetCurrentStateTable.setsockopt(zmq.RCVTIMEO, self.pingTimeout)
+                    self.commandSocket.setsockopt(zmq.RCVTIMEO, self.pingTimeout)
                 else:
-                    self.socketGetCurrentStateTable.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-                if not self.sendCommand(m):
+                    self.commandSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+                r = self.sendCommand(m)
+                if not r:
                     #try to resend later ?
                     #self.commandSocketQueue.put(m)
                     continue
@@ -92,21 +100,41 @@ class PCAHandler:
                 nextPing = time.time() + self.pingIntervall
 
 
-
-
     def createCommandSocket(self):
         """init or reset the command Socket"""
         if(self.commandSocket):
             #reset
-            self.commandSocket.setsockopt(zmq.LINGER, 0)
             self.commandSocket.close()
         self.commandSocket = self.context.socket(zmq.REQ)
-        self.commandSocket.connect("tcp://localhost:%i" % 5552)
+        self.commandSocket.connect(self.commandSocketAdress)
         self.commandSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
         self.commandSocket.setsockopt(zmq.LINGER,0)
 
+    def createGetCurrentStateTableSocket(self):
+        if self.socketGetCurrentStateTable:
+            #reset
+            self.socketGetCurrentStateTable.close()
+        self.socketGetCurrentStateTable = self.context.socket(zmq.DEALER)
+        self.socketGetCurrentStateTable.connect(self.getCurrentStateTableAddress)
+        self.socketGetCurrentStateTable.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+        self.socketGetCurrentStateTable.setsockopt(zmq.LINGER,0)
+
+    def sendCommand(self,command):
+        """send command to pca return True on Success"""
+        self.commandSocket.send(command)
+        try:
+            r = self.commandSocket.recv()
+        except zmq.Again:
+            self.handleDisconnection()
+            return False
+        if r != ECSCodes.ok:
+            logQueue.put("received error for sending command: " + command)
+            return False
+        return True
+
     def handleDisconnection(self):
         print("timeout PCA")
+        self.logQueue.put("PCA Connection Lost")
         #reset commandSocket
         self.createCommandSocket()
         self.PCAConnection = False
@@ -138,13 +166,11 @@ class PCAHandler:
         sequence = 0
         self.socketGetCurrentStateTable.send(ECSCodes.hello)
         while True:
-            try:
-                ret = self.receive_status(self.socketGetCurrentStateTable)
-            except zmq.Again:
-                print ("timeout while getting snapshot")
-                return False
+            ret = self.receive_status(self.socketGetCurrentStateTable)
             if ret == None:
                 print ("error while getting snapshot")
+                #reset Socket to clear the buffer, PCA only needs one hello
+                self.createGetCurrentStateTableSocket()
                 return False
             id, sequence, state = ret
             print (id,sequence,state)
@@ -153,6 +179,7 @@ class PCAHandler:
             #id should be None in final message
             else:
                 self.PCAConnection = True
+                self.logQueue.put("PCA Connection online")
                 return True
 
     def waitForUpdates(self):
@@ -179,29 +206,22 @@ class PCAHandler:
             self.logQueue.put(m)
 
 
-    def sendCommand(self,command):
-        """send command to pca return True on Success"""
-        self.commandSocket.send(command)
-        try:
-            r = self.commandSocket.recv()
-        except zmq.Again:
-            self.handleDisconnection()
-            return False
-        if r != ECSCodes.ok:
-            logQueue.put("received error for sending command: " + command)
-            return False
-        return True
 
 pca = PCAHandler()
 #views
 def update(request):
-    return render(request, 'GUI/states.html', {'stateMap': pca.stateMap})
+    newlogs = []
+    while not pca.logQueue.empty():
+        newlogs.append(pca.logQueue.get())
+    return render(request, 'GUI/states.html', {'stateMap': pca.stateMap, 'logs': newlogs })
 
+"""
 def logUpdate(request):
     newlogs = []
     while not pca.logQueue.empty():
         newlogs.append(pca.logQueue.get())
     return render(request, 'GUI/logs.html', {'logs': newlogs})
+"""
 
 def ready(request):
     print ("sending ready")
@@ -222,14 +242,7 @@ def stop(request):
     print ("sending stop")
     pca.commandSocketQueue.put(b"stop")
     return HttpResponse(status=200)
-"""
-def stop(request):
-    r = pca.sendCommand(b"stop")
-    if r == "OK":
-        return render(request, "GUI/monitor.html",{'stateMap': pca.stateMap ,'error':False})
-    else:
-        return render(request, "GUI/monitor.html",{'stateMap': pca.stateMap, 'error':True})
-"""
+
 def index(request):
     print (pca.stateMap)
     return render(request, "GUI/monitor.html",{'stateMap': pca.stateMap})

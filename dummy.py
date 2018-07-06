@@ -5,6 +5,9 @@ import _thread
 import struct
 from random import randint
 import ECSCodes
+import configparser
+config = configparser.ConfigParser()
+config.read("init.cfg")
 
 stateMap = {}
 
@@ -13,23 +16,21 @@ if (len(sys.argv) > 1):
 else:
     address = "5558"
 
+ports = config["ZMQPorts"]
 context = zmq.Context()
 socketReceiver = context.socket(zmq.REP)
 socketReceiver.bind(("tcp://*:" + address))
 
-socketSender = context.socket(zmq.REQ)
-socketSender.connect("tcp://localhost:%i" % 5553)
-
 socketSubscription = context.socket(zmq.SUB)
-socketSubscription.connect("tcp://localhost:%i" % 5555)
+socketSubscription.connect("tcp://localhost:%s" % ports["statePublish"])
 #subscribe to everything
 socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
 
 socketPushUpdate = context.socket(zmq.PUSH)
-socketPushUpdate.connect("tcp://localhost:%i" % 5556)
+socketPushUpdate.connect("tcp://localhost:%s" % ports["pullUpdates"])
 
 socketGetCurrentStateTable = context.socket(zmq.DEALER)
-socketGetCurrentStateTable.connect("tcp://localhost:%i" % 5557)
+socketGetCurrentStateTable.connect("tcp://localhost:%s" % ports["serveCurrentStatus"])
 
 
 def receive_status(socket):
@@ -99,5 +100,3 @@ while True:
     except EOFError:
         continue
     socketPushUpdate.send_string("%i %s" % (id, x))
-    #socketSender.send(x)
-    #print (socketSender.recv())
