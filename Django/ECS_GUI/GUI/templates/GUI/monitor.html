@@ -3,42 +3,30 @@
 <head>
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
 <script>
-setInterval(function() {
-    $.ajax({
-        type: "GET",
-        url: "{% url 'GUI:update' %}"
-    })
-    .done(function(response) {
-        var htmlObject = document.createElement('div');
-        htmlObject.innerHTML = response
-        var jqueryObject = $(htmlObject);
+console.log('ws://'+ window.location.host + '/ws/');
+var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/');
+//todo autoreconnect
 
-        //update state Table
-        $('#stateTable').html(jqueryObject.find("#table").html());
+updateSocket.onmessage = function(e) {
+    var data = JSON.parse(e.data);
+    var message = data['message'];
+    var type = data['type'];
 
-        //update log
-        logs = jqueryObject.find("#log").html()
-        //don't append empty rows
-        if (logs.length>0)
-          $('#log').append(logs);
-          //allways scroll directly to bottom
-          var textarea = document.getElementById('log');
-          textarea.scrollTop = textarea.scrollHeight;
-    });
-    /*
-    $.ajax({
-        type: "GET",
-        url: "{% url 'GUI:logs' %}"
-    })
-    .done(function(response) {
-        if (response.length>1)
-          $('#log').append(response);
-          //allways scroll directly to bottom
-          var textarea = document.getElementById('log');
-          textarea.scrollTop = textarea.scrollHeight;
-    });
-    */
-}, 6000)
+    if (type == "state"){
+      var update = JSON.parse(message);
+      var id = update['id'];
+      var newState = update['state'];
+
+      $('#dState'+id).html(newState);
+    }
+    else if (type == "log"){
+      $('#log').append(message+"\n");
+      //allways scroll directly to bottom
+      var textarea = document.getElementById('log');
+      textarea.scrollTop = textarea.scrollHeight;
+    }
+
+};
 
 $(document).ready(function() {
     $("#ready").click(function(e) {
@@ -99,7 +87,7 @@ $(document).ready(function() {
             {{state.0}}
           {% endif %}
         </td>
-        <td>{{state.1.1}}</td>
+        <td id="dState{{state.0}}" >{{state.1.1}}</td>
     </tr>
     {% endfor %}
   </table>

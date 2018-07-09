@@ -4,6 +4,9 @@ from GUI.models import Question, Choice
 from django.template import loader
 from django.urls import reverse
 from django.conf import settings
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+import json
 
 import zmq
 import threading
@@ -18,7 +21,6 @@ sys.path.append(projectPath)
 import ECSCodes
 
 class PCAHandler:
-    logQueue = None
     commandSocketQueue = None
     stateMap = {}
 
@@ -36,7 +38,6 @@ class PCAHandler:
     pingTimeout = 0
 
     def __init__(self):
-        self.logQueue = Queue()
         self.commandSocketQueue = Queue()
         self.stateMap = {}
 
@@ -128,13 +129,13 @@ class PCAHandler:
             self.handleDisconnection()
             return False
         if r != ECSCodes.ok:
-            logQueue.put("received error for sending command: " + command)
+            self.log("received error for sending command: " + command)
             return False
         return True
 
     def handleDisconnection(self):
         print("timeout PCA")
-        self.logQueue.put("PCA Connection Lost")
+        self.log("PCA Connection Lost")
         #reset commandSocket
         self.createCommandSocket()
         self.PCAConnection = False
@@ -179,7 +180,7 @@ class PCAHandler:
             #id should be None in final message
             else:
                 self.PCAConnection = True
-                self.logQueue.put("PCA Connection online")
+                self.log("PCA Connection online")
                 return True
 
     def waitForUpdates(self):
@@ -197,31 +198,51 @@ class PCAHandler:
             #id, sequence, state = socketSubscription.recv_multipart()
             id = struct.unpack("!i",id)[0]
             sequence = struct.unpack("!i",sequence)[0]
+            state = state.decode()
             print("received update",id, sequence, state)
-            self.stateMap[id] = (sequence, state.decode())
+            self.stateMap[id] = (sequence, state)
+
+            #send update to WebUI(s)
+            jsonWebUpdate = {"id" : id,
+                             "state" : state,
+                            }
+            jsonWebUpdate = json.dumps(jsonWebUpdate)
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                #the group name
+                "update",
+                {
+                    #calls method update in the consumer which is registered to channel layer
+                    'type': 'update',
+                    #argument whith which update is called
+                    'text': jsonWebUpdate
+                }
+            )
+
+    def log(self,message):
+        """spread log message through websocket(channel)"""
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            "update",
+            {
+                'type': 'logUpdate',
+                'logText': message
+            }
+        )
 
     def waitForLogUpdates(self):
+        """wait for new log messages from PCA"""
         while True:
             m = self.socketSubLog.recv().decode()
-            self.logQueue.put(m)
+            self.log(m)
 
 
 
 pca = PCAHandler()
 #views
 def update(request):
-    newlogs = []
-    while not pca.logQueue.empty():
-        newlogs.append(pca.logQueue.get())
-    return render(request, 'GUI/states.html', {'stateMap': pca.stateMap, 'logs': newlogs })
+    return render(request, 'GUI/states.html', {'stateMap': pca.stateMap})
 
-"""
-def logUpdate(request):
-    newlogs = []
-    while not pca.logQueue.empty():
-        newlogs.append(pca.logQueue.get())
-    return render(request, 'GUI/logs.html', {'logs': newlogs})
-"""
 
 def ready(request):
     print ("sending ready")

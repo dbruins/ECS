@@ -31,6 +31,7 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    'channels',
     'GUI.apps.GuiConfig',
     'django.contrib.admin',
     'django.contrib.auth',
@@ -129,3 +130,13 @@ TIMEOUT = 5000
 PINGTIMEOUT = 2000
 PCACODESPATH = "/home/daniel/Dokumente/Masterarbeit/Statemachine"
 PCACONFIGPATH = "/home/daniel/Dokumente/Masterarbeit/Statemachine/init.cfg"
+
+ASGI_APPLICATION = 'ECS_GUI.routing.application'
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [('127.0.0.1', 6379)],
+        },
+    },
+}
