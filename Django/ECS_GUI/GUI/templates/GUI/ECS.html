@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+<script>
+console.log('ws://'+ window.location.host + '/ws/');
+var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/');
+//todo autoreconnect
+
+updateSocket.onmessage = function(e) {
+    var data = JSON.parse(e.data);
+    var message = data['message'];
+    var type = data['type'];
+
+    if (type == "state"){
+      var update = JSON.parse(message);
+      var id = update['id'];
+      var newState = update['state'];
+
+      $('#dState'+id).html(newState);
+    }
+    else if (type == "log"){
+      $('#log').append(message+"\n");
+      //allways scroll directly to bottom
+      var textarea = document.getElementById('log');
+      textarea.scrollTop = textarea.scrollHeight;
+    }
+
+};
+
+</script>
+</head>
+<body>
+
+<h1>ECS Status</h1>
+
+<div id="stateTable">
+  {% for pca in pcaList %}
+  <h2>PCA <a href="{%url 'GUI:pca' pca.1.id%}">{{pca.1.id}}</a> </h2>
+  <table>
+    <tr>
+      <th>Detector</th>
+      <th>Status</th>
+    </tr>
+    {% for state in pca.1.stateMap.items %}
+    <tr>
+        <td>
+          {% if state.0 == 0%}
+            Global State
+          {%else%}
+          {{state.0}}
+          {% endif %}
+        </td>
+        <td id="dState{{state.0}}" >{{state.1.1}}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endfor %}
+</div>
+<div>
+  <form action="{% url 'GUI:input_create_pca' %}" method="post">
+    {% csrf_token %}
+    <input type="submit" value="create new Partition">
+  </form>
+  <form action="{% url 'GUI:input_create_detector' %}" method="post">
+    {% csrf_token %}
+    <input type="submit" value="create new Detector">
+  </form>
+  <button id="edit_partition">edit Partition</button>
+  <button id="edit_detector">create new Detector</button>
+</div>
+<textarea readonly id="log"></textarea>
+
+</body>
+</html>

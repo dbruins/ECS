@@ -40,7 +40,7 @@ def receive_status(socket):
         print ("receive error")
         return
     if id != b"":
-        id = struct.unpack("!i",id)[0]
+        id = id.decode()
     else:
         id = None
     sequence = struct.unpack("!i",sequence)[0]
@@ -74,7 +74,7 @@ def waitForUpdates():
             sequence = m[1]
             state = m[2].decode()
         #id, sequence, state = socketSubscription.recv_multipart()
-        id = struct.unpack("!i",id)[0]
+        id = id.decode()
         sequence = struct.unpack("!i",sequence)[0]
         print("received update",id, sequence, state)
         stateMap[id] = (sequence, state)
@@ -82,8 +82,9 @@ def waitForUpdates():
 def waitForCommand():
     while True:
         m = socketReceiver.recv()
-        print (m)
-        time.sleep(randint(2,6))
+        if(m != ECSCodes.ping):
+            print (m)
+            time.sleep(randint(2,6))
         #m = input()
         socketReceiver.send(ECSCodes.ok)
 
@@ -94,9 +95,10 @@ _thread.start_new_thread(waitForUpdates,())
 
 id = int(address) - 5557
 print (id)
+id = str(id)
 while True:
     try:
         x = input()
     except EOFError:
         continue
-    socketPushUpdate.send_string("%i %s" % (id, x))
+    socketPushUpdate.send_string("%s %s" % (id, x))

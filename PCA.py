@@ -1,4 +1,4 @@
-
+#!/usr/bin/python3
 
 from Statemachine import Statemachine
 import csv
@@ -10,50 +10,70 @@ from datetime import datetime
 import threading
 import struct # for packing integers
 import logging
-import copy
 import ECSCodes
 import configparser
+import copy
+import json
+from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject
+import sys
 
-class stateMapWrapper:
+class MapWrapper:
     """thread safe handling of Map"""
-    semaphore = None
-    statusMap = {}
-
     def __init__(self):
+        self.map = {}
         self.semaphore = threading.Semaphore()
 
-    def get(self,key):
+    def __iter__(self):
+        return self.copy().values().__iter__()
+
+    def __getitem__(self, key):
         """get value for key returns None if key doesn't exist"""
         self.semaphore.acquire()
-        if key in self.statusMap:
-            ret = statusMap[key]
+        if key in self.map:
+            ret = self.map[key]
         else:
             ret = None
         self.semaphore.release()
         return ret
 
-    def set(self,key,value):
+    def __delitem__(self,key):
         self.semaphore.acquire()
-        self.statusMap[key] = value
+        if key in self.map:
+            del self.map[key]
         self.semaphore.release()
 
-    def itemsCopy(self):
+
+    def __setitem__(self,key,value):
+        self.semaphore.acquire()
+        self.map[key] = value
+        self.semaphore.release()
+
+    def copy(self):
         """returns a deepcopy off all items for iteration"""
         #create copy of statusMap so loop dosn't crash if there are changes on statusMap during the loop
-        #probably not the best solution, locks would be also not ideal
+        #probably not the best solution
         self.semaphore.acquire()
-        statusMap = copy.deepcopy(self.statusMap)
+        mapCopy = copy.deepcopy(self.map)
         self.semaphore.release()
-        return statusMap.items()
+        return mapCopy
 
-    def isIn(self,key):
-        """returns True if key exists in Map"""
+    def __contains__(self, key):
         self.semaphore.acquire()
-        ret = key in self.statusMap
+        ret = key in self.map
         self.semaphore.release()
         return ret
 
+    def size(self):
+        self.semaphore.acquire()
+        r = len(self.map)
+        self.semaphore.release()
+        return r
+
+    def items(self):
+        return self.copy().items()
+
 class PCA:
+    id = None
     detectors = None
     stateMachine = None
     #id -> (sequence, status)
@@ -79,45 +99,68 @@ class PCA:
     publishQueue = None
     commandQueue = None
 
-    def __init__(self):
+    def __init__(self,id):
+        self.id = id
         #read config File
         config = configparser.ConfigParser()
         config.read("init.cfg")
         conf = config["Default"]
+        context = zmq.Context()
 
+        #get your config
+        configECS = None
+        while configECS == None:
+            requestSocket = context.socket(zmq.REQ)
+            requestSocket.connect("tcp://%s:%s" % (conf['ECSAddress'],conf['ECSRequestPort']))
+            requestSocket.setsockopt(zmq.RCVTIMEO, int(conf['receive_timeout']))
+            requestSocket.setsockopt(zmq.LINGER,0)
+
+            requestSocket.send_multipart([ECSCodes.pcaAsksForConfig, id.encode()])
+            try:
+                configJSON = requestSocket.recv().decode()
+                configJSON = json.loads(configJSON)
+                configECS = partitionDataObject(configJSON)
+            except zmq.Again:
+                print("timeout getting configuration")
+                requestSocket.close()
+                continue
+            requestSocket.close()
 
         #init stuff
         self.stateMachine = Statemachine(conf["stateMachineCSV"],conf["initialState"])
         self.detectors = {}
+        self.activeConnectors = MapWrapper()
         self.sequence = 0
-        self.statusMap = stateMapWrapper()
-        self.statusMap.set(0,(self.sequence,self.stateMachine.currentState))
+        #the only one who may change this, is the publisher thread
+        self.statusMap = MapWrapper()
+        self.sem = threading.Semaphore()
+        self.publishQueue = Queue()
+        self.commandQueue = Queue()
 
         ports = config["ZMQPorts"]
         #ZMQ Socket to publish new state Updates
-        context = zmq.Context()
         self.socketPublish = context.socket(zmq.PUB)
-        self.socketPublish.bind("tcp://*:%s" % ports["statePublish"])
+        self.socketPublish.bind("tcp://*:%s" % configECS.portPublish)
 
         #publish logmessages
         self.socketLogPublish = context.socket(zmq.PUB)
-        self.socketLogPublish.bind("tcp://*:%s" % ports["logPublish"])
+        self.socketLogPublish.bind("tcp://*:%s" % configECS.portLog)
 
         #Socket to wait for Updates From Detectors
         self.socketPullUpdates = context.socket(zmq.PULL)
-        self.socketPullUpdates.bind("tcp://*:%s" % ports["pullUpdates"])
+        self.socketPullUpdates.bind("tcp://*:%s" % configECS.portUpdates)
 
         #Socket to serve current statusMap
         self.socketServeCurrentStatus = context.socket(zmq.ROUTER)
-        self.socketServeCurrentStatus.bind("tcp://*:%s" % ports["serveCurrentStatus"])
+        self.socketServeCurrentStatus.bind("tcp://*:%s" % configECS.portCurrentState)
 
         #socket for receiving Status Updates
         self.socketSingleRequest = context.socket(zmq.REP)
-        self.socketSingleRequest.bind("tcp://*:%s" % ports["singleStateRequest"])
+        self.socketSingleRequest.bind("tcp://*:%s" % configECS.portSingleRequest)
 
-        #socket for receiving Status Updates
+        #socket for receiving commands
         self.remoteCommandSocket = context.socket(zmq.REP)
-        self.remoteCommandSocket.bind("tcp://*:%s" % ports["commandSocket"])
+        self.remoteCommandSocket.bind("tcp://*:%s" % configECS.portCommand)
 
         #register Poller
         self.poller = zmq.Poller()
@@ -143,10 +186,41 @@ class PCA:
         else:
             logging.getLogger().handlers[1].setLevel(logging.CRITICAL)
 
+        #get your Detectorlist
+        detList = None
+        while detList == None:
+            requestSocket = context.socket(zmq.REQ)
+            requestSocket.connect("tcp://%s:%s" % (conf['ECSAddress'],conf['ECSRequestPort']))
+            requestSocket.setsockopt(zmq.RCVTIMEO, int(conf['receive_timeout']))
+            requestSocket.setsockopt(zmq.LINGER,0)
+
+            requestSocket.send_multipart([ECSCodes.pcaAsksForDetectorList, self.id.encode()])
+            try:
+                #receive detectors as json
+                detJSON = requestSocket.recv().decode()
+                detJSON = json.loads(detJSON)
+                #create DataObjectCollection from JSON
+                detList = DataObjectCollection(detJSON,detectorDataObject)
+            except zmq.Again:
+                self.log("timeout getting DetectorList", True)
+                requestSocket.close()
+                continue
+            requestSocket.close()
+
+        #create Detector objects
+        for d in detList:
+            id = d.id
+            address = d.address
+            type = d.type
+            port = d.port
+
+            #create the corresponding class for the specified type
+            types = Detector.DetectorTypes()
+            typeClass = types.getClassForType(type)
+            det = typeClass(id,address,port,self.log,self.activeConnectors,self.publishQueue)
+            self.addDetector(det)
+
         #thread stuff
-        self.sem = threading.Semaphore()
-        self.publishQueue = Queue()
-        self.commandQueue = Queue()
         start_new_thread(self.waitForUpdates,())
         start_new_thread(self.waitForRequests,())
         start_new_thread(self.checkCurrentState,())
@@ -154,8 +228,9 @@ class PCA:
         start_new_thread(self.waitForRemoteCommand,())
         start_new_thread(self.watchCommandQueue,())
 
-        #publish PCA Globalstate
-        self.publishQueue.put((0,self.stateMachine.currentState))
+        #set and publish PCA Globalstate
+        self.statusMap[self.id] = (self.sequence,self.stateMachine.currentState)
+        self.publishQueue.put((self.id,self.stateMachine.currentState))
 
     def watchCommandQueue(self):
         """watch the command Queue und execute incoming commands"""
@@ -195,8 +270,7 @@ class PCA:
             #self.publishStateUpdate(id,state)
             #race condition possible?
             self.sequence = self.sequence + 1
-            #self.statusMap[id] = (self.sequence,state)
-            self.statusMap.set(id,(self.sequence,state))
+            self.statusMap[id] = (self.sequence,state)
             self.send_status(self.socketPublish,id,self.sequence,state)
 
 
@@ -205,7 +279,6 @@ class PCA:
         while True:
             message = self.socketPullUpdates.recv()
             message = message.decode()
-            print (message)
             id = None
             command = None
 
@@ -213,9 +286,7 @@ class PCA:
                 self.log("received empty or too long message",True)
                 continue
 
-            i,command = message.split()
-            if i.isdigit():
-                id = int(i)
+            id,command = message.split()
 
             if id == None or command == None:
                 self.log("received non-valid message",True)
@@ -231,10 +302,10 @@ class PCA:
             if nextMappedState and nextMappedState != "Running":
                 oldstate = det.stateMachine.currentState
                 det.stateMachine.transition(command)
-                self.log("Detector "+str(det.id)+" made transition on it's own "+ oldstate +" -> " + det.stateMachine.currentState )
+                self.log("Detector "+det.id+" made transition on it's own "+ oldstate +" -> " + det.stateMachine.currentState )
                 self.publishQueue.put((det.id,det.getMappedState()))
             else:
-                self.log("Detector"+ str(det.id) +" made an impossible Transition: " + str(command),True)
+                self.log("Detector"+ det.id +" made an impossible Transition: " + str(command),True)
                 #todo Ok what now?
             self.sem.release()
 
@@ -256,13 +327,12 @@ class PCA:
                     self.log("wrong request in socketServeCurrentStatus \n",True)
                     continue
 
-                #print (statusMap)
                 # send each Statusmap entry to origin
-                items = self.statusMap.itemsCopy()
+                items = self.statusMap.copy().items()
                 for key, value in items:
                     #send identity of origin first
                     self.socketServeCurrentStatus.send(origin,zmq.SNDMORE)
-                    print (key,value[0],value[1])
+                    #send key,sequence number,status
                     self.send_status(self.socketServeCurrentStatus,key,value[0],value[1])
                     #self.socketServeCurrentStatus.send_multipart([key,status[0],status[1]])
 
@@ -272,43 +342,37 @@ class PCA:
 
             #request for single Detector
             if self.socketSingleRequest in items:
-                message = self.socketSingleRequest.recv().decode()
-                id = None
-                if message.isdigit():
-                    id = int(message)
-                    if self.statusMap.isIn(id):
-                        #self.socketSingleRequest.send(self.statusMap[id][1].encode())
-                        self.socketSingleRequest.send(self.statusMap.get(id)[1].encode())
-                    else:
-                        self.socketSingleRequest.send(b"who?")
-                        self.log("received status request for unknown id",True)
+                id = self.socketSingleRequest.recv().decode()
+
+                if id in self.statusMap:
+                    #send status
+                    self.socketSingleRequest.send(self.statusMap.get[id][1].encode())
                 else:
-                    self.socketSingleRequest.send(b"numbers only")
-                    self.log("received wrong message format in status request")
+                    self.socketSingleRequest.send(ECSCodes.idUnknown)
+                    self.log("received status request for unknown id",True)
 
 
     def send_status(self,socket,key,sequence,state):
         """method for sending a status update on a specified socket"""
         #if None send empty byte String
-        key_s=b""
+        key_b=b""
         if key != None:
-            #integers need to packed
-            key_s = struct.pack("!i",key)
+            key_b = key.encode()
 
+        #integers need to be packed
         sequence_s = struct.pack("!i",sequence)
         #python strings need to be encoded into binary strings
         state_b = b""
         if state != None:
             state_b = state.encode()
-        socket.send_multipart([key_s,sequence_s,state_b])
+        socket.send_multipart([key_b,sequence_s,state_b])
 
-    def addDetector(self,id,configSection):
-        """add Detector to Dictionary and pubish it's state, requires an id and Section of the detector Config File"""
-        d = Detector.DetectorA(id,configSection,self.log)
+    def addDetector(self,d):
+        """add Detector to Dictionary and pubish it's state"""
+        #d = Detector.DetectorA(id,configSection,self.log)
         #semaphore is necessary otherwise threads iterating over map might crash
         self.sem.acquire()
         self.detectors[d.id] = d
-        #self.statusMap[d.id] = d.getMappedState()
         self.publishQueue.put((d.id,d.getMappedState()))
         self.sem.release()
 
@@ -349,7 +413,6 @@ class PCA:
                 for i,d in self.detectors.items():
                 #Some Detector stopped Working
                     if d.getMappedState() != "Running":
-                        #print d.getMappedState()
                         self.error()
 
             if self.stateMachine.currentState == "RunningInError":
@@ -369,7 +432,7 @@ class PCA:
         """try to transition the own Statemachine"""
         oldstate = self.stateMachine.currentState
         if self.stateMachine.transition(command):
-            self.publishQueue.put((0,self.stateMachine.currentState))
+            self.publishQueue.put((self.id,self.stateMachine.currentState))
             self.log("GLobal Statechange: "+oldstate+" -> "+self.stateMachine.currentState)
 
     def error(self):
@@ -385,6 +448,8 @@ class PCA:
         """tells all Detectors to shutdown"""
         threadArray = []
         returnQueue = Queue()
+        if not (len(self.detectors)==self.activeConnectors.size()):
+            self.log("Warning: Some Detectors are disconnected")
         self.sem.acquire()
         for i,d in self.detectors.items():
             t = threading.Thread(name='doff'+str(i), target=self.threadFunctionCall, args=(d.id, d.powerOff, returnQueue))
@@ -404,9 +469,12 @@ class PCA:
         """tells all Detectors to get ready to start"""
         threadArray = []
         returnQueue = Queue()
+        if not (len(self.detectors)==self.activeConnectors.size()):
+            self.log("Warning: Some Detectors are disconnected")
         self.sem.acquire()
-        for i,d in self.detectors.items():
-            t = threading.Thread(name='dready'+str(i), target=self.threadFunctionCall, args=(d.id, d.getReady, returnQueue))
+        for id in self.activeConnectors:
+            d = self.detectors[id]
+            t = threading.Thread(name='dready'+str(id), target=self.threadFunctionCall, args=(d.id, d.getReady, returnQueue))
             threadArray.append(t)
             t.start()
 
@@ -421,6 +489,8 @@ class PCA:
         self.sem.release()
     def start(self):
         """tells all Detectors to start running"""
+        if not (len(self.detectors)==self.activeConnectors.size()):
+            self.log("Warning: Some Detectors are disconnected")
         self.sem.acquire()
         if self.stateMachine.currentState != "Ready":
             self.log("start not possible in current state")
@@ -448,6 +518,8 @@ class PCA:
         """tells all Detectors to stop running"""
         threadArray = []
         returnQueue = Queue()
+        if not (len(self.detectors)==self.activeConnectors.size()):
+            self.log("Warning: Some Detectors are disconnected")
         self.sem.acquire()
         for i,d in self.detectors.items():
             t = threading.Thread(name='dstop'+str(i), target=self.threadFunctionCall, args=(d.id, d.stop, returnQueue))
@@ -477,12 +549,11 @@ class PCA:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("please enter the pca id")
+        sys.exit(1)
 
-    test = PCA()
-
-    test.addDetector(1,"DETECTOR_A")
-    test.addDetector(2,"DETECTOR_A")
-    test.addDetector(3,"DETECTOR_A")
+    test = PCA(sys.argv[1])
 
     x = ""
     while x != "end":

@@ -128,6 +128,11 @@ PINGINTERVALL = 2
 TIMEOUT = 5000
 #timeout for Pings to PCA in ms
 PINGTIMEOUT = 2000
+
+#address and port for ECS
+ECS_ADDRESS = "localhost"
+ECS_REQUEST_PORT = 5000
+
 PCACODESPATH = "/home/daniel/Dokumente/Masterarbeit/Statemachine"
 PCACONFIGPATH = "/home/daniel/Dokumente/Masterarbeit/Statemachine/init.cfg"
 

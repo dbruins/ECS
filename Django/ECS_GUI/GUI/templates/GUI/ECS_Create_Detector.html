@@ -1,0 +1,28 @@
+<html>
+  <body>
+    {% if error%}
+      <a>error creating Detector</a>
+    {% endif %}
+    <form action="{% url 'GUI:create_detector' %}" method="post">
+      {% csrf_token %}
+      <div><a>Detector ID</a><input id="id" name="id" type=text value = "{% if post %}{{post.id}}{% endif%}" ></div>
+      <div><a>Address</a><input id="address"  name="address" type=text value = "{% if post %}{{post.address}}{% endif%}" ></div>
+      <!--a Dropdown would be better i guess-->
+      <div><a>Type</a><input id="type" name="type" type="text" value = "{% if post %}{{post.type}}{% endif%}"></div>
+      <div><a>Port</a><input id="port" name="port" type="text" value = "{% if post %}{{post.port}}{% endif%}"></div>
+
+      <div>
+          <a>Assign to Partition ?</a>
+          <br>
+          <a>None</a><input type="radio" name="partition" value="None" checked=True> <br/>
+          {% for p in pcaList %}
+            <a>Partition {{p.1.id}} </a><input type="radio" name="partition" value="{{p.1.id}}"><br/>
+          {% endfor %}
+      </div>
+
+      <br/>
+      <input type="submit" value="create new Detector">
+    </form>
+
+  </body>
+</html>

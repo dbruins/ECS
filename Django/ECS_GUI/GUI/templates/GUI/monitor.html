@@ -33,7 +33,7 @@ $(document).ready(function() {
         e.preventDefault();
         $.ajax({
             type: "POST",
-            url: "{% url 'GUI:ready' %}",
+            url: "{% url 'GUI:ready' pcaId%}",
             data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
             /*"success": function(result) {
                 console.log(result);
@@ -44,7 +44,7 @@ $(document).ready(function() {
         e.preventDefault();
         $.ajax({
             type: "POST",
-            url: "{% url 'GUI:start' %}",
+            url: "{% url 'GUI:start' pcaId%}",
             data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
         });
     });
@@ -52,7 +52,7 @@ $(document).ready(function() {
         e.preventDefault();
         $.ajax({
             type: "POST",
-            url: "{% url 'GUI:stop' %}",
+            url: "{% url 'GUI:stop' pcaId%}",
             data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
         });
     });
@@ -60,7 +60,7 @@ $(document).ready(function() {
         e.preventDefault();
         $.ajax({
             type: "POST",
-            url: "{% url 'GUI:shutdown' %}",
+            url: "{% url 'GUI:shutdown' pcaId%}",
             data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
         });
     });
@@ -70,7 +70,7 @@ $(document).ready(function() {
 
 <body>
 
-<h1>PCA Overview</h1>
+<h1>PCA{{pcaID}} Overview</h1>
 
 <div id="stateTable">
   <table>
