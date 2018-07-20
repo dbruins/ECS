@@ -9,34 +9,40 @@ from PCA import MapWrapper
 import time
 
 class Detector:
-    def __init__(self,id,confSection,logfunction,connectedDetectors):
+    def __init__(self,id,address,port,confSection,logfunction,publishQueue,pcaTimeoutFunktion,pcaReconnectFunction,active=True):
         configParser = configparser.ConfigParser()
         configParser.read("detector.cfg")
         conf = configParser[confSection]
-        self.connectedDetectors = connectedDetectors
+        self.publishQueue = publishQueue
+        self.active = active
 
-        basePort = conf["basePort"]
-        myPort = int(basePort) + id
-        print (myPort)
+        self.pcaReconnectFunction = pcaReconnectFunction
+        self.pcaTimeoutFunktion = pcaTimeoutFunktion
+
         self.receive_timeout = int(conf["timeout"])
-        #todo localhost is hardcoded
-        self.address = ("tcp://localhost:%i" % myPort)
+        self.pingIntervall = int(conf["pingIntervall"])
+        self.address = ("tcp://%s:%s" % (address ,port))
+        #todo get the actual status of the detector instead of init it with shutdown
         self.stateMachine = Statemachine(conf["stateFile"],"Shutdown")
         self.id = id
         self.logfunction = logfunction
+        self.mapper = {}
         with open(conf["mapFile"], 'r') as file:
             reader = csv.reader(file, delimiter=',')
             for row in reader:
                 self.mapper[row[0]] = row[1]
         #socket for sending Requests
         self.zmqContext = zmq.Context()
+        self.socketSender = None
         self.createSendSocket()
 
+        self.connected = None
         start_new_thread(self.ping,())
-
 
     def ping(self):
         while True:
+            if not self.active:
+                continue
             pingSocket = self.zmqContext.socket(zmq.REQ)
             pingSocket.connect(self.address)
             pingSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
@@ -44,19 +50,25 @@ class Detector:
             pingSocket.send(ECSCodes.ping)
             try:
                 r = pingSocket.recv()
-                if not (self.id in self.connectedDetectors):
+                if self.connected != True:
+                    self.connected = True
                     self.logfunction("Detector %s is connected" % self.id)
-                    #todo kind of stupid
-                    self.connectedDetectors[self.id] = self.id
+                    self.pcaReconnectFunction(self.id,self.getMappedState())
             except zmq.Again:
-                self.logfunction("timeout pinging Detector %s" % self.id, True)
-                #todo PCA should be able retrieve the actual status upon reconnect
-                if self.id in self.connectedDetectors:
-                    self.stateMachine.transition("poweroff")
-                    self.publishQueue.put((self.id,self.getMappedState()))
-                del self.connectedDetectors[self.id]
+                #todo PCA should be able retrieve the actual status upon reconnect; this is just state it used to has before the reconnect
+                if self.connected == True or self.connected == None:
+                    self.connected = False
+                    self.logfunction("timeout pinging Detector %s" % self.id, True)
+                    self.pcaTimeoutFunktion(self.id)
             pingSocket.close()
             time.sleep(self.pingIntervall)
+
+    def setActive(self):
+        self.active = True
+
+    def setInactive(self):
+        self.active = False
+
 
     def createSendSocket(self):
         """init or reset the send Socket"""
@@ -70,16 +82,16 @@ class Detector:
 
     def transitionRequest(self,command):
         """request a transition to a Detector"""
+        if not self.active:
+            return False
         if self.stateMachine.checkIfPossible(command):
-            if not self.id in self.connectedDetectors:
-                self.logfunction("Detector %s is not connected" % self.id)
-                return False
             self.socketSender.send(command.encode(encoding='utf_8'))
             try:
                 returnMessage = self.socketSender.recv()
             except zmq.Again:
                 self.logfunction("timeout from Detector "+str(self.id)+" for "+ command,True)
-                del self.connectedDetectors[id]
+                #todo handle disconnect
+                #del self.connectedDetectors[id]
                 #reset socket
                 self.createSendSocket()
                 return False
@@ -100,9 +112,17 @@ class Detector:
         return self.id
 
     def getState(self):
+        if self.active == False:
+            return "inactive"
+        if self.connected == False:
+            return "Connection Problem"
         return self.stateMachine.currentState
 
     def getMappedState(self):
+        if self.active == False:
+            return "inactive"
+        if self.connected == False:
+            return "Connection Problem"
         return self.mapper[self.stateMachine.currentState]
 
     def getMappedStateForCommand(self,command):
@@ -127,30 +147,6 @@ class Detector:
         pass
 
 class DetectorA(Detector):
-    def __init__(self,id,address,port,logfunction,connectedDetectors,publishQueue):
-        self.connectedDetectors = connectedDetectors
-        self.publishQueue = publishQueue
-        configParser = configparser.ConfigParser()
-        configParser.read("detector.cfg")
-        conf = configParser["DETECTOR_A"]
-
-        self.receive_timeout = int(conf["timeout"])
-        self.pingIntervall = int(conf["pingIntervall"])
-        self.address = ("tcp://%s:%s" % (address ,port))
-        self.stateMachine = Statemachine(conf["stateFile"],"Shutdown")
-        self.id = id
-        self.logfunction = logfunction
-        self.mapper = {}
-        with open(conf["mapFile"], 'r') as file:
-            reader = csv.reader(file, delimiter=',')
-            for row in reader:
-                self.mapper[row[0]] = row[1]
-        #socket for sending Requests
-        self.zmqContext = zmq.Context()
-        self.socketSender = None
-        self.createSendSocket()
-
-        start_new_thread(self.ping,())
 
     def getReady(self):
         self.powerOn()
@@ -194,8 +190,19 @@ class DetectorTypes:
         "DetectorB" : DetectorB,
     }
 
+    confSection = {
+        "DetectorA" : "DETECTOR_A",
+        "DetectorB" : "DETECTOR_B",
+    }
+
     def getClassForType(self,type):
         if type in self.typeList:
             return self.typeList[type]
+        else:
+            return None
+
+    def getConfsectionForType(self,type):
+        if type in self.confSection:
+            return self.confSection[type]
         else:
             return None

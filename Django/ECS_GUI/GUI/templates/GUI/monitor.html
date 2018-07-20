@@ -16,8 +16,12 @@ updateSocket.onmessage = function(e) {
       var update = JSON.parse(message);
       var id = update['id'];
       var newState = update['state'];
-
-      $('#dState'+id).html(newState);
+      buttonHtml = "";
+      if (newState == "inactive")
+        buttonHtml = '<button id="activeToggle" onclick="setactive('+ update['id'] +')" > activate  </button>';
+      else
+        buttonHtml = '<button id="activeToggle" onclick="setinactive('+ update['id'] +')" > deactivate  </button>';
+      $('#dState'+id).html(newState+buttonHtml);
     }
     else if (type == "log"){
       $('#log').append(message+"\n");
@@ -27,6 +31,28 @@ updateSocket.onmessage = function(e) {
     }
 
 };
+
+function setactive(id){
+  $.ajax({
+      type: "POST",
+      url: "{% url 'GUI:setActive' pcaId%}",
+      data:{csrfmiddlewaretoken: '{{ csrf_token }}', "detectorId" : id},
+      "success": function(result) {
+          console.log(result);
+      },
+  });
+}
+
+function setinactive(id){
+  $.ajax({
+      type: "POST",
+      url: "{% url 'GUI:setInactive' pcaId%}",
+      data:{csrfmiddlewaretoken: '{{ csrf_token }}', "detectorId" : id},
+      "success": function(result) {
+          console.log(result);
+      },
+  });
+}
 
 $(document).ready(function() {
     $("#ready").click(function(e) {
@@ -87,7 +113,14 @@ $(document).ready(function() {
             {{state.0}}
           {% endif %}
         </td>
-        <td id="dState{{state.0}}" >{{state.1.1}}</td>
+        <td id="dState{{state.0}}" >
+          {{state.1.1}}
+          {%if state.1.1 == "inactive" %}
+            <button id="activeToggle" onclick="setactive({{state.0}})" > activate  </button>
+          {% else %}
+            <button id="activeToggle" onclick="setinactive({{state.0}})" > deactivate  </button>
+          {% endif %}
+        </td>
     </tr>
     {% endfor %}
   </table>

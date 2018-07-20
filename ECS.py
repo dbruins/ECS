@@ -1,50 +1,6 @@
 #!/usr/bin/python3
 import threading
 import copy
-class MapWrapper:
-    """thread safe handling of Map"""
-    def __init__(self):
-        self.map = {}
-        self.semaphore = threading.Semaphore()
-
-    def __iter__(self):
-        return self.copy().values().__iter__()
-
-    def __getitem__(self, key):
-        """get value for key returns None if key doesn't exist"""
-        self.semaphore.acquire()
-        if key in self.map:
-            ret = self.map[key]
-        else:
-            ret = None
-        self.semaphore.release()
-        return ret
-
-    def __delitem__(self,key):
-        self.semaphore.acquire()
-        if key in self.map:
-            del self.map[key]
-        self.semaphore.release()
-
-
-    def __setitem__(self,key,value):
-        self.semaphore.acquire()
-        self.map[key] = value
-        self.semaphore.release()
-
-    def copy(self):
-        """returns a deepcopy off all items for iteration"""
-        #create copy of statusMap so loop dosn't crash if there are changes on statusMap during the loop
-        #probably not the best solution
-        self.semaphore.acquire()
-        mapCopy = copy.deepcopy(self.map)
-        self.semaphore.release()
-        return mapCopy
-
-    def __contains__(self, key):
-        self.semaphore.acquire()
-        ret = key in self.map
-        self.semaphore.release()
 
 import sqlite3
 from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject
@@ -210,6 +166,7 @@ import struct
 import json
 from multiprocessing import Queue
 import time
+from ECS_tools import MapWrapper
 #import DataObjects
 
 class ECS:
@@ -298,7 +255,7 @@ class ECS:
                 except zmq.Again:
                     self.handleDisconnection(id)
                 if r != ECSCodes.ok:
-                    print("received error for sending command: %s " + str(command))
+                    print("received error for sending command: %s " % str(command))
                 socket.close()
                 if not r:
                     #try to resend later ?
@@ -476,13 +433,6 @@ class ECS:
             print("received update",id, sequence, state)
             #todo do something with the update
             #stateMap[id] = (sequence, state)
-    """
-    def addDetector(id,address,type):
-        self.database.addDetector(id,address,type)
-
-    def addDetectorToPca(detId,pcaId):
-        self.database.mapDetectorToPCA(detId,pcaId)
-    """
 
 
 

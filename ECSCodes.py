@@ -22,3 +22,11 @@ createPartition = b'\x09'
 createDetector = b'\x13'
 
 timeout = b'\x10'
+
+shutdown = b'\x16'
+getReady = b'\x17'
+start = b'\x18'
+stop = b'\x19'
+
+setActive = b'\x20'
+setInactive = b'\x21'

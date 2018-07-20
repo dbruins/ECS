@@ -16,68 +16,12 @@ import copy
 import json
 from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject
 import sys
-
-class MapWrapper:
-    """thread safe handling of Map"""
-    def __init__(self):
-        self.map = {}
-        self.semaphore = threading.Semaphore()
-
-    def __iter__(self):
-        return self.copy().values().__iter__()
-
-    def __getitem__(self, key):
-        """get value for key returns None if key doesn't exist"""
-        self.semaphore.acquire()
-        if key in self.map:
-            ret = self.map[key]
-        else:
-            ret = None
-        self.semaphore.release()
-        return ret
-
-    def __delitem__(self,key):
-        self.semaphore.acquire()
-        if key in self.map:
-            del self.map[key]
-        self.semaphore.release()
-
-
-    def __setitem__(self,key,value):
-        self.semaphore.acquire()
-        self.map[key] = value
-        self.semaphore.release()
-
-    def copy(self):
-        """returns a deepcopy off all items for iteration"""
-        #create copy of statusMap so loop dosn't crash if there are changes on statusMap during the loop
-        #probably not the best solution
-        self.semaphore.acquire()
-        mapCopy = copy.deepcopy(self.map)
-        self.semaphore.release()
-        return mapCopy
-
-    def __contains__(self, key):
-        self.semaphore.acquire()
-        ret = key in self.map
-        self.semaphore.release()
-        return ret
-
-    def size(self):
-        self.semaphore.acquire()
-        r = len(self.map)
-        self.semaphore.release()
-        return r
-
-    def items(self):
-        return self.copy().items()
+from ECS_tools import MapWrapper
 
 class PCA:
     id = None
     detectors = None
     stateMachine = None
-    #id -> (sequence, status)
-    statusMap = {}
     sequence = 0
 
     #---zmq sockets---
@@ -129,9 +73,9 @@ class PCA:
         #init stuff
         self.stateMachine = Statemachine(conf["stateMachineCSV"],conf["initialState"])
         self.detectors = {}
-        self.activeConnectors = MapWrapper()
+        self.activeDetectors = MapWrapper()
         self.sequence = 0
-        #the only one who may change this, is the publisher thread
+        #the only one who may change the status Map, is the publisher thread
         self.statusMap = MapWrapper()
         self.sem = threading.Semaphore()
         self.publishQueue = Queue()
@@ -139,8 +83,11 @@ class PCA:
 
         ports = config["ZMQPorts"]
         #ZMQ Socket to publish new state Updates
-        self.socketPublish = context.socket(zmq.PUB)
+        self.socketPublish = context.socket(zmq.XPUB)
+        #todo the connect takes a little time messages until then will be lost
         self.socketPublish.bind("tcp://*:%s" % configECS.portPublish)
+        x = self.socketPublish.recv()
+        print(x)
 
         #publish logmessages
         self.socketLogPublish = context.socket(zmq.PUB)
@@ -175,7 +122,9 @@ class PCA:
             format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p',
             #level = logging.DEBUG,
             handlers=[
+            #logging to file
             logging.FileHandler(self.logfile),
+            #logging on console and WebUI
             logging.StreamHandler()
         ])
         logging.getLogger().setLevel(logging.INFO)
@@ -207,6 +156,8 @@ class PCA:
                 continue
             requestSocket.close()
 
+        start_new_thread(self.publisher,())
+
         #create Detector objects
         for d in detList:
             id = d.id
@@ -217,50 +168,62 @@ class PCA:
             #create the corresponding class for the specified type
             types = Detector.DetectorTypes()
             typeClass = types.getClassForType(type)
-            det = typeClass(id,address,port,self.log,self.activeConnectors,self.publishQueue)
+            confSection = types.getConfsectionForType(type)
+            #todo all Detectors are added as active; in case of a crash the PCA needs to remember which Detectors were active; maybe save this information in the ECS database?
+            det = typeClass(id,address,port,confSection,self.log,self.publishQueue,self.handleDetectorTimeout,self.handleDetectorReconnect)
             self.addDetector(det)
 
         #thread stuff
         start_new_thread(self.waitForUpdates,())
         start_new_thread(self.waitForRequests,())
         start_new_thread(self.checkCurrentState,())
-        start_new_thread(self.publisher,())
         start_new_thread(self.waitForRemoteCommand,())
         start_new_thread(self.watchCommandQueue,())
 
         #set and publish PCA Globalstate
-        self.statusMap[self.id] = (self.sequence,self.stateMachine.currentState)
+        #todo when the pca recovers from a crash it first needs to find out it's currentstate
         self.publishQueue.put((self.id,self.stateMachine.currentState))
 
     def watchCommandQueue(self):
         """watch the command Queue und execute incoming commands"""
         while True:
-            command = self.commandQueue.get()
-            if command==b"ready":
+            command,arg = self.commandQueue.get()
+            if command==ECSCodes.getReady:
                 self.makeReady()
                 continue
-            if command==b"start":
+            if command==ECSCodes.start:
                 self.start()
                 continue
-            if command==b"stop":
+            if command==ECSCodes.stop:
                 self.stop()
                 continue
-            if command==b"shutdown":
+            if command==ECSCodes.shutdown:
                 self.shutdown()
+                continue
+            if command == ECSCodes.setActive:
+                self.setDetectorActive(arg)
+                continue
+            if command == ECSCodes.setInactive:
+                self.setDetectorInactive(arg)
                 continue
 
     def waitForRemoteCommand(self):
         """wait for an external(start,stop etc.) command e.g. from that "gorgeous" WebGUI
         sends an Ok for received command"""
         while True:
-            m = self.remoteCommandSocket.recv()
-            if m!=ECSCodes.ping:
-                print (m)
+            command = self.remoteCommandSocket.recv_multipart()
+            arg = None
+            if len(command) > 1:
+                arg = command[1].decode()
+            command = command[0]
+
+            if command!=ECSCodes.ping:
+                print (command)
             self.remoteCommandSocket.send(ECSCodes.ok)
-            if m==ECSCodes.ping:
+            if command==ECSCodes.ping:
                 #it's just a ping
                 continue
-            self.commandQueue.put(m)
+            self.commandQueue.put((command,arg))
 
 
     def publisher(self):
@@ -271,6 +234,7 @@ class PCA:
             #race condition possible?
             self.sequence = self.sequence + 1
             self.statusMap[id] = (self.sequence,state)
+            print(id,self.sequence,state)
             self.send_status(self.socketPublish,id,self.sequence,state)
 
 
@@ -370,11 +334,33 @@ class PCA:
     def addDetector(self,d):
         """add Detector to Dictionary and pubish it's state"""
         #d = Detector.DetectorA(id,configSection,self.log)
-        #semaphore is necessary otherwise threads iterating over map might crash
+        #semaphore is necessary otherwise threads iterating over map might crash; todo not anymore?
         self.sem.acquire()
         self.detectors[d.id] = d
+        if d.active:
+            self.activeDetectors[d.id] = d.id
         self.publishQueue.put((d.id,d.getMappedState()))
         self.sem.release()
+
+    def setDetectorActive(self,id):
+        detector = self.detectors[id]
+        detector.setActive()
+        self.activeDetectors[id] = id
+        self.publishQueue.put((id,detector.getMappedState()))
+
+
+    def setDetectorInactive(self,id):
+        detector = self.detectors[id]
+        del self.activeDetectors[id]
+        detector.powerOff()
+        detector.setInactive()
+        self.publishQueue.put((id,"inactive"))
+
+    def handleDetectorTimeout(self,id):
+        self.publishQueue.put((id,"Connection Problem"))
+
+    def handleDetectorReconnect(self,id,state):
+        self.publishQueue.put((id,state))
 
     def removeDetector(self,id):
         """remove Detector from Dictionary"""
@@ -388,20 +374,22 @@ class PCA:
     def checkCurrentState(self):
         """checks in a loop if the current state is still valid, does necessary transition in case it is not"""
         while True:
-            if len(self.detectors.items()) <= 0:
+            if self.activeDetectors.size() <= 0:
                 continue
             #don't check your state while it's beeing changed that might induce chaos
             self.sem.acquire()
             if self.stateMachine.currentState == "NotReady":
                 ready = True
-                for i,d in self.detectors.items():
+                for id in self.activeDetectors:
+                    d = self.detectors[id]
                     if d.getMappedState() != "Ready":
                         ready = False
                 if ready:
                     self.transition("configured")
 
             if self.stateMachine.currentState == "Ready":
-                for i,d in self.detectors.items():
+                for id in self.activeDetectors:
+                    d = self.detectors[id]
             		#The PCA is not allowed to move into the Running State on his own
             		#only ready -> not ready is possible
                     if d.getMappedState() != "Ready":
@@ -410,17 +398,19 @@ class PCA:
 
 
             if self.stateMachine.currentState == "Running":
-                for i,d in self.detectors.items():
+                for id in self.activeDetectors:
+                    d = self.detectors[id]
                 #Some Detector stopped Working
                     if d.getMappedState() != "Running":
                         self.error()
 
             if self.stateMachine.currentState == "RunningInError":
                 countDetectors = 0
-                for i,d in self.detectors.items():
+                for id in self.activeDetectors:
+                    d = self.detectors[id]
                     if d.getMappedState() == "Running":
                         countDetectors = countDetectors +1
-                if countDetectors == len(self.detectors):
+                if countDetectors == self.activeDetectors.size():
                     #All Detecotors are working again
                     self.transition("resolved")
                 if countDetectors == 0:
@@ -448,11 +438,12 @@ class PCA:
         """tells all Detectors to shutdown"""
         threadArray = []
         returnQueue = Queue()
-        if not (len(self.detectors)==self.activeConnectors.size()):
+        if not (len(self.detectors)==self.activeDetectors.size()):
             self.log("Warning: Some Detectors are disconnected")
         self.sem.acquire()
-        for i,d in self.detectors.items():
-            t = threading.Thread(name='doff'+str(i), target=self.threadFunctionCall, args=(d.id, d.powerOff, returnQueue))
+        for id in self.activeDetectors:
+            d = self.detectors[id]
+            t = threading.Thread(name='doff'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.powerOff, returnQueue))
             threadArray.append(t)
             t.start()
         for t in threadArray:
@@ -469,12 +460,10 @@ class PCA:
         """tells all Detectors to get ready to start"""
         threadArray = []
         returnQueue = Queue()
-        if not (len(self.detectors)==self.activeConnectors.size()):
-            self.log("Warning: Some Detectors are disconnected")
         self.sem.acquire()
-        for id in self.activeConnectors:
+        for id in self.activeDetectors:
             d = self.detectors[id]
-            t = threading.Thread(name='dready'+str(id), target=self.threadFunctionCall, args=(d.id, d.getReady, returnQueue))
+            t = threading.Thread(name='dready'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.getReady, returnQueue))
             threadArray.append(t)
             t.start()
 
@@ -489,17 +478,18 @@ class PCA:
         self.sem.release()
     def start(self):
         """tells all Detectors to start running"""
-        if not (len(self.detectors)==self.activeConnectors.size()):
+        if not (len(self.detectors)==self.activeDetectors.size()):
             self.log("Warning: Some Detectors are disconnected")
         self.sem.acquire()
-        if self.stateMachine.currentState != "Ready":
+        if self.stateMachine.currentState != "Ready" and self.stateMachine.currentState != "RunningInError":
             self.log("start not possible in current state")
             self.sem.release()
             return
         threadArray = []
         returnQueue = Queue()
-        for i,d in self.detectors.items():
-            t = threading.Thread(name='dstart'+str(i), target=self.threadFunctionCall, args=(d.id, d.start, returnQueue))
+        for id in self.activeDetectors:
+            d = self.detectors[id]
+            t = threading.Thread(name='dstart'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.start, returnQueue))
             threadArray.append(t)
             t.start()
 
@@ -518,11 +508,12 @@ class PCA:
         """tells all Detectors to stop running"""
         threadArray = []
         returnQueue = Queue()
-        if not (len(self.detectors)==self.activeConnectors.size()):
+        if not (len(self.detectors)==self.activeDetectors.size()):
             self.log("Warning: Some Detectors are disconnected")
         self.sem.acquire()
-        for i,d in self.detectors.items():
-            t = threading.Thread(name='dstop'+str(i), target=self.threadFunctionCall, args=(d.id, d.stop, returnQueue))
+        for id in self.activeDetectors:
+            d = self.detectors[id]
+            t = threading.Thread(name='dstop'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.stop, returnQueue))
             threadArray.append(t)
             t.start()
 
