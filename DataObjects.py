@@ -63,11 +63,13 @@ class detectorDataObject(DataObject):
             self.address = queryResult["address"]
             self.type = queryResult["type"]
             self.port = queryResult["port"]
+            self.pingPort = queryResult["pingPort"]
         else:
             self.id = queryResult[0]
             self.address = queryResult[1]
             self.type = queryResult[2]
             self.port = queryResult[3]
+            self.pingPort = queryResult[4]
 
 class partitionDataObject(DataObject):
     """class for storing a Partition database entry"""

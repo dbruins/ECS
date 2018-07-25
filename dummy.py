@@ -6,99 +6,174 @@ import struct
 from random import randint
 import ECSCodes
 import configparser
-config = configparser.ConfigParser()
-config.read("init.cfg")
+from Statemachine import Statemachine
+import json
+from DataObjects import partitionDataObject, detectorDataObject
+from ECS_tools import getConfsectionForType
 
-stateMap = {}
+class DetectorController:
 
-if (len(sys.argv) > 1):
-    address = sys.argv[1]
-else:
-    address = "5558"
+    def __init__(self,id):
+        context = zmq.Context()
+        self.MyId = id
+        print(self.MyId)
+        #get pca data from ECS
+        config = configparser.ConfigParser()
+        config.read("init.cfg")
+        conf = config["Default"]
 
-ports = config["ZMQPorts"]
-context = zmq.Context()
-socketReceiver = context.socket(zmq.REP)
-socketReceiver.bind(("tcp://*:" + address))
+        #get Detector Information
+        detectorData = None
+        while detectorData == None:
+            requestSocket = context.socket(zmq.REQ)
+            requestSocket.connect("tcp://%s:%s" % (conf['ECSAddress'],conf['ECSRequestPort']))
+            requestSocket.setsockopt(zmq.RCVTIMEO, int(conf['receive_timeout']))
+            requestSocket.setsockopt(zmq.LINGER,0)
 
-socketSubscription = context.socket(zmq.SUB)
-socketSubscription.connect("tcp://localhost:%s" % ports["statePublish"])
-#subscribe to everything
-socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
+            requestSocket.send_multipart([ECSCodes.getDetectorForId, self.MyId.encode()])
+            try:
+                detectorDataJSON = requestSocket.recv().decode()
+                detectorDataJSON = json.loads(detectorDataJSON)
+                detectorData = detectorDataObject(detectorDataJSON)
+            except zmq.Again:
+                print("timeout getting detector Data")
+                requestSocket.close()
+                continue
+            requestSocket.close()
 
-socketPushUpdate = context.socket(zmq.PUSH)
-socketPushUpdate.connect("tcp://localhost:%s" % ports["pullUpdates"])
+        self.port = detectorData.port
+        self.pingPort = detectorData.pingPort
 
-socketGetCurrentStateTable = context.socket(zmq.DEALER)
-socketGetCurrentStateTable.connect("tcp://localhost:%s" % ports["serveCurrentStatus"])
+        #get PCA Information
+        pcaData = None
+        while pcaData == None:
+            requestSocket = context.socket(zmq.REQ)
+            requestSocket.connect("tcp://%s:%s" % (conf['ECSAddress'],conf['ECSRequestPort']))
+            requestSocket.setsockopt(zmq.RCVTIMEO, int(conf['receive_timeout']))
+            requestSocket.setsockopt(zmq.LINGER,0)
+
+            requestSocket.send_multipart([ECSCodes.detectorAsksForPCA, self.MyId.encode()])
+            try:
+                pcaDataJSON = requestSocket.recv().decode()
+                pcaDataJSON = json.loads(pcaDataJSON)
+                pcaData = partitionDataObject(pcaDataJSON)
+            except zmq.Again:
+                print("timeout getting pca Data")
+                requestSocket.close()
+                continue
+            requestSocket.close()
+
+        self.stateMap = {}
+
+        confSection = getConfsectionForType(detectorData.type)
+        configDet = configparser.ConfigParser()
+        configDet.read("detector.cfg")
+        configDet = configDet[confSection]
+        print(configDet["stateFile"])
+        self.stateMachine = Statemachine(configDet["stateFile"],"Shutdown")
 
 
-def receive_status(socket):
-    try:
-        id, sequence, state = socket.recv_multipart()
-    except:
-        print ("receive error")
-        return
-    if id != b"":
-        id = id.decode()
-    else:
-        id = None
-    sequence = struct.unpack("!i",sequence)[0]
-    if state != b"":
-        state = state.decode()
-    else:
-        state = None
-    return [id,sequence,state]
+        self.pingSocket = context.socket(zmq.REP)
+        self.pingSocket.bind(("tcp://*:%s" % self.pingPort))
 
-def waitForUpdates():
-    #get current state
-    # Get state snapshot
-    sequence = 0
-    socketGetCurrentStateTable.send(ECSCodes.hello)
-    while True:
-        id, sequence, state = receive_status(socketGetCurrentStateTable)
-        print (id,sequence,state)
-        if id != None:
-            stateMap[id] = (sequence, state)
-        #id should be None in final message
+        self.socketReceiver = context.socket(zmq.PAIR)
+        self.socketReceiver.bind("tcp://*:%s" % self.port)
+
+        self.socketSubscription = context.socket(zmq.SUB)
+        self.socketSubscription.connect("tcp://%s:%s" % (pcaData.address,pcaData.portPublish))
+        #subscribe to everything
+        self.socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
+
+        self.socketPushUpdate = context.socket(zmq.PUSH)
+        self.socketPushUpdate.connect("tcp://%s:%s" % (pcaData.address,pcaData.portUpdates))
+
+        self.socketGetCurrentStateTable = context.socket(zmq.DEALER)
+        self.socketGetCurrentStateTable.connect("tcp://%s:%s" % (pcaData.address,pcaData.portCurrentState))
+
+        self.currentState = "Shutdown"
+
+        _thread.start_new_thread(self.waitForCommand,())
+        _thread.start_new_thread(self.waitForUpdates,())
+        _thread.start_new_thread(self.waitForPings,())
+
+    def receive_status(self,socket):
+        try:
+            id, sequence, state = socket.recv_multipart()
+        except:
+            print ("receive error")
+            return
+        if id != b"":
+            id = id.decode()
         else:
-            break
-
-    #watch subscription for further updates
-    while True:
-        m = socketSubscription.recv_multipart()
-        if len(m) != 3:
-            print (m)
-        else:
-            id = m[0]
-            sequence = m[1]
-            state = m[2].decode()
-        #id, sequence, state = socketSubscription.recv_multipart()
-        id = id.decode()
+            id = None
         sequence = struct.unpack("!i",sequence)[0]
-        print("received update",id, sequence, state)
-        stateMap[id] = (sequence, state)
+        if state != b"":
+            state = state.decode()
+        else:
+            state = None
+        return [id,sequence,state]
 
-def waitForCommand():
+    def waitForUpdates(self):
+        #get current state
+        # Get state snapshot
+        sequence = 0
+        self.socketGetCurrentStateTable.send(ECSCodes.hello)
+        while True:
+            id, sequence, state = self.receive_status(self.socketGetCurrentStateTable)
+            print (id,sequence,state)
+            if id != None:
+                self.stateMap[id] = (sequence, state)
+            #id should be None in final message
+            else:
+                break
+
+        #watch subscription for further updates
+        while True:
+            m = self.socketSubscription.recv_multipart()
+            if len(m) != 3:
+                print (m)
+            else:
+                id = m[0]
+                sequence = m[1]
+                state = m[2].decode()
+            id = id.decode()
+            #if id == self.MyId:
+            #    self.currentState=state
+            #    print(self.currentState)
+
+            sequence = struct.unpack("!i",sequence)[0]
+            print("received update",id, sequence, state)
+            self.stateMap[id] = (sequence, state)
+
+    def waitForCommand(self):
+        while True:
+            m = self.socketReceiver.recv()
+            if m == ECSCodes.pcaAsksForDetectorStatus:
+                self.socketReceiver.send(self.stateMachine.currentState.encode())
+                continue
+            self.socketReceiver.send(ECSCodes.ok)
+            if(m != ECSCodes.ping):
+                print (m)
+            if self.stateMachine.transition(m.decode()):
+                time.sleep(randint(2,6))
+                self.socketReceiver.send(self.stateMachine.currentState.encode())
+            else:
+                self.socketReceiver.send(ECSCodes.error)
+
+    def waitForPings(self):
+        while True:
+            self.pingSocket.recv()
+            self.pingSocket.send(ECSCodes.ok)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("please enter the detector id")
+        sys.exit(1)
+    test = DetectorController(sys.argv[1])
     while True:
-        m = socketReceiver.recv()
-        if(m != ECSCodes.ping):
-            print (m)
-            time.sleep(randint(2,6))
-        #m = input()
-        socketReceiver.send(ECSCodes.ok)
-
-
-_thread.start_new_thread(waitForCommand,())
-_thread.start_new_thread(waitForUpdates,())
-
-
-id = int(address) - 5557
-print (id)
-id = str(id)
-while True:
-    try:
-        x = input()
-    except EOFError:
-        continue
-    socketPushUpdate.send_string("%s %s" % (id, x))
+        try:
+            x = input()
+        except EOFError:
+            continue
+        test.socketPushUpdate.send_string("%s %s" % (test.MyId, x))

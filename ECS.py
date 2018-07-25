@@ -3,7 +3,7 @@ import threading
 import copy
 
 import sqlite3
-from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject
+from DataObjects import DataObjectCollection, DataObject, detectorDataObject, partitionDataObject
 class DataBaseWrapper:
     """Handler for the ECS Database"""
     connection = None
@@ -49,7 +49,7 @@ class DataBaseWrapper:
         """add a Detector to Database"""
         c = self.connection.cursor()
         try:
-            c.execute("INSERT INTO Detector VALUES (?,?,?,?)", dataObject.asArray())
+            c.execute("INSERT INTO Detector VALUES (?,?,?,?,?)", dataObject.asArray())
             self.connection.commit()
             return True
         except Exception as e:
@@ -78,6 +78,16 @@ class DataBaseWrapper:
         except Exception as e:
             print("error getting partition %s: %s" % (str(id),str(e)))
 
+    def getPartitionForDetector(self,id):
+        """gets the Partition of a Detector"""
+        c = self.connection.cursor()
+        val = (id,)
+        try:
+            res = c.execute("SELECT * FROM Partition WHERE Partition.id IN (SELECT PartitionId FROM (Mapping join Partition on Mapping.PartitionId = Partition.id) WHERE DetectorId = ?)", val).fetchone()
+            return partitionDataObject(res)
+        except Exception as e:
+            print("error getting partition for Detector %s: %s" % (str(id),str(e)))
+
     def getPartitionAddress(self,id):
         """get address of PCA with given address"""
         c = self.connection.cursor()
@@ -104,6 +114,7 @@ class DataBaseWrapper:
         c = self.connection.cursor()
         val = (pcaId,)
         try:
+            #todo this sql request returns also the Partition Id
             c.execute("SELECT * From Detector d join Mapping m on d.id = m.DetectorId Where PartitionId=?",val)
             res = c.fetchall()
             return DataObjectCollection(res, detectorDataObject)
@@ -288,6 +299,7 @@ class ECS:
         db = DataBaseWrapper()
         while True:
             m = self.replySocket.recv_multipart()
+            arg = None
             if len(m) == 2:
                 code, arg = m
                 arg = arg.decode()
@@ -297,27 +309,7 @@ class ECS:
                 print ("received malformed request message: %s", str(m))
                 continue
 
-            if code == ECSCodes.pcaAsksForConfig:
-                ret = db.getPartition(arg).asJsonString()
-                self.replySocket.send(ret.encode())
-
-            if code == ECSCodes.detectorAsksForId:
-                id = db.getDetectorIdForAddress(arg)
-                self.replySocket.send(id.encode())
-
-            if code == ECSCodes.pcaAsksForDetectorList:
-                ret = db.getDetectorsForPartition(arg).asJsonString()
-                self.replySocket.send(ret.encode())
-
-            if code == ECSCodes.getAllPCAs:
-                ret = db.getAllPartitions().asJsonString()
-                self.replySocket.send(ret.encode())
-
-            if code == ECSCodes.getUnmappedDetectors:
-                ret = db.getAllUnmappedDetetectos().asJsonString()
-                self.replySocket.send(ret.encode())
-
-            if code == ECSCodes.createPartition:
+            def createPCA(arg):
                 message = json.loads(arg)
                 partition = partitionDataObject(json.loads(message["partition"]))
                 detectors = message["detectors"]
@@ -329,41 +321,69 @@ class ECS:
                         if not ret:
                             error = True
                     if error:
-                        self.replySocket.send(ECSCodes.errorMapping)
-                    else:
-                        self.replySocket.send(ECSCodes.ok)
+                        return ECSCodes.errorMapping
                     #connect to pca
                     self.partitions[partition.id] = partition
                     self.socketSubscription.connect("tcp://%s:%i" % (partition.address,partition.portPublish))
                     if not self.getStateSnapshot(partition.id,partition.address,partition.portCurrentState):
                         self.handleDisconnection(partition.id)
+                    return ECSCodes.ok
                 else:
-                    self.replySocket.send(ECSCodes.errorCreatingPartition)
+                    return ECSCodes.errorCreatingPartition
 
-            if code == ECSCodes.createDetector:
+            def createDetector(arg):
                 obj = detectorDataObject(json.loads(arg))
                 ret = db.addDetector(obj)
                 if ret:
-                    self.replySocket.send(ECSCodes.ok)
+                    return ECSCodes.ok
                 else:
-                    self.replySocket.send(ECSCodes.error)
+                    return ECSCodes.error
 
-            if code == ECSCodes.mapDetectorsToPCA:
-                #detector id -> pca Id
+            def mapDetectorsToPCA(arg):
+                """map one or more Detectors to PCA"""
                 detectors = json.loads(arg)
-                error = False
                 for k,v in detectors.items():
                     ret = db.mapDetectorToPCA(k,v)
                     if not ret:
-                        self.replySocket.send(ECSCodes.error)
-                        error = True
-                        break
-                if not error:
-                    self.replySocket.send(ECSCodes.ok)
+                        return ECSCodes.error
+                return ECSCodes.ok
                 #todo add Detectors  to running system
 
-
-
+            def switcher(code,arg=None):
+                #functions for codes
+                dbFunctionDictionary = {
+                    ECSCodes.pcaAsksForConfig: db.getPartition,
+                    ECSCodes.detectorAsksForPCA: db.getPartitionForDetector,
+                    ECSCodes.getDetectorForId: db.getDetector,
+                    ECSCodes.pcaAsksForDetectorList: db.getDetectorsForPartition,
+                    ECSCodes.getPartitionForId: db.getPartition,
+                    ECSCodes.getAllPCAs: db.getAllPartitions,
+                    ECSCodes.getUnmappedDetectors: db.getAllUnmappedDetetectos,
+                    ECSCodes.createPartition: createPCA,
+                    ECSCodes.createDetector: createDetector,
+                    ECSCodes.mapDetectorsToPCA: mapDetectorsToPCA
+                }
+                #returns function for Code or None if the received code is unknown
+                f = dbFunctionDictionary.get(code,None)
+                if not f:
+                    self.replySocket.send(ECSCodes.unknownCommand)
+                    return
+                if arg:
+                    ret = f(arg)
+                else:
+                    ret = f()
+                #is result a Dataobject?
+                if isinstance(ret,DataObject) or isinstance(ret,DataObjectCollection):
+                    #encode Dataobject
+                    ret = ret.asJsonString().encode()
+                    self.replySocket.send(ret)
+                else:
+                    #it's just a returncode
+                    self.replySocket.send(ret)
+            if arg:
+                switcher(code,arg)
+            else:
+                switcher(code)
 
     def receive_status(self,socket,pcaid):
         try:

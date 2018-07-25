@@ -1,0 +1,30 @@
+<html>
+  <body>
+    {% if error%}
+      <a>error creating Partion</a>
+    {% endif %}
+    <form action="{% url 'GUI:edit_pca' %}" method="post">
+      {% csrf_token %}
+      <div><a>PCA ID</a><input id="id" name="id" type=text value = "{{pca.id}}{% if post %}{{post.id}}{% endif%}" ></div>
+      <div><a>Address</a><input id="address"  name="address" type=text value = "{{pca.address}}{% if post %}{{post.address}}{% endif%}" ></div>
+      <div><a>State Publish Port</a><input id="portPublish" name="portPublish" type="text" value = "{{pca.portPublish}}{% if post %}{{post.portPublish}}{% endif%}"></div>
+      <div><a>Log Publish Port</a><input id="portLog" name="portLog" type="text" value = "{{pca.portLog}}{% if post %}{{post.portLog}}{% endif%}"></div>
+      <div><a>Updates Port</a><input id="portUpdates" name="portUpdates" type="text" value = "{{pca.portUpdates}}{% if post %}{{post.portUpdates}}{% endif%}"></div>
+      <div><a>get Current State Port</a><input id="portCurrentState" name="portCurrentState" type="text" value = "{{pca.portCurrentState}}{% if post %}{{post.portCurrentState}}{% endif%}"></div>
+      <div><a>Single Request Port</a><input id="portSingleRequest" name="portSingleRequest" type="text" value = "{{pca.portSingleRequest}}{% if post %}{{post.portSingleRequest}}{% endif%}"></div>
+      <div><a>Command Port</a><input id="portCommand" name="portCommand" type="text" value = "{{pca.portCommand}}{% if post %}{{post.portCommand}}{% endif%}"></div>
+      {%if unmappedDetectors %}
+      <div id="unmappedDetectors">
+          <a>select Detectors for Partition</a>
+          <br>
+          {% for d in unmappedDetectors %}
+            <a>Detector {{d.id}} </a><input type="checkbox" name="unmappedDetectors" value="{{d.id}}"<br/>
+          {% endfor %}
+      </div>
+      {%endif%}
+      <br/>
+      <input type="submit" value="edit">
+    </form>
+
+  </body>
+</html>

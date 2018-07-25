@@ -108,3 +108,11 @@ def getStateSnapshot(stateMap,pcaid,address,port):
             #self.connectedPartitions[pcaid] = pcaid
             socketGetCurrentStateTable.close()
             return True
+
+#todo same as in Detector
+def getConfsectionForType(type):
+        confSection = {
+            "DetectorA" : "DETECTOR_A",
+            "DetectorB" : "DETECTOR_B",
+        }
+        return confSection[type]

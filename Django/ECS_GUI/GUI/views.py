@@ -66,6 +66,14 @@ class ECSHandler:
         else:
             return None
 
+    def getPartition(self,id):
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.getPartitionForId, id.encode()])
+        if ret == ECSCodes.timeout:
+            self.log("timeout getting Partition")
+            return False
+        partition = partitionDataObject(json.loads(ret.decode()))
+        return partition
+
     def createPartition(self,partitionObject,detectorsIds):
         message = {}
         message["partition"] = partitionObject.asJsonString()
@@ -364,7 +372,6 @@ def input_create_pca(request):
     unmappedDetectors = ecs.getUnmappedDetectors()
     return render(request, 'GUI/ECS_Create_Partition.html',{"unmappedDetectors" : unmappedDetectors})
 
-
 def create_pca(request):
     values = {
             "id" : request.POST["id"],
@@ -384,6 +391,14 @@ def create_pca(request):
     unmappedDetectors = ecs.getUnmappedDetectors()
     return render(request, 'GUI/ECS_Create_Partition.html', {"error" : True, "post":request.POST, "unmappedDetectors" : unmappedDetectors})
 
+def input_edit_pca(request):
+    id = request.POST["id"]
+    partition = ecs.getPartition(id)
+    unmappedDetectors = ecs.getUnmappedDetectors()
+    return render(request, 'GUI/ECS_Edit_Partition.html', {"pca":partition, "unmappedDetectors" : unmappedDetectors})
+def edit_pca(request):
+    pass
+
 def input_create_detector(request):
     return render(request, 'GUI/ECS_Create_Detector.html',{"pcaList" : ecs.pcaHandlers.items()})
 
@@ -393,6 +408,7 @@ def create_detector(request):
             "address": request.POST["address"],
             "type" : request.POST["type"],
             "port" : int(request.POST["port"]),
+            "pingPort" : int(request.POST["pingPort"]),
             }
     if request.POST["partition"] == "None":
         partition = None
@@ -403,7 +419,6 @@ def create_detector(request):
         if partition:
             ecs.mapDetectors(partition,[obj.id])
         return render(request, "GUI/ECS.html",{"pcaList" : ecs.pcaHandlers.items()})
-
     return render(request, 'GUI/ECS_Create_Detector.html', {"error" : True, "post":request.POST, "pcaList" : ecs.pcaHandlers.items()})
 
 def pca(request,pcaId):
