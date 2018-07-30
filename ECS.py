@@ -12,29 +12,28 @@ class DataBaseWrapper:
         self.connection = sqlite3.connect("ECS_database.db")
 
     def getAllDetectors(self):
-        """Get All Detectors in Detector Table"""
+        """Get All Detectors in Detector Table; returns empty DataObjectCollection if there are now Detectors"""
         c = self.connection.cursor()
-        c.execute("SELECT * FROM Detector")
-        res = c.fetchall()
-        return DataObjectCollection(res,detectorDataObject)
-
+        try:
+            c.execute("SELECT * FROM Detector")
+            res = c.fetchall()
+            return DataObjectCollection(res,detectorDataObject)
+        except Exception as e:
+            print("error getting detectors: %s" % str(e))
+            return ECSCodes.error
 
     def getDetector(self,id):
-        """get Detector with given id; returns None if it does not exist"""
-        c = self.connection.cursor()
-        val = (id,)
-        res = c.execute("SELECT * FROM Detector WHERE id = ?", val).fetchone()
-        return detectorDataObject(res)
-
-    def getDetectorAddress(self,id):
-        """get address of PCA with given address"""
+        """get Detector with given id; returns ErrorCode if it does not exist"""
         c = self.connection.cursor()
         val = (id,)
         try:
-            res = c.execute("SELECT address FROM Detector WHERE id = ?", val).fetchone()
-            return res[0]
+            res = c.execute("SELECT * FROM Detector WHERE id = ?", val).fetchone()
+            if not res:
+                return ECSCodes.idUnknown
+            return detectorDataObject(res)
         except Exception as e:
-            print("error getting detector address %s: %s" % (str(id),str(e)))
+            print ("error getting detector: %s %s" % (str(id),str(e)))
+            return ECSCodes.error
 
     def getAllUnmappedDetetectos(self):
         """gets all Detectors which are currently unmmaped"""
@@ -44,18 +43,21 @@ class DataBaseWrapper:
             return DataObjectCollection(res,detectorDataObject)
         except Exception as e:
             print("error getting unmapped detectors: %s" % str(e))
+            return ECSCodes.error
 
     def addDetector(self,dataObject):
-        """add a Detector to Database"""
+        """add a Detector to Database;accepts json String or DataObject"""
+        if not isinstance(dataObject,detectorDataObject):
+            dataObject = detectorDataObject(json.loads(dataObject))
         c = self.connection.cursor()
         try:
             c.execute("INSERT INTO Detector VALUES (?,?,?,?,?)", dataObject.asArray())
             self.connection.commit()
-            return True
+            return ECSCodes.ok
         except Exception as e:
             print("error inserting values into Detector Table: %s" % str(e))
             self.connection.rollback()
-            return False
+            return ECSCodes.error
 
 
     def removeDetector(self,id):
@@ -65,8 +67,10 @@ class DataBaseWrapper:
         try:
             c.execute("DELETE FROM Detector WHERE id = ?", val)
             self.connection.commit()
+            return ECSCodes.ok
         except Exception as e:
             print("error removing values from Detector Table: %s" % str(e))
+            return ECSCodes.error
 
     def getPartition(self,id):
         """Get Partition with given id from Database; returns None if it does not exist"""
@@ -74,52 +78,48 @@ class DataBaseWrapper:
         val = (id,)
         try:
             res = c.execute("SELECT * FROM Partition WHERE id = ?", val).fetchone()
+            if not res:
+                return ECSCodes.idUnknown
             return partitionDataObject(res)
         except Exception as e:
             print("error getting partition %s: %s" % (str(id),str(e)))
+            return ECSCodes.error
 
     def getPartitionForDetector(self,id):
-        """gets the Partition of a Detector"""
+        """gets the Partition of a Detector; returns DataObject or ErrorCode"""
         c = self.connection.cursor()
         val = (id,)
         try:
-            res = c.execute("SELECT * FROM Partition WHERE Partition.id IN (SELECT PartitionId FROM (Mapping join Partition on Mapping.PartitionId = Partition.id) WHERE DetectorId = ?)", val).fetchone()
+            res = c.execute("SELECT * FROM Partition WHERE Partition.id IN (SELECT PartitionId FROM (Mapping JOIN Partition ON Mapping.PartitionId = Partition.id) WHERE DetectorId = ?)", val).fetchone()
+            if not res:
+                return ECSCodes.idUnknown
             return partitionDataObject(res)
         except Exception as e:
             print("error getting partition for Detector %s: %s" % (str(id),str(e)))
-
-    def getPartitionAddress(self,id):
-        """get address of PCA with given address"""
-        c = self.connection.cursor()
-        val = (id,)
-        try:
-            res = c.execute("SELECT address FROM Partition WHERE id = ?", val).fetchone()
-            return res[0]
-        except Exception as e:
-            print("error getting partition address %s: %s" % (str(id),str(e)))
+            return ECSCodes.error
 
     def getAllPartitions(self):
         """Get All Detectors in Detector Table"""
         c = self.connection.cursor()
-
         try:
             c.execute("SELECT * FROM Partition")
             res = c.fetchall()
             return DataObjectCollection(res, partitionDataObject)
         except Exception as e:
             print("error getting all partitions: %s" % str(e))
+            return ECSCodes.error
 
     def getDetectorsForPartition(self,pcaId):
         """get all Mapped Detectors for a given PCA Id"""
         c = self.connection.cursor()
         val = (pcaId,)
         try:
-            #todo this sql request returns also the Partition Id
-            c.execute("SELECT * From Detector d join Mapping m on d.id = m.DetectorId Where PartitionId=?",val)
+            c.execute("SELECT * From Detector WHERE Detector.id in (SELECT d.id FROM Detector d JOIN Mapping m ON d.id = m.DetectorId WHERE PartitionId=?)",val)
             res = c.fetchall()
             return DataObjectCollection(res, detectorDataObject)
         except Exception as e:
             print("error getting all detectors for Partition %s: %s" % str(pcaId), str(e))
+            return ECSCodes.error
 
     def addPartition(self,dataObject):
         """create new Partition"""
@@ -128,11 +128,11 @@ class DataBaseWrapper:
         try:
             c.execute("INSERT INTO Partition VALUES (?,?,?,?,?,?,?,?)", data)
             self.connection.commit()
-            return True
+            return ECSCodes.ok
         except Exception as e:
             print("error inserting values into Partition Table: %s" % str(e))
             self.connection.rollback()
-            return False
+            return ECSCodes.error
 
     def removePartition(self,id):
         """delete a Partition with given id"""
@@ -143,8 +143,11 @@ class DataBaseWrapper:
             #Free the Detectors
             c.execute("DELETE FROM Mapping WHERE PartitionId = ?", val)
             self.connection.commit()
+            return ECSCodes.ok
         except Exception as e:
+            self.connection.rollback()
             print("error removing values from Detector Table: %s" % str(e))
+            return ECSCodes.error
 
     def mapDetectorToPCA(self,detId,pcaId):
         """map a Detector to a Partition"""
@@ -153,10 +156,11 @@ class DataBaseWrapper:
         try:
             c.execute("INSERT INTO Mapping VALUES (?,?)", vals)
             self.connection.commit()
-            return True
+            return ECSCodes.ok
         except Exception as e:
+            self.connection.rollback()
             print("error mapping %s to %s: %s" % (str(detId),str(pcaId),str(e)))
-            return False
+            return ECSCodes.error
 
     def unmapDetectorFromPCA(self,detId):
         """unmap a Detector from a Partition"""
@@ -165,8 +169,11 @@ class DataBaseWrapper:
         try:
             c.execute("DELETE FROM Mapping WHERE DetectorId = ?", val)
             self.connection.commit()
+            return ECSCodes.ok
         except Exception as e:
+            self.connection.rollback()
             print("error unmapping %s: %s " % (str(detId),str(e)))
+            return ECSCodes.error
 
 import zmq
 import logging
@@ -314,11 +321,11 @@ class ECS:
                 partition = partitionDataObject(json.loads(message["partition"]))
                 detectors = message["detectors"]
                 ret = db.addPartition(partition)
-                if ret:
+                if ret == ECSCodes.ok:
                     error = False
                     for detId in detectors:
                         ret = db.mapDetectorToPCA(detId,partition.id)
-                        if not ret:
+                        if ret == ECSCodes.error:
                             error = True
                     if error:
                         return ECSCodes.errorMapping
@@ -331,20 +338,12 @@ class ECS:
                 else:
                     return ECSCodes.errorCreatingPartition
 
-            def createDetector(arg):
-                obj = detectorDataObject(json.loads(arg))
-                ret = db.addDetector(obj)
-                if ret:
-                    return ECSCodes.ok
-                else:
-                    return ECSCodes.error
-
             def mapDetectorsToPCA(arg):
                 """map one or more Detectors to PCA"""
                 detectors = json.loads(arg)
                 for k,v in detectors.items():
                     ret = db.mapDetectorToPCA(k,v)
-                    if not ret:
+                    if ret == ECSCodes.error:
                         return ECSCodes.error
                 return ECSCodes.ok
                 #todo add Detectors  to running system
@@ -360,7 +359,7 @@ class ECS:
                     ECSCodes.getAllPCAs: db.getAllPartitions,
                     ECSCodes.getUnmappedDetectors: db.getAllUnmappedDetetectos,
                     ECSCodes.createPartition: createPCA,
-                    ECSCodes.createDetector: createDetector,
+                    ECSCodes.createDetector: db.addDetector,
                     ECSCodes.mapDetectorsToPCA: mapDetectorsToPCA
                 }
                 #returns function for Code or None if the received code is unknown
@@ -458,16 +457,4 @@ class ECS:
 
 if __name__ == "__main__":
     test = ECS()
-    """
-    test.database.addDetector("1", "localhost", "DetectorA",5558)
-    test.database.addDetector("5677", "localhost", "DetectorA", 5558)
-    test.database.addDetector("1", "localhost", "DetectorA", 55511)
-    test.database.addDetector("2", "localhost", "DetectorA",5559)
-    #test.database.addPartition("pca1", "localhost")
-    #test.database.addPartition("pca2", "localhost")
-    test.database.mapDetectorToPCA(1,"pca1")
-    test.database.mapDetectorToPCA(1,"pca2")
-    test.database.mapDetectorToPCA(2,"pca1")
-    test.database.addDetector("2", "localhost", "DetectorA",5559)
-    """
     input()

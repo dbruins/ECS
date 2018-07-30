@@ -38,12 +38,10 @@ class Detector:
 
 
         #init with the current state of the Detector
+        self.connected = False
         startState = self.getStateFromDetector()
-        if not startState:
-            self.connected = False
-        else:
+        if startState:
             self.connected = True
-        #self.currentState = startState
         self.stateMachine = Statemachine(conf["stateFile"],startState)
 
         self.mapper = {}
@@ -69,6 +67,11 @@ class Detector:
                     self.logfunction("Detector %s is connected" % self.id)
                     #todo need to check wether the transitions made during connection Problem were valid
                     self.stateMachine.currentState = self.getStateFromDetector()
+                    if not self.stateMachine.currentState:
+                        #sometimes when PCA and DC start both at once there is a timeout from getting state(maybe the socket isn't ready idk)
+                        pingSocket.close()
+                        continue
+                    #todo there could be a race condition Problem somewhere around here
                     self.connected = True
                     self.pcaReconnectFunction(self.id,self.getMappedState())
             except zmq.Again:
@@ -104,9 +107,11 @@ class Detector:
         if not self.stateMachine.checkIfPossible(command):
             self.logfunction("Transition %s is not possible for Detector %s in current state" % (command,self.id))
             return False
+
         self.socketSender.send(command.encode())
         #check if the command has arrived
         try:
+            #receive status code or new State
             returnMessage = self.socketSender.recv()
         except zmq.Again:
             self.logfunction("timeout from Detector "+str(self.id)+" for sending "+ command,True)
@@ -117,6 +122,7 @@ class Detector:
             if returnMessage != ECSCodes.error:
                 oldstate = self.stateMachine.currentState
                 self.stateMachine.currentState = returnMessage.decode()
+                self.publishQueue.put((self.id,self.getMappedState()))
                 self.logfunction("Detector "+str(self.id)+" transition: "+ oldstate +" -> " + self.stateMachine.currentState)
                 return True
             else:
@@ -145,8 +151,9 @@ class Detector:
 
     def getStateFromDetector(self):
         """get's the state from the dummy. Use if there has been a crash or a connection Problem"""
-        self.socketSender.send(ECSCodes.pcaAsksForDetectorStatus)
         state = False
+        #while state == False:
+        self.socketSender.send(ECSCodes.pcaAsksForDetectorStatus)
         try:
             state = self.socketSender.recv().decode()
         except zmq.Again:
@@ -168,6 +175,7 @@ class DetectorA(Detector):
 
     def getReady(self):
         if not (self.stateMachine.currentState == "Shutdown" or self.stateMachine.currentState == "Uncofigured"):
+            self.logfunction("nothing to be done for Detector %s" % self.id)
             return False
         if self.stateMachine.currentState == "Shutdown":
             self.powerOn()
@@ -177,11 +185,23 @@ class DetectorA(Detector):
     def powerOn(self):
         return self.transitionRequest("poweron")
     def start(self):
+        if self.stateMachine.currentState == "Running":
+            self.logfunction("nothing to be done for Detector %s" % self.id)
+            return False
         return self.transitionRequest("start")
+
     def stop(self):
+        if self.stateMachine.currentState != "Running":
+            self.logfunction("nothing to be done for Detector %s" % self.id)
+            return False
         return self.transitionRequest("stop")
+
     def powerOff(self):
+        if self.stateMachine.currentState == "Shutdown":
+            self.logfunction("nothing to be done for Detector %s" % self.id)
+            return False
         return self.transitionRequest("poweroff")
+
     def configure(self):
         return self.transitionRequest("configure")
     def reconfigure(self):

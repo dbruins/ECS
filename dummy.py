@@ -13,7 +13,7 @@ from ECS_tools import getConfsectionForType
 
 class DetectorController:
 
-    def __init__(self,id):
+    def __init__(self,id,startState="Shutdown"):
         context = zmq.Context()
         self.MyId = id
         print(self.MyId)
@@ -32,8 +32,11 @@ class DetectorController:
 
             requestSocket.send_multipart([ECSCodes.getDetectorForId, self.MyId.encode()])
             try:
-                detectorDataJSON = requestSocket.recv().decode()
-                detectorDataJSON = json.loads(detectorDataJSON)
+                detectorDataJSON = requestSocket.recv()
+                if detectorDataJSON == ECSCodes.idUnknown:
+                    print("The ECS doesn't know who I am :(")
+                    sys.exit(1)
+                detectorDataJSON = json.loads(detectorDataJSON.decode())
                 detectorData = detectorDataObject(detectorDataJSON)
             except zmq.Again:
                 print("timeout getting detector Data")
@@ -54,8 +57,11 @@ class DetectorController:
 
             requestSocket.send_multipart([ECSCodes.detectorAsksForPCA, self.MyId.encode()])
             try:
-                pcaDataJSON = requestSocket.recv().decode()
-                pcaDataJSON = json.loads(pcaDataJSON)
+                pcaDataJSON = requestSocket.recv()
+                if pcaDataJSON == ECSCodes.idUnknown:
+                    print("I have not assigned to any partition :(")
+                    sys.exit(1)
+                pcaDataJSON = json.loads(pcaDataJSON.decode())
                 pcaData = partitionDataObject(pcaDataJSON)
             except zmq.Again:
                 print("timeout getting pca Data")
@@ -69,9 +75,7 @@ class DetectorController:
         configDet = configparser.ConfigParser()
         configDet.read("detector.cfg")
         configDet = configDet[confSection]
-        print(configDet["stateFile"])
-        self.stateMachine = Statemachine(configDet["stateFile"],"Shutdown")
-
+        self.stateMachine = Statemachine(configDet["stateFile"],startState)
 
         self.pingSocket = context.socket(zmq.REP)
         self.pingSocket.bind(("tcp://*:%s" % self.pingPort))
@@ -86,11 +90,11 @@ class DetectorController:
 
         self.socketPushUpdate = context.socket(zmq.PUSH)
         self.socketPushUpdate.connect("tcp://%s:%s" % (pcaData.address,pcaData.portUpdates))
+        self.socketPushUpdate.send_string("%s %s" % (self.MyId, startState))
+
 
         self.socketGetCurrentStateTable = context.socket(zmq.DEALER)
         self.socketGetCurrentStateTable.connect("tcp://%s:%s" % (pcaData.address,pcaData.portCurrentState))
-
-        self.currentState = "Shutdown"
 
         _thread.start_new_thread(self.waitForCommand,())
         _thread.start_new_thread(self.waitForUpdates,())
@@ -137,9 +141,6 @@ class DetectorController:
                 sequence = m[1]
                 state = m[2].decode()
             id = id.decode()
-            #if id == self.MyId:
-            #    self.currentState=state
-            #    print(self.currentState)
 
             sequence = struct.unpack("!i",sequence)[0]
             print("received update",id, sequence, state)
@@ -170,8 +171,13 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("please enter the detector id")
         sys.exit(1)
-    test = DetectorController(sys.argv[1])
+    if len(sys.argv) == 3:
+        test = DetectorController(sys.argv[1],sys.argv[2])
+    else:
+        test = DetectorController(sys.argv[1])
     while True:
+        if len(sys.argv) > 2:
+            continue
         try:
             x = input()
         except EOFError:

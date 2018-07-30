@@ -418,7 +418,9 @@ def create_detector(request):
     if ecs.createDetector(obj):
         if partition:
             ecs.mapDetectors(partition,[obj.id])
-        return render(request, "GUI/ECS.html",{"pcaList" : ecs.pcaHandlers.items()})
+        return HttpResponseRedirect('/GUI/',{"pcaList" : ecs.pcaHandlers.items()})
+        #return HttpResponseRedirect(reverse(index))
+        #return render(request, "GUI/ECS.html",{"pcaList" : ecs.pcaHandlers.items()})
     return render(request, 'GUI/ECS_Create_Detector.html', {"error" : True, "post":request.POST, "pcaList" : ecs.pcaHandlers.items()})
 
 def pca(request,pcaId):

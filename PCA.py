@@ -279,7 +279,7 @@ class PCA:
             print (message)
 
             if len(message.split()) != 2:
-                self.log("received empty or too long message",True)
+                self.log("received empty or too long message: %s" % message,True)
                 continue
 
             id,command = message.split()
@@ -293,24 +293,14 @@ class PCA:
 
             #todo doesn't work anymore
             det = self.detectors[id]
-            oldstate = det.currentState
-            det.stateMachine.transition(command)
-            self.log("Detector "+det.id+" made transition on it's own "+ oldstate +" -> " + det.stateMachine.currentState )
+            if (det.stateMachine.currentState == command):
+                continue
+            oldstate = det.stateMachine.currentState
+            print(command)
+            det.stateMachine.currentState = command
+            #det.stateMachine.transition(command)
+            self.log("Detector "+det.id+" had an unexpected Statechange "+ str(oldstate) +" -> " + det.stateMachine.currentState )
             self.publishQueue.put((det.id,det.getMappedState()))
-            """
-            self.sem.acquire()
-            nextMappedState = det.getMappedStateForCommand(command)
-            #Detector may not start Running on it's own
-            if nextMappedState and nextMappedState != "Running":
-                oldstate = det.stateMachine.currentState
-                det.stateMachine.transition(command)
-                self.log("Detector "+det.id+" made transition on it's own "+ oldstate +" -> " + det.stateMachine.currentState )
-                self.publishQueue.put((det.id,det.getMappedState()))
-            else:
-                self.log("Detector"+ det.id +" made an impossible Transition: " + str(command),True)
-                #todo Ok what now?
-            self.sem.release()
-            """
 
     def waitForRequests(self):
         """waits for messages from detectors"""
@@ -400,6 +390,7 @@ class PCA:
         detector.setActive()
         self.activeDetectors[id] = id
         self.publishQueue.put((id,detector.getMappedState()))
+        self.transitionDetectorIntoGlobalState(id)
 
 
     def setDetectorInactive(self,id):
@@ -414,6 +405,33 @@ class PCA:
 
     def handleDetectorReconnect(self,id,state):
         self.publishQueue.put((id,state))
+        #if detector is active try to transition him into globalState
+        if id in self.activeDetectors:
+            self.transitionDetectorIntoGlobalState(id)
+
+    def transitionDetectorIntoGlobalState(self,id):
+        """try to transition Detector to global State of the PCA"""
+        det = self.detectors[id]
+        if self.stateMachine.currentState == "NotReady":
+            if det.getMappedState() == "Running":
+                det.stop()
+                return
+        if self.stateMachine.currentState == "Ready":
+            if det.getMappedState() == "NotReady":
+                det.getReady()
+                return
+            if det.getMappedState() == "Running":
+                det.stop()
+                return
+        if self.stateMachine.currentState == "Running" or self.stateMachine.currentState == "RunningInError":
+            if det.getMappedState() == "NotReady":
+                det.getReady()
+                det.start()
+                return
+            if det.getMappedState() == "Ready":
+                det.start()
+                return
+
 
     def checkCurrentState(self):
         """checks in a loop if the current state is still valid, does necessary transition in case it is not"""
@@ -493,11 +511,9 @@ class PCA:
         for t in threadArray:
             ret = returnQueue.get()
             d = self.detectors[ret[0]]
-            if ret[1] == True:
-                self.publishQueue.put((d.id,d.getMappedState()))
-            else:
+            if ret[1] != True:
                 #todo something needs to happen here
-                self.log("error shuting down Detector "+str(d.id),True)
+                1+1
         self.sem.release()
 
     def makeReady(self):
@@ -514,12 +530,11 @@ class PCA:
         for t in threadArray:
             ret = returnQueue.get()
             d = self.detectors[ret[0]]
-            if ret[1] == True:
-                self.publishQueue.put((d.id,d.getMappedState()))
-            else:
+            if ret[1] != True:
                 #todo something needs to happen here
-                self.log("error getting ready from Detector "+str(d.id),True)
+                1+1
         self.sem.release()
+
     def start(self):
         """tells all Detectors to start running"""
         if not (len(self.detectors)==self.activeDetectors.size()):
@@ -540,11 +555,9 @@ class PCA:
         for t in threadArray:
             ret = returnQueue.get()
             d = self.detectors[ret[0]]
-            if ret[1] == True:
-                self.publishQueue.put((d.id,d.getMappedState()))
-            else:
+            if ret[1] != True:
                 #todo something needs to happen here
-                self.log("error while starting from Detector "+str(d.id),True)
+                1+1
         self.transition("start")
         self.sem.release()
 
@@ -564,11 +577,9 @@ class PCA:
         for t in threadArray:
             ret = returnQueue.get()
             d = self.detectors[ret[0]]
-            if ret[1] == True:
-                self.publishQueue.put((d.id,d.getMappedState()))
-            else:
+            if ret[1] != True:
                 #todo something needs to happen here
-                self.log("error while stopping from Detector "+str(d.id),True)
+                1+1
         self.transition("stop")
         self.sem.release()
 

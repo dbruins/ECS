@@ -44,6 +44,7 @@ class MapWrapper:
         self.semaphore.acquire()
         ret = key in self.map
         self.semaphore.release()
+        return ret
 
     def size(self):
         self.semaphore.acquire()
