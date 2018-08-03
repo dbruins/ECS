@@ -1,0 +1,97 @@
+<html>
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+  <script>
+    var oldFrom = ""
+    var oldTo = ""
+
+    function changeDetectorList(pcaId){
+      //set the DetectorList for the currently selected Parttion
+      $("#detectors").empty()
+      $.ajax({
+          type: "POST",
+          url: "{% url 'GUI:getDetectorListForPCA'%}",
+          data:{csrfmiddlewaretoken: '{{ csrf_token }}','pcaId' : pcaId},
+          "success": function(result) {
+              console.log(result);
+              idArr = Object.keys(result);
+              detDiv = document.getElementById("detectors");
+              for (i in idArr){
+                 str = "<a>Detector "+idArr[i]+" </a><input type='checkbox' name='selectedDetectors' value='"+idArr[i]+"'><br/>";
+                 detDiv.innerHTML += str;
+              }
+          },
+      });
+    }
+
+    function check(dropdown){
+      $("#message").html("")
+      //Switch selected Values in Dropdowns if they are identical
+      {% with partitions|length as l %}
+          {% if l > 1 %}
+          id = dropdown.id
+          if (id == "toPartition"){
+            otherId="fromPartition"
+            old = oldTo
+            oldTo = $("#"+id).val()
+            changeDetectors = true
+          }
+          else{
+            otherId="toPartition"
+            old = oldFrom
+            oldFrom = $("#"+id).val()
+            changeDetectors = false
+          }
+          if (dropdown.value == $("#"+otherId).val()){
+              //switch places
+              $("#"+otherId).val(old)
+              if(changeDetectors)
+                  changeDetectorList($("#"+otherId).val())
+          }
+          {%else%}
+            $("#message").html("there is only one Partition");
+          {% endif %}
+      {% endwith %}
+      return true
+    }
+    $(document).ready(function() {
+      //set to to-Dropdown to second entry
+      $("#toPartition").val($("#toPartition option")[1].value)
+      oldFrom = $("#fromPartition").val()
+      oldTo = $("#toPartition").val()
+      check(document.getElementById("toPartition"))
+      changeDetectorList($("#fromPartition").val())
+    });
+  </script>
+  <body>
+    <a id="message"></a>
+    {%if error%}
+    <a>error moving Detectors</a>
+    {%endif%}
+    <form action="{% url 'GUI:move_detectors' %}" method="post">
+      {% csrf_token %}
+      <div>
+        <label>From Partition</label>
+        <select id="fromPartition" name="fromPartition" onchange="check(this);changeDetectorList(this.value)">
+          {% for p in partitions %}
+            <option value="{{p.1.id}}">{{p.1.id}}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <br/>
+      <div id ="detectors">
+      </div>
+      <br/>
+      <div>
+        <label>To Partition</label>
+        <select id="toPartition" name="toPartition" onchange="check(this)">
+          {% for p in partitions %}
+            <option value="{{p.1.id}}">{{p.1.id}}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <br/>
+      <input type="submit" value="move">
+    </form>
+
+  </body>
+</html>

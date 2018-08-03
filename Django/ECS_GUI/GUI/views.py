@@ -1,5 +1,5 @@
 from django.shortcuts import get_object_or_404,render,redirect
-from django.http import HttpResponse, HttpResponseRedirect
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from GUI.models import Question, Choice
 from django.template import loader
 from django.urls import reverse
@@ -20,6 +20,7 @@ import sys
 projectPath = settings.PCACODESPATH
 sys.path.append(projectPath)
 import ECSCodes
+import ECS_tools
 from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject
 
 class ECSHandler:
@@ -131,6 +132,32 @@ class ECSHandler:
             self.log("error mapping Detectors")
         return False
 
+    def getDetectorListForPartition(self,pcaid):
+        """get Detector List from Database for a pcaId"""
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.pcaAsksForDetectorList, pcaid.encode()])
+        if ret == ECSCodes.error:
+            self.log("error getting Detectors for pca %s" % pcaid)
+            return ECSCodes.error
+        if ret == ECSCodes.timeout:
+            self.log("timeout getting Detectors for pca %s" % pcaid)
+            return ECSCodes.error
+        detList = DataObjectCollection(json.loads(ret),detectorDataObject)
+        return detList
+
+    def moveDetector(self,detectorId,toPCAId):
+        """maps Detector to Partition (ECS knows where the Detector currently is)"""
+        arg={}
+        arg["detectorId"] = detectorId
+        arg["partitionId"] = toPCAId
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.detectorChangePartition, json.dumps(arg).encode()])
+        if ret == ECSCodes.error:
+            self.log("error moving Detector to pca %s" % toPCAId)
+            return False
+        if ret == ECSCodes.timeout:
+            self.log("timeout moving Detector to pca %s" % toPCAId)
+            return False
+        return True
+
     def log(self,message):
         """spread log message through websocket(channel)"""
         channel_layer = get_channel_layer()
@@ -146,38 +173,39 @@ class ECSHandler:
 class PCAHandler:
     def __init__(self,partitionInfo):
         self.id = partitionInfo.id
+        self.address = partitionInfo.address
+        self.portLog = partitionInfo.portLog
+        self.portCommand = partitionInfo.portCommand
+        self.portPublish = partitionInfo.portPublish
+        self.portCurrentState = partitionInfo.portCurrentState
+
         self.context = zmq.Context()
         self.commandSocketQueue = Queue()
-        self.stateMap = {}
+        self.stateMap = ECS_tools.MapWrapper()
 
         self.PCAConnection = False
         self.receive_timeout = settings.TIMEOUT
         self.pingTimeout = settings.PINGTIMEOUT
         self.pingIntervall = settings.PINGINTERVALL
 
-        config = configparser.ConfigParser()
-        config.read(settings.PCACONFIGPATH)
-        ports = config["ZMQPorts"]
         self.socketGetCurrentStateTable = None
         self.commandSocket = None
-        self.getCurrentStateTableAddress = "tcp://localhost:%s" % partitionInfo.portCurrentState
-        self.createGetCurrentStateTableSocket()
-        self.commandSocketAddress = "tcp://localhost:%s" % partitionInfo.portCommand
+        self.commandSocketAddress = "tcp://%s:%s" % (self.address,self.portCommand)
         self.createCommandSocket()
 
         #state Change subscription
         self.socketSubscription = self.context.socket(zmq.SUB)
-        self.socketSubscription.connect("tcp://localhost:%s" % partitionInfo.portPublish)
+        self.socketSubscription.connect("tcp://%s:%s" % (self.address, self.portPublish))
         #subscribe to everything
         self.socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
 
         #logsubscription
         self.socketSubLog = self.context.socket(zmq.SUB)
-        self.socketSubLog.connect("tcp://localhost:%s" % partitionInfo.portLog)
+        self.socketSubLog.connect("tcp://%s:%s" % (self.address,self.portLog))
         self.socketSubLog.setsockopt(zmq.SUBSCRIBE, b'')
 
         t = threading.Thread(name="updater", target=self.waitForUpdates)
-        self.getStateSnapshot()
+        ECS_tools.getStateSnapshot(self.stateMap,partitionInfo.address,partitionInfo.portCurrentState,timeout=self.receive_timeout,pcaid=self.id)
         t.start()
         t = threading.Thread(name="logUpdater", target=self.waitForLogUpdates)
         t.start()
@@ -214,26 +242,6 @@ class PCAHandler:
                 self.putCommand(ECSCodes.ping)
                 nextPing = time.time() + self.pingIntervall
 
-
-    def createCommandSocket(self):
-        """init or reset the command Socket"""
-        if(self.commandSocket):
-            #reset
-            self.commandSocket.close()
-        self.commandSocket = self.context.socket(zmq.REQ)
-        self.commandSocket.connect(self.commandSocketAddress)
-        self.commandSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-        self.commandSocket.setsockopt(zmq.LINGER,0)
-
-    def createGetCurrentStateTableSocket(self):
-        if self.socketGetCurrentStateTable:
-            #reset
-            self.socketGetCurrentStateTable.close()
-        self.socketGetCurrentStateTable = self.context.socket(zmq.DEALER)
-        self.socketGetCurrentStateTable.connect(self.getCurrentStateTableAddress)
-        self.socketGetCurrentStateTable.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-        self.socketGetCurrentStateTable.setsockopt(zmq.LINGER,0)
-
     def sendCommand(self,command):
         """send command to pca return True on Success"""
         self.commandSocket.send_multipart(command)
@@ -247,12 +255,22 @@ class PCAHandler:
             return False
         return True
 
+    def createCommandSocket(self):
+        """init or reset the command Socket"""
+        if(self.commandSocket):
+            #reset
+            self.commandSocket.close()
+        self.commandSocket = self.context.socket(zmq.REQ)
+        self.commandSocket.connect(self.commandSocketAddress)
+        self.commandSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+        self.commandSocket.setsockopt(zmq.LINGER,0)
+
     def handleDisconnection(self):
         self.log("PCA %s Connection Lost" % self.id)
         #reset commandSocket
         self.createCommandSocket()
         self.PCAConnection = False
-        self.getStateSnapshot()
+        ECS_tools.getStateSnapshot(self.stateMap,self.address,self.portCurrentState,timeout=self.receive_timeout,pcaid=self.id)
 
     def setActive(self,detectorId):
         socket = self.context.socket(zmq.REQ)
@@ -283,45 +301,28 @@ class PCAHandler:
             state = None
         return [id,sequence,state]
 
-    def getStateSnapshot(self):
-        """get current stateMap from pca returns True on success"""
-        sequence = 0
-        self.socketGetCurrentStateTable.send(ECSCodes.hello)
-        while True:
-            ret = self.receive_status(self.socketGetCurrentStateTable)
-            if ret == None:
-                print ("error while getting snapshot (PCA:%s)" % self.id)
-                #reset Socket to clear the buffer, PCA only needs one hello
-                self.createGetCurrentStateTableSocket()
-                return False
-            id, sequence, state = ret
-            print (id,sequence,state)
-            if id != None:
-                self.stateMap[id] = (sequence, state)
-            #id should be None in final message
-            else:
-                self.PCAConnection = True
-                self.log("PCA Connection %s online" % self.id)
-                return True
-
     def waitForUpdates(self):
         while True:
-            try:
-                m = self.socketSubscription.recv_multipart()
-            except:
-                #the timeout only exits so that the recv doesn't deadlock
-                continue
-            #todo ?????
+            m = self.socketSubscription.recv_multipart()
             if len(m) != 3:
                 print (m)
             else:
                 id,sequence,state = m
-            #id, sequence, state = socketSubscription.recv_multipart()
+
+
             id = id.decode()
             sequence = struct.unpack("!i",sequence)[0]
-            state = state.decode()
-            print("received update",id, sequence, state)
-            self.stateMap[id] = (sequence, state)
+
+            if state == ECSCodes.reset:
+                self.stateMap.reset()
+                state = "reset"
+            elif state == ECSCodes.removed:
+                del self.stateMap[id]
+                state = "remove"
+            else:
+                state = state.decode()
+                print("received update",id, sequence, state)
+                self.stateMap[id] = (sequence, state)
 
             #send update to WebUI(s)
             jsonWebUpdate = {"id" : id,
@@ -363,10 +364,11 @@ class PCAHandler:
 ecs = ECSHandler()
 #views
 def index(request):
-    return render(request, "GUI/ECS.html",{"pcaList" : ecs.pcaHandlers.items()})
-
-def update(request):
-    return render(request, 'GUI/states.html', {'stateMap': pca.stateMap})
+    #create Data Map for template
+    ecsMap = {}
+    for pca in ecs.pcaHandlers.items():
+        ecsMap[pca[0]] = pca[1].stateMap.map
+    return render(request, "GUI/ECS.html",{"ecsMap" : ecsMap, })
 
 def input_create_pca(request):
     unmappedDetectors = ecs.getUnmappedDetectors()
@@ -386,8 +388,7 @@ def create_pca(request):
     selectedDetectors = request.POST.getlist("unmappedDetectors")
     obj = partitionDataObject(values)
     if ecs.createPartition(obj,selectedDetectors):
-        #redirect(index)
-        return render(request, "GUI/ECS.html",{"pcaList" : ecs.pcaHandlers.items()})
+        return HttpResponseRedirect('/GUI/',{"pcaList" : ecs.pcaHandlers.items()})
     unmappedDetectors = ecs.getUnmappedDetectors()
     return render(request, 'GUI/ECS_Create_Partition.html', {"error" : True, "post":request.POST, "unmappedDetectors" : unmappedDetectors})
 
@@ -396,6 +397,7 @@ def input_edit_pca(request):
     partition = ecs.getPartition(id)
     unmappedDetectors = ecs.getUnmappedDetectors()
     return render(request, 'GUI/ECS_Edit_Partition.html', {"pca":partition, "unmappedDetectors" : unmappedDetectors})
+    
 def edit_pca(request):
     pass
 
@@ -426,7 +428,7 @@ def create_detector(request):
 def pca(request,pcaId):
     pca = ecs.getPCAHandler(pcaId)
     print (pca.stateMap)
-    return render(request, "GUI/monitor.html",{'stateMap': pca.stateMap, "pcaId" : pcaId})
+    return render(request, "GUI/monitor.html",{'stateMap': pca.stateMap.map, "pcaId" : pcaId})
 
 def setActive(request,pcaId):
     detectorId = request.POST["detectorId"]
@@ -463,3 +465,26 @@ def stop(request,pcaId):
     pca = ecs.getPCAHandler(pcaId)
     pca.putCommand(ECSCodes.stop)
     return HttpResponse(status=200)
+
+def input_MoveDetectors(request):
+    return render(request, 'GUI/ECS_moveDetectors.html',{"partitions" : ecs.pcaHandlers.items()})
+
+def moveDetectors(request):
+    toPcaId = request.POST['toPartition']
+    detectors = request.POST.getlist("selectedDetectors")
+    for dId in detectors:
+        print(dId,toPcaId)
+        if not ecs.moveDetector(dId,toPcaId):
+            return render(request, 'GUI/ECS_moveDetectors.html',{"partitions" : ecs.pcaHandlers.items(), "error":True})
+    return HttpResponseRedirect('/GUI/',{"pcaList" : ecs.pcaHandlers.items()})
+
+def getDetectorListForPCA(request):
+    """Ask ECS for DetectorList from Database"""
+    pcaId = request.POST['pcaId']
+    print(pcaId)
+    detList = ecs.getDetectorListForPartition(pcaId)
+    if detList == ECSCodes.error:
+        return HttpResponse(status=404)
+    else:
+        print(detList.asDictionary())
+        return JsonResponse(detList.asDictionary())

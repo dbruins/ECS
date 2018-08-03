@@ -1,4 +1,4 @@
-
+#!/bin/bash
 #start dummys
 for i in `seq 1 $1`
 do
@@ -24,7 +24,7 @@ fi
 STR="press key to terminate\n"
 read -p "press key to terminate\n"
 
-for i in `seq 1 $1`
+for k in `seq 1 $i`
 do
-    kill ${arr[$i]}
+    kill ${arr[$k]}
 done

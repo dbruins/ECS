@@ -1,5 +1,8 @@
 import threading
 import copy
+import zmq
+import ECSCodes
+import struct
 class MapWrapper:
     """thread safe handling of Map"""
     def __init__(self):
@@ -31,6 +34,12 @@ class MapWrapper:
         self.map[key] = value
         self.semaphore.release()
 
+    def __str__(self):
+        self.semaphore.acquire()
+        ret = self.map.__str__()
+        self.semaphore.release()
+        return ret
+
     def copy(self):
         """returns a deepcopy off all items for iteration"""
         #create copy of statusMap so loop dosn't crash if there are changes on statusMap during the loop
@@ -52,6 +61,31 @@ class MapWrapper:
         self.semaphore.release()
         return ret
 
+    def delMany(self,items):
+        """deletes a given list of ids"""
+        self.semaphore.acquire()
+        for i in items:
+            if i in self.map:
+                del self.map[i]
+        self.semaphore.release()
+
+
+    def reset(self):
+        self.semaphore.acquire()
+        self.map = {}
+        self.semaphore.release()
+
+def resetSocket(self,socket,address,port,type):
+    """resets a socket with address and zmq Type; if socket is None a new socket will be created"""
+    if socket != None:
+        socket.close()
+    socket = self.zmqContext.socket(type)
+    socket.connect("tcp://%s:%s" % (address,port))
+    if type == zmq.REQ:
+        socket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+    socket.setsockopt(zmq.LINGER,0)
+    return socket
+
 def send_status(socket,id,sequence,state):
     """method for sending a status update on a specified socket"""
     #if None send empty byte String
@@ -67,19 +101,22 @@ def send_status(socket,id,sequence,state):
         state_b = state.encode()
     socket.send_multipart([id_b,sequence_s,state_b])
 
-def receive_status(socket,pcaid):
+def receive_status(socket,pcaid=None):
+    """receive status from PCA retuns None on error"""
+    if pcaid:
+        errorString = " receiving status for %s" % pcaid
+    else:
+        errorString = " receiving status"
     try:
         id, sequence, state = socket.recv_multipart()
     except zmq.Again:
-        print ("timeout receiving status for %s" % pcaid)
+        print ("timeout"+errorString)
         return None
     except Exception as e:
-        print ("error receiving status for %s: %s" % (pcaid,str(e)))
+        print ("error"+errorString)
         return None
-    if id != b"":
+    if id != ECSCodes.done:
         id = id.decode()
-    else:
-        id = None
     sequence = struct.unpack("!i",sequence)[0]
     if state != b"":
         state = state.decode()
@@ -87,26 +124,31 @@ def receive_status(socket,pcaid):
         state = None
     return [id,sequence,state]
 
-def getStateSnapshot(stateMap,pcaid,address,port):
+def getStateSnapshot(stateMap,address,port,timeout=2000,pcaid=None):
     """get snapshot of State Table from a PCA this needs to happen to regard a PCA as connected"""
-    socketGetCurrentStateTable = None
-    socketGetCurrentStateTable = self.resetSocket(socketGetCurrentStateTable,address,port,zmq.DEALER)
-    socketGetCurrentStateTable.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+    context = zmq.Context()
+    socketGetCurrentStateTable = context.socket(zmq.DEALER)
+    socketGetCurrentStateTable.setsockopt(zmq.RCVTIMEO, timeout)
+    socketGetCurrentStateTable.setsockopt(zmq.LINGER,0)
+    socketGetCurrentStateTable.connect("tcp://%s:%s" % (address,port))
     socketGetCurrentStateTable.send(ECSCodes.hello)
     while True:
-        ret = self.receive_status(socketGetCurrentStateTable,pcaid)
+        ret = receive_status(socketGetCurrentStateTable,pcaid)
+        #receive_status returns None if something went wrong
         if(ret == None):
             socketGetCurrentStateTable.close()
             return False
-
         id, sequence, state = ret
-        print (id,sequence,state)
-        if id != None:
-            self.stateMap[id] = (sequence, state)
-        #id should be None in final message
+        if id != ECSCodes.done:
+            print (id,sequence,state)
+            if id in stateMap:
+                if stateMap[id][0] < sequence:
+                    stateMap[id] = (sequence, state)
+            else:
+                stateMap[id] = (sequence, state)
+        #id should be ECSCodes.done in final message
         else:
-            #todo this is kind of stupid
-            #self.connectedPartitions[pcaid] = pcaid
+            print ("done")
             socketGetCurrentStateTable.close()
             return True
 

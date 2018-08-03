@@ -16,12 +16,30 @@ updateSocket.onmessage = function(e) {
       var update = JSON.parse(message);
       var id = update['id'];
       var newState = update['state'];
-      buttonHtml = "";
-      if (newState == "inactive")
-        buttonHtml = '<button id="activeToggle" onclick="setactive('+ update['id'] +')" > activate  </button>';
-      else
-        buttonHtml = '<button id="activeToggle" onclick="setinactive('+ update['id'] +')" > deactivate  </button>';
-      $('#dState'+id).html(newState+buttonHtml);
+      if(newState == "reset"){
+          //clear Table
+          $(".tableRow").remove()
+      }
+      else if (type == "remove"){
+          //delete Row
+          $('#dRow'+id).remove()
+      }
+      else{
+        buttonHtml = "";
+        if (newState == "inactive")
+          buttonHtml = '<button id="activeToggle" onclick="setactive('+ update['id'] +')" > activate  </button>';
+        else
+          buttonHtml = '<button id="activeToggle" onclick="setinactive('+ update['id'] +')" > deactivate  </button>';
+        stateObject = $('#dState'+id)
+        //check if state already exists
+        if(stateObject.length){
+            stateObject.html(newState+buttonHtml);
+        }
+        else{
+            newRow = '<tr class="tableRow"> <td>'+id+'</td><td id="dState'+id+'">'+newState+buttonHtml+'</td></tr>'
+            $("#stateTable").append(newRow)
+        }
+      }
     }
     else if (type == "log"){
       $('#log').append(message+"\n");
@@ -98,14 +116,14 @@ $(document).ready(function() {
 
 <h1>PCA{{pcaID}} Overview</h1>
 
-<div id="stateTable">
-  <table>
+<div>
+  <table id="stateTable">
     <tr>
       <th>Detector</th>
       <th>Status</th>
     </tr>
     {% for state in stateMap.items %}
-    <tr>
+    <tr id="dRow{{state.0}}" class="tableRow">
         <td>
           {% if state.0 == 0%}
             Global State

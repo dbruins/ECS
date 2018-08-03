@@ -19,9 +19,6 @@ import Detector
 from ECS_tools import MapWrapper
 
 class PCA:
-    id = None
-    detectors = None
-    stateMachine = None
     sequence = 0
 
     #---zmq sockets---
@@ -98,19 +95,13 @@ class PCA:
         self.socketServeCurrentStatus = context.socket(zmq.ROUTER)
         self.socketServeCurrentStatus.bind("tcp://*:%s" % configECS.portCurrentState)
 
-        #socket for receiving Status Updates
-        self.socketSingleRequest = context.socket(zmq.REP)
-        self.socketSingleRequest.bind("tcp://*:%s" % configECS.portSingleRequest)
-
         #socket for receiving commands
         self.remoteCommandSocket = context.socket(zmq.REP)
         self.remoteCommandSocket.bind("tcp://*:%s" % configECS.portCommand)
 
         #register Poller
         self.poller = zmq.Poller()
-        #self.poller.register(self.socketPullUpdates, zmq.POLLIN)
         self.poller.register(self.socketServeCurrentStatus, zmq.POLLIN)
-        self.poller.register(self.socketSingleRequest, zmq.POLLIN)
 
         #init logger
         self.logfile = conf["logPath"]
@@ -159,26 +150,23 @@ class PCA:
 
         start_new_thread(self.publisher,())
 
-
-        def createDetectorThread(id,address,port, pingPort, type):
-            #create the corresponding class for the specified type
-            types = DetectorTypes()
-            typeClass = types.getClassForType(type)
-            confSection = types.getConfsectionForType(type)
-            #todo all Detectors are added as active; in case of a crash the PCA needs to remember which Detectors were active; maybe save this information in the ECS database?
-            det = typeClass(id,address,port,pingPort,confSection,self.log,self.publishQueue,self.handleDetectorTimeout,self.handleDetectorReconnect)
-            self.addDetector(det)
+        import time
+        #Subscribers need some time to subscribe todo there has to be a better way
+        time.sleep(1)
+        #tell subscribers to reset their state Table
+        self.publishQueue.put((self.id,ECSCodes.reset))
+        #will be set after all Detectors are added
+        self.stateMachine = None
 
         #create Detector objects
         threadArray = []
         for d in detList:
             #in case there of a connection problem, creating a Detector might take a long time, therefore create a own thread for each detector
-            t = threading.Thread(name='dcreate'+str(d.id), target=self.addDetector, args=(d.id, d.address, d.port, d.pingPort, d.type))
+            t = threading.Thread(name='dcreate'+str(d.id), target=self.addDetector, args=(d,))
             threadArray.append(t)
             t.start()
         for t in threadArray:
             t.join()
-            #self.addDetector(det)
 
         #thread stuff
         start_new_thread(self.waitForUpdates,())
@@ -217,8 +205,7 @@ class PCA:
         """watch the command Queue und execute incoming commands"""
         while True:
             m = self.commandQueue.get()
-            #print(m)
-            command,arg = m#self.commandQueue.get()
+            command,arg = m
             if command==ECSCodes.getReady:
                 self.makeReady()
                 continue
@@ -236,6 +223,13 @@ class PCA:
                 continue
             if command == ECSCodes.setInactive:
                 self.setDetectorInactive(arg)
+                continue
+            if command == ECSCodes.removeDetector:
+                self.removeDetector(arg)
+                continue
+            if command == ECSCodes.addDetector:
+                detector = detectorDataObject(json.loads(arg))
+                self.addDetector(detector)
                 continue
 
     def waitForRemoteCommand(self):
@@ -288,10 +282,9 @@ class PCA:
                 self.log("received non-valid message",True)
                 continue
             if id not in self.detectors:
-                self.log("received message with unknown id",True)
+                self.log("received message with unknown id: %s" % id,True)
                 continue
 
-            #todo doesn't work anymore
             det = self.detectors[id]
             if (det.stateMachine.currentState == command):
                 continue
@@ -331,58 +324,49 @@ class PCA:
 
                 # Final message
                 self.socketServeCurrentStatus.send(origin, zmq.SNDMORE)
-                self.send_status(self.socketServeCurrentStatus,None,self.sequence,None)
-
-            #request for single Detector
-            if self.socketSingleRequest in items:
-                id = self.socketSingleRequest.recv().decode()
-
-                if id in self.statusMap:
-                    #send status
-                    self.socketSingleRequest.send(self.statusMap.get[id][1].encode())
-                else:
-                    self.socketSingleRequest.send(ECSCodes.idUnknown)
-                    self.log("received status request for unknown id",True)
+                self.send_status(self.socketServeCurrentStatus,ECSCodes.done,self.sequence,b'')
 
 
     def send_status(self,socket,key,sequence,state):
         """method for sending a status update on a specified socket"""
-        #if None send empty byte String
-        key_b=b""
-        if key != None:
+        if isinstance(key,str):
             key_b = key.encode()
+        else:
+            key_b = key
 
         #integers need to be packed
         sequence_s = struct.pack("!i",sequence)
         #python strings need to be encoded into binary strings
-        state_b = b""
-        if state != None:
+        if isinstance(state,str):
             state_b = state.encode()
+        else:
+            state_b = state
         socket.send_multipart([key_b,sequence_s,state_b])
 
-    def addDetector(self, id, address, port, pingPort, type):
+    def addDetector(self,detector):#(self, id, address, port, pingPort, type):
         """add Detector to Dictionary and pubish it's state"""
         #create the corresponding class for the specified type
         types = Detector.DetectorTypes()
-        typeClass = types.getClassForType(type)
-        confSection = types.getConfsectionForType(type)
+        typeClass = types.getClassForType(detector.type)
+        confSection = types.getConfsectionForType(detector.type)
         #todo all Detectors are added as active; in case of a crash the PCA needs to remember which Detectors were active; maybe save this information in the ECS database?
-        det = typeClass(id,address,port,pingPort,confSection,self.log,self.publishQueue,self.handleDetectorTimeout,self.handleDetectorReconnect)
+        det = typeClass(detector.id,detector.address,detector.port,detector.pingPort,confSection,self.log,self.publishQueue,self.handleDetectorTimeout,self.handleDetectorReconnect)
         self.detectors[det.id] = det
         if det.active:
             self.activeDetectors[det.id] = det.id
         self.publishQueue.put((det.id,det.getMappedState()))
+        if self.stateMachine:
+            self.transitionDetectorIntoGlobalState(det.id)
 
     def removeDetector(self,id):
         """remove Detector from Dictionary"""
-        #todo muss irgendwie richtig mitgeteilt werden
         det = self.detectors[id]
         #todo add possibility to cancel transitions?
         self.sem.acquire()
-        det.shutdown()
-        self.setDetectorInactive(id)
-        self.publishQueue.put((d.id,"REMOVED"))
+        self.publishQueue.put((id,ECSCodes.removed))
         del self.detectors[id]
+        del self.activeDetectors[id]
+        det.terminate()
         self.sem.release()
 
     def setDetectorActive(self,id):
@@ -607,8 +591,11 @@ if __name__ == "__main__":
         print ("2: start")
         print ("3: stop")
         print ("4: shutdown")
-
-        x = input()
+        try:
+            x = input()
+        except:
+            while True:
+                pass
         if x == "1":
             test.commandQueue.put((ECSCodes.getReady,None))
         if x == "2":

@@ -10,6 +10,7 @@ from ECS_tools import MapWrapper
 
 class Detector:
     def __init__(self,id,address,port,pingPort,confSection,logfunction,publishQueue,pcaTimeoutFunktion,pcaReconnectFunction,active=True):
+        self.terminate_bool = False
         configParser = configparser.ConfigParser()
         configParser.read("detector.cfg")
         self.id = id
@@ -31,12 +32,6 @@ class Detector:
         self.socketSender = None
         self.createSendSocket()
 
-        context = zmq.Context()
-        #todo using PAIR might by dangerous?
-        socket = self.zmqContext.socket(zmq.PAIR)
-        socket.connect("tcp://%s:%i" % (address,port))
-
-
         #init with the current state of the Detector
         self.connected = False
         startState = self.getStateFromDetector()
@@ -53,7 +48,7 @@ class Detector:
         start_new_thread(self.ping,())
 
     def ping(self):
-        while True:
+        while not self.terminate_bool:
             if not self.active:
                 continue
             pingSocket = self.zmqContext.socket(zmq.REQ)
@@ -115,6 +110,7 @@ class Detector:
             returnMessage = self.socketSender.recv()
         except zmq.Again:
             self.logfunction("timeout from Detector "+str(self.id)+" for sending "+ command,True)
+            self.createSendSocket()
             return False
         #get transition result
         try:
@@ -130,6 +126,7 @@ class Detector:
                 return False
         except zmq.Again:
             self.logfunction("timeout from Detector "+str(self.id)+" for command "+ command,True)
+            self.createSendSocket()
             return False
 
     def getId(self):
@@ -150,17 +147,24 @@ class Detector:
         return self.mapper[self.stateMachine.currentState]
 
     def getStateFromDetector(self):
-        """get's the state from the dummy. Use if there has been a crash or a connection Problem"""
+        """get's the state from the dummy returns False when a Problem occurs. Use on startup or if there has been a crash or a connection Problem"""
         state = False
-        #while state == False:
-        self.socketSender.send(ECSCodes.pcaAsksForDetectorStatus)
+        requestSocket = self.zmqContext.socket(zmq.REQ)
+        requestSocket.connect(self.pingAddress)
+        requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+        requestSocket.setsockopt(zmq.LINGER,0)
+        requestSocket.send(ECSCodes.pcaAsksForDetectorStatus)
         try:
-            state = self.socketSender.recv().decode()
+            state = requestSocket.recv().decode()
         except zmq.Again:
-            #reset Socket
-            self.createSendSocket()
             self.logfunction("timeout getting Detector Status for Detector %s" % (self.id) ,True)
+        except Exception as e:
+            self.logfunction("error getting Detector Status for Detector %s: %s" % (self.id,str(e)) ,True)
+        requestSocket.close()
         return state
+
+    def terminate(self):
+        self.terminate_bool = True
 
     def getReady(self):
         pass
