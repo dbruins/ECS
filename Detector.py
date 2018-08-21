@@ -7,10 +7,13 @@ import ECSCodes
 import configparser
 import time
 from ECS_tools import MapWrapper
+import ECS_tools
 
 class Detector:
-    def __init__(self,id,address,port,pingPort,confSection,logfunction,publishQueue,pcaTimeoutFunktion,pcaReconnectFunction,active=True):
+    def __init__(self,id,address,port,pingPort,confSection,logfunction,publishQueue,pcaTimeoutFunktion,pcaReconnectFunction,putPendingTransitionFunction,removePendingTransitionFunction,active=True):
         self.terminate_bool = False
+        self.transitionNumber = 0
+        self.inTransition = False
         configParser = configparser.ConfigParser()
         configParser.read("detector.cfg")
         self.id = id
@@ -18,9 +21,12 @@ class Detector:
         self.publishQueue = publishQueue
         self.logfunction = logfunction
         self.active = active
+        self.abort_bool = False
 
         self.pcaReconnectFunction = pcaReconnectFunction
         self.pcaTimeoutFunktion = pcaTimeoutFunktion
+        self.putPending = putPendingTransitionFunction
+        self.removePendingTransition = removePendingTransitionFunction
 
         self.receive_timeout = int(conf["timeout"])
         self.pingIntervall = int(conf["pingIntervall"])
@@ -44,7 +50,6 @@ class Detector:
             reader = csv.reader(file, delimiter=',')
             for row in reader:
                 self.mapper[row[0]] = row[1]
-
         start_new_thread(self.ping,())
 
     def ping(self):
@@ -90,44 +95,43 @@ class Detector:
         if(self.socketSender):
             #reset
             self.socketSender.close()
-        self.socketSender = self.zmqContext.socket(zmq.PAIR)
+        self.socketSender = self.zmqContext.socket(zmq.REQ)
         self.socketSender.connect(self.address)
         self.socketSender.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
         self.socketSender.setsockopt(zmq.LINGER,0)
 
-    def transitionRequest(self,command):
-        """request a transition to a Detector"""
-        if not self.active:
-            return False
-        if not self.stateMachine.checkIfPossible(command):
-            self.logfunction("Transition %s is not possible for Detector %s in current state" % (command,self.id))
-            return False
+    def transitionRequest(self,commandArray):
+        """request a transition to a Detector takes an array of commands"""
+        self.abort_bool = False
+        for command in commandArray:
+            if self.inTransition:
+                print("waiting for previous Transition")
+                while self.inTransition and not self.abort_bool:
+                    pass
+                if self.abort_bool:
+                    return False
 
-        self.socketSender.send(command.encode())
-        #check if the command has arrived
-        try:
-            #receive status code or new State
-            returnMessage = self.socketSender.recv()
-        except zmq.Again:
-            self.logfunction("timeout from Detector "+str(self.id)+" for sending "+ command,True)
-            self.createSendSocket()
-            return False
-        #get transition result
-        try:
-            returnMessage = self.socketSender.recv()
-            if returnMessage != ECSCodes.error:
-                oldstate = self.stateMachine.currentState
-                self.stateMachine.currentState = returnMessage.decode()
-                self.publishQueue.put((self.id,self.getMappedState()))
-                self.logfunction("Detector "+str(self.id)+" transition: "+ oldstate +" -> " + self.stateMachine.currentState)
-                return True
-            else:
-                self.logfunction("Detector returned error",True)
+            if not self.active:
                 return False
-        except zmq.Again:
-            self.logfunction("timeout from Detector "+str(self.id)+" for command "+ command,True)
-            self.createSendSocket()
-            return False
+            if not self.stateMachine.checkIfPossible(command):
+                self.logfunction("Transition %s is not possible for Detector %s in current state" % (command,self.id))
+                return False
+            self.inTransition = True
+            self.transitionNumber +=1
+            self.putPending(self.id,self.transitionNumber)
+            self.socketSender.send_multipart([ECS_tools.intToBytes(self.transitionNumber),command.encode()])
+            #check if the command has arrived
+            try:
+                #receive status code or new State
+                returnMessage = self.socketSender.recv()
+                if returnMessage == ECSCodes.busy:
+                    self.logfunction("Detector %s is busy" % self.id)
+                    return False
+            except zmq.Again:
+                self.logfunction("timeout from Detector "+str(self.id)+" for sending "+ command,True)
+                self.createSendSocket()
+                return False
+        return True
 
     def getId(self):
         return self.id
@@ -164,6 +168,7 @@ class Detector:
         return state
 
     def terminate(self):
+        """ stops the ping thread"""
         self.terminate_bool = True
 
     def getReady(self):
@@ -175,6 +180,23 @@ class Detector:
     def powerOff(self):
         pass
 
+    def abort(self):
+        requestSocket = self.zmqContext.socket(zmq.REQ)
+        requestSocket.connect(self.pingAddress)
+        requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+        requestSocket.setsockopt(zmq.LINGER,0)
+        requestSocket.send(ECSCodes.abort)
+        try:
+            state = requestSocket.recv().decode()
+            self.removePendingTransition(self.id)
+            self.inTransition = False
+            self.abort_bool = True
+        except zmq.Again:
+            self.logfunction("timeout aborting Detector %s" % (self.id) ,True)
+        except Exception as e:
+            self.logfunction("error aborting Detector %s: %s" % (self.id,str(e)) ,True)
+        requestSocket.close()
+
 class DetectorA(Detector):
 
     def getReady(self):
@@ -182,34 +204,34 @@ class DetectorA(Detector):
             self.logfunction("nothing to be done for Detector %s" % self.id)
             return False
         if self.stateMachine.currentState == "Shutdown":
-            self.powerOn()
-        return self.configure()
-
+            return self.transitionRequest(["poweron","configure"])
+        else:
+            return self.transitionRequest(["configure"])
 
     def powerOn(self):
-        return self.transitionRequest("poweron")
+        return self.transitionRequest(["poweron"])
     def start(self):
         if self.stateMachine.currentState == "Running":
             self.logfunction("nothing to be done for Detector %s" % self.id)
             return False
-        return self.transitionRequest("start")
+        return self.transitionRequest(["start"])
 
     def stop(self):
         if self.stateMachine.currentState != "Running":
             self.logfunction("nothing to be done for Detector %s" % self.id)
             return False
-        return self.transitionRequest("stop")
+        return self.transitionRequest(["stop"])
 
     def powerOff(self):
         if self.stateMachine.currentState == "Shutdown":
             self.logfunction("nothing to be done for Detector %s" % self.id)
             return False
-        return self.transitionRequest("poweroff")
+        return self.transitionRequest(["poweroff"])
 
     def configure(self):
-        return self.transitionRequest("configure")
+        return self.transitionRequest(["configure"])
     def reconfigure(self):
-        return self.transitionRequest("reconfigure")
+        return self.transitionRequest(["reconfigure"])
 
 class DetectorB(Detector):
     def getReady(self):

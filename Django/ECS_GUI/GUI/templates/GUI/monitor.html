@@ -113,7 +113,25 @@ $(document).ready(function() {
 </head>
 
 <body>
-
+{%block control%}
+{% load guardian_tags %}
+{% get_obj_perms request.user for pcaObject as "pcaPerms" %}
+{% if perms.GUI.can_take_control %}
+  {% if userInControl %}
+      <p>Control already Taken by User : {{userInControl}}</p>
+  {% endif %}
+  {% if "has_control" in pcaPerms %}
+      <form action="{% url 'GUI:giveup_control' pcaId%}" method="post">
+        {% csrf_token %}
+        <input type="submit" value="give up control">
+      </form>
+  {% else %}
+      <form action="{% url 'GUI:take_control' pcaId%}" method="post">
+        {% csrf_token %}
+        <input type="submit" value="take control">
+      </form>
+  {% endif %}
+{% endif %}
 <h1>PCA{{pcaID}} Overview</h1>
 
 <div>
@@ -143,12 +161,15 @@ $(document).ready(function() {
     {% endfor %}
   </table>
 </div>
+{% if "has_control" in pcaPerms %}
 <div visibility:{{PCAConnection}}>
   <button id="ready">ready</button>
   <button id="start">start</button>
   <button id="stop">stop</button>
   <button id="shutdown">shutdown</button>
 </div>
+{% endif %}
+{%endblock%}
 <textarea readonly id="log"></textarea>
 {%if error%}
 <p visibility:={{error}}>Error</p>

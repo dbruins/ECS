@@ -545,7 +545,7 @@ class ECS:
                     del self.stateMap[id]
                     continue
                 state = state.decode()
-            sequence = struct.unpack("!i",sequence)[0]
+            sequence = ECS_tools.intFromBytes(sequence)
             print("received update",id, sequence, state)
             if id in self.stateMap:
                 #only update if the current status sequence is smaller

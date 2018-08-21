@@ -86,20 +86,25 @@ def resetSocket(self,socket,address,port,type):
     socket.setsockopt(zmq.LINGER,0)
     return socket
 
+def intToBytes(x):
+    """convert an integer to a byte array"""
+    return x.to_bytes(((x.bit_length() -1) // 8 ) +1,'big')
+
+def intFromBytes(x):
+    """convert a byte_array to an integer"""
+    return int.from_bytes(x,'big')
+
 def send_status(socket,id,sequence,state):
     """method for sending a status update on a specified socket"""
-    #if None send empty byte String
-    id_b=b""
-    if id != None:
-        id_b = key.encode()
+    if isinstance(id,str):
+        id = id.encode()
 
-    #integers need to be packed
-    sequence_s = struct.pack("!i",sequence)
+    sequence = intToBytes(sequence)
+
     #python strings need to be encoded into binary strings
-    state_b = b""
-    if state != None:
-        state_b = state.encode()
-    socket.send_multipart([id_b,sequence_s,state_b])
+    if isinstance(state,str):
+        state = state.encode()
+    socket.send_multipart([id,sequence,state])
 
 def receive_status(socket,pcaid=None):
     """receive status from PCA retuns None on error"""
@@ -117,7 +122,8 @@ def receive_status(socket,pcaid=None):
         return None
     if id != ECSCodes.done:
         id = id.decode()
-    sequence = struct.unpack("!i",sequence)[0]
+
+    sequence = intFromBytes(sequence)
     if state != b"":
         state = state.decode()
     else:

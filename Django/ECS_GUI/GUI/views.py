@@ -1,13 +1,16 @@
 from django.shortcuts import get_object_or_404,render,redirect
+from guardian.shortcuts import assign_perm, get_users_with_perms, remove_perm
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
-from GUI.models import Question, Choice
+from GUI.models import Question, Choice, pcaModel
 from django.template import loader
 from django.urls import reverse
 from django.conf import settings
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 import json
-
+from django.contrib.auth.decorators import login_required, permission_required
+from django.contrib.auth.models import Permission
+from django.apps import apps
 import zmq
 import threading
 import struct
@@ -40,9 +43,15 @@ class ECSHandler:
                 pJSON = json.loads(pJSON)
                 self.pcaCollection = DataObjectCollection(pJSON,partitionDataObject)
 
+        #clear database from Previous runs
+        pcaModel.objects.all().delete()
+
         #create Handlers for PCAs
         for p in self.pcaCollection:
             self.pcaHandlers[p.id] = PCAHandler(p)
+            #add database object for storing user permissions
+            pcaModel.objects.create(id=p.id)
+        print(pcaModel.objects.all())
 
     def request(self,address,port,message):
         """sends a request from a REQ to REP socket; sends with send_multipart so message hast to be a list; returns encoded return message or timeout code when recv times out"""
@@ -362,7 +371,25 @@ class PCAHandler:
             self.log(m)
 
 ecs = ECSHandler()
+
+
+# from django.contrib.auth import user_logged_in, user_logged_out
+# from django.dispatch import receiver
+# gui = apps.get_app_config('GUI')
+# print(gui.test)
+# 
+# @receiver(user_logged_in)
+# def on_user_logged_in(sender, request, **kwargs):
+#     print(request.user)
+
+def checkIfHasControl(user,pcaId):
+    pcaObject = pcaModel.objects.filter(id=pcaId).get()
+    if not user.has_perm("has_control",pcaObject):
+        return False
+    return True
+
 #views
+@login_required
 def index(request):
     #create Data Map for template
     ecsMap = {}
@@ -370,10 +397,12 @@ def index(request):
         ecsMap[pca[0]] = pca[1].stateMap.map
     return render(request, "GUI/ECS.html",{"ecsMap" : ecsMap, })
 
+@login_required
 def input_create_pca(request):
     unmappedDetectors = ecs.getUnmappedDetectors()
     return render(request, 'GUI/ECS_Create_Partition.html',{"unmappedDetectors" : unmappedDetectors})
 
+@login_required
 def create_pca(request):
     values = {
             "id" : request.POST["id"],
@@ -392,18 +421,22 @@ def create_pca(request):
     unmappedDetectors = ecs.getUnmappedDetectors()
     return render(request, 'GUI/ECS_Create_Partition.html', {"error" : True, "post":request.POST, "unmappedDetectors" : unmappedDetectors})
 
+@login_required
 def input_edit_pca(request):
     id = request.POST["id"]
     partition = ecs.getPartition(id)
     unmappedDetectors = ecs.getUnmappedDetectors()
     return render(request, 'GUI/ECS_Edit_Partition.html', {"pca":partition, "unmappedDetectors" : unmappedDetectors})
-    
+
+@login_required
 def edit_pca(request):
     pass
 
+@login_required
 def input_create_detector(request):
     return render(request, 'GUI/ECS_Create_Detector.html',{"pcaList" : ecs.pcaHandlers.items()})
 
+@login_required
 def create_detector(request):
     values = {
             "id" : request.POST["id"],
@@ -425,50 +458,82 @@ def create_detector(request):
         #return render(request, "GUI/ECS.html",{"pcaList" : ecs.pcaHandlers.items()})
     return render(request, 'GUI/ECS_Create_Detector.html', {"error" : True, "post":request.POST, "pcaList" : ecs.pcaHandlers.items()})
 
+@login_required
 def pca(request,pcaId):
     pca = ecs.getPCAHandler(pcaId)
-    print (pca.stateMap)
-    return render(request, "GUI/monitor.html",{'stateMap': pca.stateMap.map, "pcaId" : pcaId})
+    pcaObject = pcaModel.objects.filter(id=pcaId).get()
 
+    #check if another user has control over pca
+    userInControl = None
+    usersWithPermission = get_users_with_perms(pcaObject, attach_perms = True)
+    for user, perms in usersWithPermission.items():
+        if "has_control" in perms:
+            userInControl = user
+            break
+    if userInControl == request.user:
+        userInControl = "You"
+    print(userInControl)
+    return render(request, "GUI/monitor.html",{'stateMap': pca.stateMap.map, "pcaId" : pcaId, "pcaObject" : pcaObject, "userInControl":userInControl})
+
+@login_required
 def setActive(request,pcaId):
+    if not checkIfHasControl(request.user,pcaId):
+        return HttpResponse(status=403)
     detectorId = request.POST["detectorId"]
     pca = ecs.getPCAHandler(pcaId)
     pca.putCommand(ECSCodes.setActive,detectorId)
     return HttpResponse(status=200)
 
+@login_required
 def setInactive(request,pcaId):
+    if not checkIfHasControl(request.user,pcaId):
+        return HttpResponse(status=403)
     detectorId = request.POST["detectorId"]
     pca = ecs.getPCAHandler(pcaId)
     pca.putCommand(ECSCodes.setInactive,detectorId)
     return HttpResponse(status=200)
 
+@login_required
 def ready(request,pcaId):
+    if not checkIfHasControl(request.user,pcaId):
+        return HttpResponse(status=403)
     print ("sending ready")
     pca = ecs.getPCAHandler(pcaId)
     pca.putCommand(ECSCodes.getReady)
     return HttpResponse(status=200)
 
+@login_required
 def start(request,pcaId):
+    if not checkIfHasControl(request.user,pcaId):
+        return HttpResponse(status=403)
     print ("sending start")
     pca = ecs.getPCAHandler(pcaId)
     pca.putCommand(ECSCodes.start)
     return HttpResponse(status=200)
 
+@login_required
 def shutdown(request,pcaId):
+    if not checkIfHasControl(request.user,pcaId):
+        return HttpResponse(status=403)
     print ("sending shutdown")
     pca = ecs.getPCAHandler(pcaId)
     pca.putCommand(ECSCodes.shutdown)
     return HttpResponse(status=200)
 
+@login_required
 def stop(request,pcaId):
+    if not checkIfHasControl(request.user,pcaId):
+        return HttpResponse(status=403)
     print ("sending stop")
     pca = ecs.getPCAHandler(pcaId)
     pca.putCommand(ECSCodes.stop)
     return HttpResponse(status=200)
 
+@login_required
 def input_MoveDetectors(request):
     return render(request, 'GUI/ECS_moveDetectors.html',{"partitions" : ecs.pcaHandlers.items()})
 
+@login_required
 def moveDetectors(request):
     toPcaId = request.POST['toPartition']
     detectors = request.POST.getlist("selectedDetectors")
@@ -476,8 +541,9 @@ def moveDetectors(request):
         print(dId,toPcaId)
         if not ecs.moveDetector(dId,toPcaId):
             return render(request, 'GUI/ECS_moveDetectors.html',{"partitions" : ecs.pcaHandlers.items(), "error":True})
-    return HttpResponseRedirect('/GUI/',{"pcaList" : ecs.pcaHandlers.items()})
+    return HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
 
+@login_required
 def getDetectorListForPCA(request):
     """Ask ECS for DetectorList from Database"""
     pcaId = request.POST['pcaId']
@@ -488,3 +554,26 @@ def getDetectorListForPCA(request):
     else:
         print(detList.asDictionary())
         return JsonResponse(detList.asDictionary())
+
+@permission_required('GUI.can_take_control')
+@login_required
+def takeControl(request,pcaId):
+    pca = ecs.getPCAHandler(pcaId)
+    pcaObject = pcaModel.objects.filter(id=pcaId).get()
+
+    #check if other user has control for pca
+    usersWithPermission = get_users_with_perms(pcaObject, attach_perms = True)
+    for user, perms in usersWithPermission.items():
+        if "has_control" in perms:
+            return HttpResponseRedirect("/pca/"+pcaId,{'stateMap': pca.stateMap.map, "pcaId" : pcaId, "pcaObject" : pcaObject})
+    assign_perm('has_control', request.user, pcaObject)
+    return HttpResponseRedirect("/pca/"+pcaId,{'stateMap': pca.stateMap.map, "pcaId" : pcaId, "pcaObject" : pcaObject})
+
+@permission_required('GUI.can_take_control')
+@login_required
+def giveUpControl(request,pcaId):
+    pca = ecs.getPCAHandler(pcaId)
+    pcaObject = pcaModel.objects.filter(id=pcaId).get()
+    remove_perm('has_control', request.user, pcaObject)
+
+    return HttpResponseRedirect("/pca/"+pcaId,{'stateMap': pca.stateMap.map, "pcaId" : pcaId, "pcaObject" : pcaObject})

@@ -2,6 +2,7 @@ import zmq
 import sys
 import time
 import _thread
+import threading
 import struct
 from random import randint
 import ECSCodes
@@ -10,12 +11,16 @@ from Statemachine import Statemachine
 import json
 from DataObjects import partitionDataObject, detectorDataObject
 import ECS_tools
+import subprocess
 
 class DetectorController:
 
     def __init__(self,id,startState="Shutdown"):
         self.context = zmq.Context()
         self.MyId = id
+        self.currentTransitionNumber = None
+        self.scriptProcess = None
+        self.abort = False
         print(self.MyId)
         #get pca data from ECS
         config = configparser.ConfigParser()
@@ -81,7 +86,7 @@ class DetectorController:
         self.pingSocket = self.context.socket(zmq.REP)
         self.pingSocket.bind(("tcp://*:%s" % self.pingPort))
 
-        self.socketReceiver = self.context.socket(zmq.PAIR)
+        self.socketReceiver = self.context.socket(zmq.REP)
         self.socketReceiver.bind("tcp://*:%s" % self.port)
 
         self.socketSubscription = self.context.socket(zmq.SUB)
@@ -92,11 +97,13 @@ class DetectorController:
         self.socketPushUpdate = self.context.socket(zmq.PUSH)
         self.socketPushUpdate.connect("tcp://%s:%s" % (pcaData.address,pcaData.portUpdates))
         #send state to PCA
-        self.socketPushUpdate.send_string("%s %s" % (self.MyId, startState))
-
+        self.socketPushUpdate.send_multipart([self.MyId.encode(),ECS_tools.intToBytes(0),self.stateMachine.currentState.encode()])
 
         self.socketGetCurrentStateTable = self.context.socket(zmq.DEALER)
         self.socketGetCurrentStateTable.connect("tcp://%s:%s" % (pcaData.address,pcaData.portCurrentState))
+
+        self.workThread = threading.Thread(name="worker", target=self.work)
+        self.inTransition = False
 
         _thread.start_new_thread(self.waitForUpdates,())
         ECS_tools.getStateSnapshot(self.stateMap,pcaData.address,pcaData.portCurrentState,timeout=self.receive_timeout)
@@ -116,7 +123,7 @@ class DetectorController:
         self.socketPushUpdate = self.context.socket(zmq.PUSH)
         self.socketPushUpdate.connect("tcp://%s:%s" % (partition.address,partition.portUpdates))
         #send state to PCA
-        self.socketPushUpdate.send_string("%s %s" % (self.MyId, self.stateMachine.currentState))
+        self.socketPushUpdate.send_multipart([self.MyId.encode(),ECS_tools.intToBytes(self.currentTransitionNumber),self.stateMachine.currentState.encode()])
 
         self.socketGetCurrentStateTable.close()
         self.socketGetCurrentStateTable = self.context.socket(zmq.DEALER)
@@ -142,19 +149,39 @@ class DetectorController:
             elif state == ECSCodes.removed:
                 del self.stateMap[id]
                 continue
-            sequence = struct.unpack("!i",sequence)[0]
+            sequence = ECS_tools.intFromBytes(sequence)
             print("received update",id, sequence, state)
             self.stateMap[id] = (sequence, state)
 
+    def work(self,command):
+        self.scriptProcess = subprocess.Popen(["exec sh detectorScript.sh"], shell=True)
+        self.scriptProcess.wait()
+        if self.abort:
+            self.inTransition = False
+            self.abort = False
+            return
+        self.stateMachine.transition(command)
+        self.socketPushUpdate.send_multipart([self.MyId.encode(),ECS_tools.intToBytes(self.currentTransitionNumber),self.stateMachine.currentState.encode()])
+        self.inTransition = False
+
     def waitForCommand(self):
         while True:
-            m = self.socketReceiver.recv()
-            self.socketReceiver.send(ECSCodes.ok)
-            if self.stateMachine.transition(m.decode()):
-                time.sleep(randint(2,6))
-                self.socketReceiver.send(self.stateMachine.currentState.encode())
-            else:
+            transitionNumber,command = self.socketReceiver.recv_multipart()
+            command = command.decode()
+            print (command,transitionNumber)
+            if self.inTransition:
+                self.socketReceiver.send(ECSCodes.busy)
+                continue
+            elif not self.stateMachine.checkIfPossible(command):
                 self.socketReceiver.send(ECSCodes.error)
+                continue
+            else:
+                self.socketReceiver.send(ECSCodes.ok)
+            self.currentTransitionNumber = ECS_tools.intFromBytes(transitionNumber)
+            print(self.currentTransitionNumber)
+            self.inTransition = True
+            self.workThread = threading.Thread(name="worker", target=self.work, args=(command,))
+            self.workThread.start()
 
     def waitForPings(self):
         while True:
@@ -164,6 +191,14 @@ class DetectorController:
                 arg = command[1].decode()
             command = command[0]
             if command == ECSCodes.ping:
+                self.pingSocket.send(ECSCodes.ok)
+                continue
+            if command == ECSCodes.abort:
+                #terminate Transition if active
+                if self.inTransition:
+                    print("abort")
+                    self.abort = True
+                    self.scriptProcess.terminate()
                 self.pingSocket.send(ECSCodes.ok)
                 continue
             if command == ECSCodes.pcaAsksForDetectorStatus:

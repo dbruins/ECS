@@ -49,7 +49,12 @@ updateSocket.onmessage = function(e) {
 </script>
 </head>
 <body>
-
+{% if user.is_authenticated %}
+  <li>User: {{ user.get_username }}</li>
+  <li><a href="{% url 'GUI:logout'%}?next={{request.path}}">Logout</a></li>
+{% else %}
+  <li><a href="{% url 'GUI:login'%}?next={{request.path}}">Login</a></li>
+{% endif %}
 <h1>ECS Status</h1>
 
 <div>
