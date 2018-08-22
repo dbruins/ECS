@@ -43,6 +43,7 @@ class DetectorController:
                     print("The ECS doesn't know who I am :(")
                     sys.exit(1)
                 detectorDataJSON = json.loads(detectorDataJSON.decode())
+                print(detectorDataJSON)
                 detectorData = detectorDataObject(detectorDataJSON)
             except zmq.Again:
                 print("timeout getting detector Data")
@@ -50,8 +51,8 @@ class DetectorController:
                 continue
             requestSocket.close()
 
-        self.port = detectorData.port
-        self.pingPort = detectorData.pingPort
+        self.portTransition = detectorData.portTransition
+        self.portCommand = detectorData.portCommand
 
         #get PCA Information
         pcaData = None
@@ -83,11 +84,11 @@ class DetectorController:
         configDet = configDet[confSection]
         self.stateMachine = Statemachine(configDet["stateFile"],startState)
 
-        self.pingSocket = self.context.socket(zmq.REP)
-        self.pingSocket.bind(("tcp://*:%s" % self.pingPort))
+        self.commandSocket = self.context.socket(zmq.REP)
+        self.commandSocket.bind("tcp://*:%s" % self.portCommand)
 
         self.socketReceiver = self.context.socket(zmq.REP)
-        self.socketReceiver.bind("tcp://*:%s" % self.port)
+        self.socketReceiver.bind("tcp://*:%s" % self.portTransition)
 
         self.socketSubscription = self.context.socket(zmq.SUB)
         self.socketSubscription.connect("tcp://%s:%s" % (pcaData.address,pcaData.portPublish))
@@ -107,8 +108,8 @@ class DetectorController:
 
         _thread.start_new_thread(self.waitForUpdates,())
         ECS_tools.getStateSnapshot(self.stateMap,pcaData.address,pcaData.portCurrentState,timeout=self.receive_timeout)
-        _thread.start_new_thread(self.waitForPings,())
-        _thread.start_new_thread(self.waitForCommand,())
+        _thread.start_new_thread(self.waitForCommands,())
+        _thread.start_new_thread(self.waitForTransition,())
 
     def changePCA(self,partition):
         """changes the current PCA"""
@@ -164,7 +165,7 @@ class DetectorController:
         self.socketPushUpdate.send_multipart([self.MyId.encode(),ECS_tools.intToBytes(self.currentTransitionNumber),self.stateMachine.currentState.encode()])
         self.inTransition = False
 
-    def waitForCommand(self):
+    def waitForTransition(self):
         while True:
             transitionNumber,command = self.socketReceiver.recv_multipart()
             command = command.decode()
@@ -183,15 +184,15 @@ class DetectorController:
             self.workThread = threading.Thread(name="worker", target=self.work, args=(command,))
             self.workThread.start()
 
-    def waitForPings(self):
+    def waitForCommands(self):
         while True:
-            command = self.pingSocket.recv_multipart()
+            command = self.commandSocket.recv_multipart()
             arg = None
             if len(command) > 1:
                 arg = command[1].decode()
             command = command[0]
             if command == ECSCodes.ping:
-                self.pingSocket.send(ECSCodes.ok)
+                self.commandSocket.send(ECSCodes.ok)
                 continue
             if command == ECSCodes.abort:
                 #terminate Transition if active
@@ -199,17 +200,17 @@ class DetectorController:
                     print("abort")
                     self.abort = True
                     self.scriptProcess.terminate()
-                self.pingSocket.send(ECSCodes.ok)
+                self.commandSocket.send(ECSCodes.ok)
                 continue
             if command == ECSCodes.pcaAsksForDetectorStatus:
-                self.pingSocket.send(self.stateMachine.currentState.encode())
+                self.commandSocket.send(self.stateMachine.currentState.encode())
                 continue
             if command == ECSCodes.detectorChangePartition:
                 partition = partitionDataObject(json.loads(arg))
                 self.changePCA(partition)
-                self.pingSocket.send(ECSCodes.ok)
+                self.commandSocket.send(ECSCodes.ok)
                 continue
-            self.pingSocket.send(ECSCodes.unknownCommand)
+            self.commandSocket.send(ECSCodes.unknownCommand)
 
 
 

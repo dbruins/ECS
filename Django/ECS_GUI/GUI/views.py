@@ -291,25 +291,6 @@ class PCAHandler:
 
         socket.close()
 
-    def receive_status(self,socket):
-        try:
-            id, sequence, state = socket.recv_multipart()
-        except zmq.Again:
-            return None
-        except:
-            print ("error while receiving")
-            return
-        if id != b"":
-            id = id.decode()
-        else:
-            id = None
-        sequence = struct.unpack("!i",sequence)[0]
-        if state != b"":
-            state = state.decode()
-        else:
-            state = None
-        return [id,sequence,state]
-
     def waitForUpdates(self):
         while True:
             m = self.socketSubscription.recv_multipart()
@@ -320,13 +301,15 @@ class PCAHandler:
 
 
             id = id.decode()
-            sequence = struct.unpack("!i",sequence)[0]
+            sequence = ECS_tools.intFromBytes(sequence)
 
             if state == ECSCodes.reset:
                 self.stateMap.reset()
+                #reset code for Web Browser
                 state = "reset"
             elif state == ECSCodes.removed:
                 del self.stateMap[id]
+                #remove code for Web Browser
                 state = "remove"
             else:
                 state = state.decode()
@@ -338,32 +321,60 @@ class PCAHandler:
                              "state" : state,
                             }
             jsonWebUpdate = json.dumps(jsonWebUpdate)
+            self.sendUpdateToWebsockets("update",jsonWebUpdate)
+            """
             channel_layer = get_channel_layer()
             async_to_sync(channel_layer.group_send)(
                 #the group name
-                "update",
+                self.id,
                 {
                     #calls method update in the consumer which is registered to channel layer
                     'type': 'update',
                     #argument(s) with which update is called
                     'text': jsonWebUpdate
                 }
-            )
+            )"""
 
     def log(self,message):
         """spread log message through websocket(channel)"""
+        self.sendUpdateToWebsockets("logUpdate",message)
+        """
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
             #the group name
-            "update",
+            self.id,
             {
                 #calls method update in the consumer which is registered to channel layer
                 'type': 'logUpdate',
                 #argument(s) with which update is called
                 'logText': message
             }
-        )
+        )"""
 
+    def sendUpdateToWebsockets(self,type,message):
+        channel_layer = get_channel_layer()
+        #pca page
+        async_to_sync(channel_layer.group_send)(
+            #the group name
+            self.id,
+            {
+                #calls method update in the consumer which is registered to channel layer
+                'type': type,
+                #argument(s) with which update is called
+                'text': message
+            }
+        )
+        #ecs page
+        async_to_sync(channel_layer.group_send)(
+            #the group name
+            "ecs",
+            {
+                #calls method update in the consumer which is registered to channel layer
+                'type': type,
+                #argument(s) with which update is called
+                'text': message
+            }
+        )
     def waitForLogUpdates(self):
         """wait for new log messages from PCA"""
         while True:
@@ -377,7 +388,7 @@ ecs = ECSHandler()
 # from django.dispatch import receiver
 # gui = apps.get_app_config('GUI')
 # print(gui.test)
-# 
+#
 # @receiver(user_logged_in)
 # def on_user_logged_in(sender, request, **kwargs):
 #     print(request.user)

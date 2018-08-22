@@ -285,6 +285,7 @@ class PCA:
                 del self.pendingTransitions[id]
             else:
                 self.log("Detector "+det.id+" had an unexpected Statechange "+ str(oldstate) +" -> " + det.stateMachine.currentState )
+                self.transitionDetectorIntoGlobalState(det.id)
             self.publishQueue.put((det.id,det.getMappedState()))
             self.checkGlobalState()
 
@@ -324,7 +325,7 @@ class PCA:
         typeClass = types.getClassForType(detector.type)
         confSection = types.getConfsectionForType(detector.type)
         #todo all Detectors are added as active; in case of a crash the PCA needs to remember which Detectors were active; maybe save this information in the ECS database?
-        det = typeClass(detector.id,detector.address,detector.port,detector.pingPort,confSection,self.log,self.publishQueue,self.handleDetectorTimeout,self.handleDetectorReconnect,self.putPendingTransition,self.removePendingTransition)
+        det = typeClass(detector.id,detector.address,detector.portTransition,detector.portCommand,confSection,self.log,self.publishQueue,self.handleDetectorTimeout,self.handleDetectorReconnect,self.putPendingTransition,self.removePendingTransition)
         self.detectors[det.id] = det
         if det.active:
             self.activeDetectors[det.id] = det.id
@@ -463,15 +464,11 @@ class PCA:
         self.sem.acquire()
         for id in self.activeDetectors:
             d = self.detectors[id]
-            t = threading.Thread(name='doff'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.powerOff, returnQueue))
+            t = threading.Thread(name='doff'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.powerOff, None))
             threadArray.append(t)
             t.start()
-        for t in threadArray:
-            ret = returnQueue.get()
-            d = self.detectors[ret[0]]
-            if ret[1] != True:
-                #todo something needs to happen here
-                1+1
+
+        self.transition("stop")
         self.sem.release()
 
     def makeReady(self):
@@ -508,16 +505,10 @@ class PCA:
         returnQueue = Queue()
         for id in self.activeDetectors:
             d = self.detectors[id]
-            t = threading.Thread(name='dstart'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.start, returnQueue))
+            t = threading.Thread(name='dstart'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.start, None))
             threadArray.append(t)
             t.start()
 
-        for t in threadArray:
-            ret = returnQueue.get()
-            d = self.detectors[ret[0]]
-            if ret[1] != True:
-                #todo something needs to happen here
-                1+1
         self.transition("start")
         self.sem.release()
 
@@ -530,16 +521,10 @@ class PCA:
         self.sem.acquire()
         for id in self.activeDetectors:
             d = self.detectors[id]
-            t = threading.Thread(name='dstop'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.stop, returnQueue))
+            t = threading.Thread(name='dstop'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.stop, None))
             threadArray.append(t)
             t.start()
 
-        for t in threadArray:
-            ret = returnQueue.get()
-            d = self.detectors[ret[0]]
-            if ret[1] != True:
-                #todo something needs to happen here
-                1+1
         self.transition("stop")
         self.sem.release()
 
@@ -549,23 +534,17 @@ class PCA:
         self.sem.acquire()
         for id in self.activeDetectors:
             d = self.detectors[id]
-            t = threading.Thread(name='dabort'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.abort, returnQueue))
+            t = threading.Thread(name='dabort'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.abort, None))
             threadArray.append(t)
             t.start()
 
-        for t in threadArray:
-            ret = returnQueue.get()
-            d = self.detectors[ret[0]]
-            if ret[1] != True:
-                #todo something needs to happen here
-                1+1
         self.sem.release()
 
     def checkOpenTransitions():
         for id,number in self.pendingTransitions:
             det = self.detectors[id]
             socket = self.context.socket(zmq.REQ)
-            socket.connect("tcp://%s:%s" %(det.addres,det.pingPort))
+            socket.connect("tcp://%s:%s" %(det.addres,det.portCommand))
             socket.send_multipart([ECSCodes.PCAAsksForTransitionsStatus,number])
             #todo what to do?
 

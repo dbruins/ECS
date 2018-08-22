@@ -3,9 +3,10 @@ from asgiref.sync import async_to_sync
 import json
 
 class updateConsumer(WebsocketConsumer):
-    group_name = "update"
     def connect(self):
-        # Join update group
+        self.pcaId = self.scope['url_route']['kwargs']['pca_id']
+        self.group_name = self.pcaId
+        # Join pca/ecs group
         async_to_sync(self.channel_layer.group_add)(
             self.group_name,
             self.channel_name
@@ -32,5 +33,5 @@ class updateConsumer(WebsocketConsumer):
     def logUpdate(self,event):
         self.send(text_data=json.dumps({
             "type": "log",
-            "message": event["logText"]
+            "message": event["text"]
         }))

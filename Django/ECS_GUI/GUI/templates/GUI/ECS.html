@@ -3,8 +3,7 @@
 <head>
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
 <script>
-console.log('ws://'+ window.location.host + '/ws/');
-var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/');
+var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/ecs/');
 //todo autoreconnect
 
 updateSocket.onmessage = function(e) {

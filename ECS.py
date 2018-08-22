@@ -430,7 +430,7 @@ class ECS:
 
                 #inform DetectorController
                 requestSocket = self.zmqContext.socket(zmq.REQ)
-                requestSocket.connect("tcp://%s:%s"  % (detector.address,detector.pingPort))
+                requestSocket.connect("tcp://%s:%s"  % (detector.address,detector.portCommand))
                 requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
                 requestSocket.send_multipart([ECSCodes.detectorChangePartition,newPartition.asJsonString().encode()])
                 try:

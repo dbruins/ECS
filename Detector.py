@@ -10,7 +10,7 @@ from ECS_tools import MapWrapper
 import ECS_tools
 
 class Detector:
-    def __init__(self,id,address,port,pingPort,confSection,logfunction,publishQueue,pcaTimeoutFunktion,pcaReconnectFunction,putPendingTransitionFunction,removePendingTransitionFunction,active=True):
+    def __init__(self,id,address,portTransition,portCommand,confSection,logfunction,publishQueue,pcaTimeoutFunktion,pcaReconnectFunction,putPendingTransitionFunction,removePendingTransitionFunction,active=True):
         self.terminate_bool = False
         self.transitionNumber = 0
         self.inTransition = False
@@ -30,8 +30,8 @@ class Detector:
 
         self.receive_timeout = int(conf["timeout"])
         self.pingIntervall = int(conf["pingIntervall"])
-        self.pingAddress = ("tcp://%s:%s" % (address ,pingPort))
-        self.address = ("tcp://%s:%s" % (address ,port))
+        self.pingAddress = ("tcp://%s:%s" % (address ,portCommand))
+        self.address = ("tcp://%s:%s" % (address ,portTransition))
 
         #socket for sending Requests
         self.zmqContext = zmq.Context()
