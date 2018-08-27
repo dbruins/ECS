@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import zmq
 import sys
 import time
@@ -18,21 +19,21 @@ class DetectorController:
     def __init__(self,id,startState="Shutdown"):
         self.context = zmq.Context()
         self.MyId = id
-        self.currentTransitionNumber = None
+        self.currentTransitionNumber = 0
         self.scriptProcess = None
         self.abort = False
         print(self.MyId)
         #get pca data from ECS
         config = configparser.ConfigParser()
         config.read("init.cfg")
-        conf = config["Default"]
-        self.receive_timeout = int(conf['receive_timeout'])
+        self.conf = config["Default"]
+        self.receive_timeout = int(self.conf['receive_timeout'])
 
         #get Detector Information
         detectorData = None
         while detectorData == None:
             requestSocket = self.context.socket(zmq.REQ)
-            requestSocket.connect("tcp://%s:%s" % (conf['ECSAddress'],conf['ECSRequestPort']))
+            requestSocket.connect("tcp://%s:%s" % (self.conf['ECSAddress'],self.conf['ECSRequestPort']))
             requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
             requestSocket.setsockopt(zmq.LINGER,0)
 
@@ -57,25 +58,7 @@ class DetectorController:
         #get PCA Information
         pcaData = None
         while pcaData == None:
-            requestSocket = self.context.socket(zmq.REQ)
-            requestSocket.connect("tcp://%s:%s" % (conf['ECSAddress'],conf['ECSRequestPort']))
-            requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-            requestSocket.setsockopt(zmq.LINGER,0)
-
-            requestSocket.send_multipart([ECSCodes.detectorAsksForPCA, self.MyId.encode()])
-            try:
-                pcaDataJSON = requestSocket.recv()
-                if pcaDataJSON == ECSCodes.idUnknown:
-                    print("I have not been assigned to any partition :(")
-                    sys.exit(1)
-                pcaDataJSON = json.loads(pcaDataJSON.decode())
-                pcaData = partitionDataObject(pcaDataJSON)
-            except zmq.Again:
-                print("timeout getting pca Data")
-                requestSocket.close()
-                continue
-            requestSocket.close()
-
+            pcaData = self.getPCAData()
         self.stateMap = ECS_tools.MapWrapper()
 
         confSection = ECS_tools.getConfsectionForType(detectorData.type)
@@ -83,6 +66,8 @@ class DetectorController:
         configDet.read("detector.cfg")
         configDet = configDet[confSection]
         self.stateMachine = Statemachine(configDet["stateFile"],startState)
+        self.pcaAddress = pcaData.address
+        self.pcaUpdatePort = pcaData.portUpdates
 
         self.commandSocket = self.context.socket(zmq.REP)
         self.commandSocket.bind("tcp://*:%s" % self.portCommand)
@@ -90,18 +75,15 @@ class DetectorController:
         self.socketReceiver = self.context.socket(zmq.REP)
         self.socketReceiver.bind("tcp://*:%s" % self.portTransition)
 
-        self.socketSubscription = self.context.socket(zmq.SUB)
+        #Subscription needs its own context so we can terminate it seperately in case of a pca Change
+        self.subContext = zmq.Context()
+        self.socketSubscription = self.subContext.socket(zmq.SUB)
         self.socketSubscription.connect("tcp://%s:%s" % (pcaData.address,pcaData.portPublish))
         #subscribe to everything
         self.socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
 
-        self.socketPushUpdate = self.context.socket(zmq.PUSH)
-        self.socketPushUpdate.connect("tcp://%s:%s" % (pcaData.address,pcaData.portUpdates))
         #send state to PCA
-        self.socketPushUpdate.send_multipart([self.MyId.encode(),ECS_tools.intToBytes(0),self.stateMachine.currentState.encode()])
-
-        self.socketGetCurrentStateTable = self.context.socket(zmq.DEALER)
-        self.socketGetCurrentStateTable.connect("tcp://%s:%s" % (pcaData.address,pcaData.portCurrentState))
+        self.sendUpdate()
 
         self.workThread = threading.Thread(name="worker", target=self.work)
         self.inTransition = False
@@ -111,32 +93,75 @@ class DetectorController:
         _thread.start_new_thread(self.waitForCommands,())
         _thread.start_new_thread(self.waitForTransition,())
 
+    def getPCAData(self):
+        """get PCA Information from ECS"""
+        requestSocket = self.context.socket(zmq.REQ)
+        requestSocket.connect("tcp://%s:%s" % (self.conf['ECSAddress'],self.conf['ECSRequestPort']))
+        requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+        requestSocket.setsockopt(zmq.LINGER,0)
+
+        requestSocket.send_multipart([ECSCodes.detectorAsksForPCA, self.MyId.encode()])
+        try:
+            pcaDataJSON = requestSocket.recv()
+            if pcaDataJSON == ECSCodes.idUnknown:
+                print("I have not been assigned to any partition :(")
+                sys.exit(1)
+            pcaDataJSON = json.loads(pcaDataJSON.decode())
+            pcaData = partitionDataObject(pcaDataJSON)
+        except zmq.Again:
+            print("timeout getting pca Data")
+            requestSocket.close()
+            return None
+        requestSocket.close()
+        return pcaData
+
     def changePCA(self,partition):
-        """changes the current PCA"""
-        self.socketSubscription.close()
+        """changes the current PCA to the one specified in the ECS database"""
         self.stateMap.reset()
-        self.socketSubscription = self.context.socket(zmq.SUB)
+        self.pcaAddress = partition.address
+        self.pcaUpdatePort = partition.portUpdates
+
+        #blocks until subscription socket is closed
+        self.subContext.term()
+        self.subContext =  zmq.Context()
+        self.socketSubscription = self.subContext.socket(zmq.SUB)
         self.socketSubscription.connect("tcp://%s:%s" % (partition.address,partition.portPublish))
         #subscribe to everything
         self.socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
-
-        self.socketPushUpdate.close()
-        self.socketPushUpdate = self.context.socket(zmq.PUSH)
-        self.socketPushUpdate.connect("tcp://%s:%s" % (partition.address,partition.portUpdates))
-        #send state to PCA
-        self.socketPushUpdate.send_multipart([self.MyId.encode(),ECS_tools.intToBytes(self.currentTransitionNumber),self.stateMachine.currentState.encode()])
-
-        self.socketGetCurrentStateTable.close()
-        self.socketGetCurrentStateTable = self.context.socket(zmq.DEALER)
-        self.socketGetCurrentStateTable.connect("tcp://%s:%s" % (partition.address,partition.portCurrentState))
+        _thread.start_new_thread(self.waitForUpdates,())
 
         ECS_tools.getStateSnapshot(self.stateMap,partition.address,partition.portCurrentState,timeout=self.receive_timeout)
+
+
+    def sendUpdate(self):
+        """send current state to PCA"""
+        socketSendUpdateToPCA = self.context.socket(zmq.REQ)
+        socketSendUpdateToPCA.connect("tcp://%s:%s" % (self.pcaAddress,self.pcaUpdatePort))
+        socketSendUpdateToPCA.send_multipart([self.MyId.encode(),ECS_tools.intToBytes(self.currentTransitionNumber),self.stateMachine.currentState.encode()])
+        try:
+            r = socketSendUpdateToPCA.recv()
+            if r == ECSCodes.idUnknown:
+                socketSendUpdateToPCA.close()
+                data = self.getPCAData()
+                self.changePCA(data)
+                return
+        except zmq.Again:
+            print("timeout sending status")
+        except Exception as e:
+            print("error sending status: %s" % str(e))
+        finally:
+            socketSendUpdateToPCA.close()
 
 
     def waitForUpdates(self):
         #watch subscription for further updates
         while True:
-            m = self.socketSubscription.recv_multipart()
+            try:
+                m = self.socketSubscription.recv_multipart()
+            except zmq.error.ContextTerminated:
+                self.socketSubscription.close()
+                break
+
             if len(m) != 3:
                 print (m)
             else:
@@ -162,7 +187,7 @@ class DetectorController:
             self.abort = False
             return
         self.stateMachine.transition(command)
-        self.socketPushUpdate.send_multipart([self.MyId.encode(),ECS_tools.intToBytes(self.currentTransitionNumber),self.stateMachine.currentState.encode()])
+        self.sendUpdate()
         self.inTransition = False
 
     def waitForTransition(self):
@@ -179,7 +204,6 @@ class DetectorController:
             else:
                 self.socketReceiver.send(ECSCodes.ok)
             self.currentTransitionNumber = ECS_tools.intFromBytes(transitionNumber)
-            print(self.currentTransitionNumber)
             self.inTransition = True
             self.workThread = threading.Thread(name="worker", target=self.work, args=(command,))
             self.workThread.start()
@@ -223,10 +247,9 @@ if __name__ == "__main__":
     else:
         test = DetectorController(sys.argv[1])
     while True:
-        if len(sys.argv) > 2:
-            continue
         try:
             x = input()
+            test.socketPushUpdate.send_string("%s %s" % (test.MyId, x))
         except EOFError:
+            time.sleep(500000)
             continue
-        test.socketPushUpdate.send_string("%s %s" % (test.MyId, x))

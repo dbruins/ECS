@@ -1,3 +1,4 @@
 *.pyc
 Django/ECS_GUI/GUI/migrations/*
 log
+logECS

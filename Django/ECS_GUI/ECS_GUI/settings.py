@@ -124,7 +124,7 @@ STATIC_URL = '/static/'
 
 #PCA settings
 #ping intervall in seconds
-PINGINTERVALL = 2
+PINGINTERVAL = 2
 #timeout for messages to PCA in ms
 TIMEOUT = 5000
 #timeout for Pings to PCA in ms
@@ -133,6 +133,7 @@ PINGTIMEOUT = 2000
 #address and port for ECS
 ECS_ADDRESS = "localhost"
 ECS_REQUEST_PORT = 5000
+ECS_LOG_PORT = 5001
 
 PCACODESPATH = "/home/daniel/Dokumente/Masterarbeit/Statemachine"
 PCACONFIGPATH = "/home/daniel/Dokumente/Masterarbeit/Statemachine/init.cfg"

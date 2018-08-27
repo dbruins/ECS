@@ -8,10 +8,10 @@ import configparser
 import time
 from ECS_tools import MapWrapper
 import ECS_tools
+import threading
 
 class Detector:
     def __init__(self,id,address,portTransition,portCommand,confSection,logfunction,publishQueue,pcaTimeoutFunktion,pcaReconnectFunction,putPendingTransitionFunction,removePendingTransitionFunction,active=True):
-        self.terminate_bool = False
         self.transitionNumber = 0
         self.inTransition = False
         configParser = configparser.ConfigParser()
@@ -20,7 +20,9 @@ class Detector:
         conf = configParser[confSection]
         self.publishQueue = publishQueue
         self.logfunction = logfunction
-        self.active = active
+        self.active = threading.Event()
+        if active:
+            self.active.set()
         self.abort_bool = False
 
         self.pcaReconnectFunction = pcaReconnectFunction
@@ -29,14 +31,12 @@ class Detector:
         self.removePendingTransition = removePendingTransitionFunction
 
         self.receive_timeout = int(conf["timeout"])
-        self.pingIntervall = int(conf["pingIntervall"])
+        self.pingInterval = int(conf["pingInterval"])
         self.pingAddress = ("tcp://%s:%s" % (address ,portCommand))
         self.address = ("tcp://%s:%s" % (address ,portTransition))
 
-        #socket for sending Requests
+        #zmq Context for Detector
         self.zmqContext = zmq.Context()
-        self.socketSender = None
-        self.createSendSocket()
 
         #init with the current state of the Detector
         self.connected = False
@@ -53,16 +53,19 @@ class Detector:
         start_new_thread(self.ping,())
 
     def ping(self):
-        while not self.terminate_bool:
-            if not self.active:
-                continue
-            pingSocket = self.zmqContext.socket(zmq.REQ)
-            pingSocket.connect(self.pingAddress)
-            pingSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-            pingSocket.setsockopt(zmq.LINGER,0)
-            pingSocket.send(ECSCodes.ping)
+        while True:
+            if not self.active.isSet():
+                #hold pings while inactive
+                self.active.wait()
             try:
-                r = pingSocket.recv()
+                if self.zmqContext.closed:
+                    break
+                pingSocket = self.zmqContext.socket(zmq.REQ)
+                pingSocket.connect(self.pingAddress)
+                pingSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+                pingSocket.setsockopt(zmq.LINGER,0)
+                pingSocket.send(ECSCodes.ping)
+                pingSocket.recv()
                 if self.connected != True:
                     self.logfunction("Detector %s is connected" % self.id)
                     #todo need to check wether the transitions made during connection Problem were valid
@@ -75,30 +78,32 @@ class Detector:
                     self.connected = True
                     self.pcaReconnectFunction(self.id,self.getMappedState())
             except zmq.Again:
-                #todo PCA should be able retrieve the actual status upon reconnect; this is just state it used to has before the reconnect
                 if self.connected == True or self.connected == None:
                     self.connected = False
                     self.logfunction("timeout pinging Detector %s" % self.id, True)
                     self.pcaTimeoutFunktion(self.id)
-            pingSocket.close()
-            time.sleep(self.pingIntervall)
+            except zmq.error.ContextTerminated:
+                #termination during sending ping
+                self.logfunction("Detector "+str(self.id)+" was terminated",True)
+                pingSocket.close()
+                break
+            finally:
+                pingSocket.close()
+            time.sleep(self.pingInterval)
 
     def setActive(self):
-        self.active = True
+        self.active.set()
 
     def setInactive(self):
-        self.active = False
-
+        self.active.clear()
 
     def createSendSocket(self):
         """init or reset the send Socket"""
-        if(self.socketSender):
-            #reset
-            self.socketSender.close()
-        self.socketSender = self.zmqContext.socket(zmq.REQ)
-        self.socketSender.connect(self.address)
-        self.socketSender.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-        self.socketSender.setsockopt(zmq.LINGER,0)
+        socketSender = self.zmqContext.socket(zmq.REQ)
+        socketSender.connect(self.address)
+        socketSender.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+        socketSender.setsockopt(zmq.LINGER,0)
+        return socketSender
 
     def transitionRequest(self,commandArray):
         """request a transition to a Detector takes an array of commands"""
@@ -111,7 +116,7 @@ class Detector:
                 if self.abort_bool:
                     return False
 
-            if not self.active:
+            if not self.active.isSet():
                 return False
             if not self.stateMachine.checkIfPossible(command):
                 self.logfunction("Transition %s is not possible for Detector %s in current state" % (command,self.id))
@@ -119,17 +124,22 @@ class Detector:
             self.inTransition = True
             self.transitionNumber +=1
             self.putPending(self.id,self.transitionNumber)
-            self.socketSender.send_multipart([ECS_tools.intToBytes(self.transitionNumber),command.encode()])
-            #check if the command has arrived
             try:
+                socketSender = self.createSendSocket()
+                socketSender.send_multipart([ECS_tools.intToBytes(self.transitionNumber),command.encode()])
+                #check if the command has arrived
                 #receive status code or new State
-                returnMessage = self.socketSender.recv()
+                returnMessage = socketSender.recv()
                 if returnMessage == ECSCodes.busy:
                     self.logfunction("Detector %s is busy" % self.id)
                     return False
             except zmq.Again:
                 self.logfunction("timeout from Detector "+str(self.id)+" for sending "+ command,True)
-                self.createSendSocket()
+                socketSender.close()
+                return False
+            except zmq.error.ContextTerminated:
+                self.logfunction("Detector "+str(self.id)+" was terminated during "+ command,True)
+                socketSender.close()
                 return False
         return True
 
@@ -137,16 +147,16 @@ class Detector:
         return self.id
 
     def getState(self):
-        if self.active == False:
+        if not self.active.isSet():
             return "inactive"
-        if self.connected == False:
+        if not self.connected:
             return "Connection Problem"
         return self.stateMachine.currentState
 
     def getMappedState(self):
-        if self.active == False:
+        if not self.active.isSet():
             return "inactive"
-        if self.connected == False:
+        if not self.connected:
             return "Connection Problem"
         return self.mapper[self.stateMachine.currentState]
 
@@ -169,7 +179,7 @@ class Detector:
 
     def terminate(self):
         """ stops the ping thread"""
-        self.terminate_bool = True
+        self.zmqContext.term()
 
     def getReady(self):
         pass
@@ -185,8 +195,8 @@ class Detector:
         requestSocket.connect(self.pingAddress)
         requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
         requestSocket.setsockopt(zmq.LINGER,0)
-        requestSocket.send(ECSCodes.abort)
         try:
+            requestSocket.send(ECSCodes.abort)
             state = requestSocket.recv().decode()
             self.removePendingTransition(self.id)
             self.inTransition = False

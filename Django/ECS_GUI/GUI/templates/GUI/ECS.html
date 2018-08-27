@@ -1,50 +1,67 @@
 <!DOCTYPE html>
 <html>
 <head>
+<meta http-equiv=”Pragma” content=”no-cache”>
+<meta http-equiv=”Expires” content=”-1″>
+<meta http-equiv=”CACHE-CONTROL” content=”NO-CACHE”>
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
 <script>
-var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/ecs/');
-//todo autoreconnect
+function createWebSocket(){
+    var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/ecs/');
 
-updateSocket.onmessage = function(e) {
-    var data = JSON.parse(e.data);
-    var message = data['message'];
-    var type = data['type'];
-
-    if (type == "state"){
-      var update = JSON.parse(message);
-      var id = update['id'];
-      var newState = update['state'];
-      if(newState == "reset"){
-          //clear Table
-          $(".tableRow").remove()
-      }
-      else if (type == "remove"){
-          //delete Row
-          $('#dRow'+id).remove()
-      }
+    updateSocket.onclose = function(e){
+      if (e.code == 1000)
+        //normal shutdown
+        return
       else{
-        stateObject = $('#dState'+id)
-        //check if state already exists
-        if(stateObject.length){
-            stateObject.html(newState);
-        }
-        else{
-            newRow = '<tr class="tableRow"> <td>'+id+'</td><td id="dState'+id+'">'+newState+'</td></tr>'
-            //todo which PCA is the Update from?
-            $("#stateTable"+pcaId).append(newRow)
-        }
+         setTimeout(function(){
+        		console.log("trying to reconnect Websocket");
+        		createWebSocket()
+    	   },2000);
       }
     }
-    else if (type == "log"){
-      $('#log').append(message+"\n");
-      //allways scroll directly to bottom
-      var textarea = document.getElementById('log');
-      textarea.scrollTop = textarea.scrollHeight;
-    }
 
-};
+    updateSocket.onmessage = function(e) {
+        var data = JSON.parse(e.data);
+        var message = data['message'];
+        var type = data['type'];
+        var origin = data['origin']
 
+        if (type == "state"){
+          var update = JSON.parse(message);
+          var id = update['id'];
+          var newState = update['state'];
+          if(newState == "reset"){
+              //clear Table
+              $(".tableRow").remove()
+          }
+          else if (type == "remove"){
+              //delete Row
+              $('#dRow'+id).remove()
+          }
+          else{
+            stateObject = $('#dState'+id)
+            //check if state already exists
+            if(stateObject.length){
+                stateObject.html(newState);
+            }
+            else{
+                newRow = '<tr class="tableRow"> <td>'+id+'</td><td id="dState'+id+'">'+newState+'</td></tr>'
+                //todo which PCA is the Update from?
+                $("#stateTable"+origin).append(newRow)
+            }
+          }
+        }
+        else if (type == "log"){
+          $('#log').append(origin+": "+message+"\n");
+          //allways scroll directly to bottom
+          var textarea = document.getElementById('log');
+          textarea.scrollTop = textarea.scrollHeight;
+        }
+
+    };
+}
+createWebSocket()
 </script>
 </head>
 <body>

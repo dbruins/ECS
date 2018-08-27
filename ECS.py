@@ -8,12 +8,13 @@ class DataBaseWrapper:
     """Handler for the ECS Database"""
     connection = None
 
-    def __init__(self):
+    def __init__(self,logfunction):
         self.connection = sqlite3.connect("ECS_database.db")
 
     def close(self):
         """closes the database Connection"""
         self.connection.close()
+        self.log = logfunction
 
     def getAllDetectors(self):
         """Get All Detectors in Detector Table; returns empty DataObjectCollection if there are now Detectors"""
@@ -23,7 +24,7 @@ class DataBaseWrapper:
             res = c.fetchall()
             return DataObjectCollection(res,detectorDataObject)
         except Exception as e:
-            print("error getting detectors: %s" % str(e))
+            self.log("error getting detectors: %s" % str(e),True)
             return ECSCodes.error
 
     def getDetector(self,id):
@@ -36,7 +37,7 @@ class DataBaseWrapper:
                 return ECSCodes.idUnknown
             return detectorDataObject(res)
         except Exception as e:
-            print ("error getting detector: %s %s" % (str(id),str(e)))
+            self.log("error getting detector: %s %s" % (str(id),str(e)),True)
             return ECSCodes.error
 
     def getAllUnmappedDetetectos(self):
@@ -46,7 +47,7 @@ class DataBaseWrapper:
             res = c.execute("SELECT * FROM Detector Where Detector.id not in (select DetectorId From Mapping)").fetchall()
             return DataObjectCollection(res,detectorDataObject)
         except Exception as e:
-            print("error getting unmapped detectors: %s" % str(e))
+            self.log("error getting unmapped detectors: %s" % str(e),True)
             return ECSCodes.error
 
     def addDetector(self,dataObject):
@@ -59,7 +60,7 @@ class DataBaseWrapper:
             self.connection.commit()
             return ECSCodes.ok
         except Exception as e:
-            print("error inserting values into Detector Table: %s" % str(e))
+            self.log("error inserting values into Detector Table: %s" % str(e),True)
             self.connection.rollback()
             return ECSCodes.error
 
@@ -73,7 +74,7 @@ class DataBaseWrapper:
             self.connection.commit()
             return ECSCodes.ok
         except Exception as e:
-            print("error removing values from Detector Table: %s" % str(e))
+            self.log("error removing values from Detector Table: %s" % str(e),True)
             return ECSCodes.error
 
     def getPartition(self,id):
@@ -86,7 +87,7 @@ class DataBaseWrapper:
                 return ECSCodes.idUnknown
             return partitionDataObject(res)
         except Exception as e:
-            print("error getting partition %s: %s" % (str(id),str(e)))
+            self.log("error getting partition %s: %s" % (str(id),str(e)),True)
             return ECSCodes.error
 
     def getPartitionForDetector(self,id):
@@ -99,7 +100,7 @@ class DataBaseWrapper:
                 return ECSCodes.idUnknown
             return partitionDataObject(res)
         except Exception as e:
-            print("error getting partition for Detector %s: %s" % (str(id),str(e)))
+            self.log("error getting partition for Detector %s: %s" % (str(id),str(e)),True)
             return ECSCodes.error
 
     def getAllPartitions(self):
@@ -110,7 +111,7 @@ class DataBaseWrapper:
             res = c.fetchall()
             return DataObjectCollection(res, partitionDataObject)
         except Exception as e:
-            print("error getting all partitions: %s" % str(e))
+            self.log("error getting all partitions: %s" % str(e),True)
             return ECSCodes.error
 
     def getDetectorsForPartition(self,pcaId):
@@ -122,7 +123,7 @@ class DataBaseWrapper:
             res = c.fetchall()
             return DataObjectCollection(res, detectorDataObject)
         except Exception as e:
-            print("error getting all detectors for Partition %s: %s" % str(pcaId), str(e))
+            self.log("error getting all detectors for Partition %s: %s" % str(pcaId), str(e),True)
             return ECSCodes.error
 
     def addPartition(self,dataObject):
@@ -134,7 +135,7 @@ class DataBaseWrapper:
             self.connection.commit()
             return ECSCodes.ok
         except Exception as e:
-            print("error inserting values into Partition Table: %s" % str(e))
+            self.log("error inserting values into Partition Table: %s" % str(e),True)
             self.connection.rollback()
             return ECSCodes.error
 
@@ -150,7 +151,7 @@ class DataBaseWrapper:
             return ECSCodes.ok
         except Exception as e:
             self.connection.rollback()
-            print("error removing values from Detector Table: %s" % str(e))
+            self.log("error removing values from Detector Table: %s" % str(e),True)
             return ECSCodes.error
 
     def mapDetectorToPCA(self,detId,pcaId):
@@ -163,7 +164,7 @@ class DataBaseWrapper:
             return ECSCodes.ok
         except Exception as e:
             self.connection.rollback()
-            print("error mapping %s to %s: %s" % (str(detId),str(pcaId),str(e)))
+            self.log("error mapping %s to %s: %s" % (str(detId),str(pcaId),str(e)),True)
             return ECSCodes.error
 
     def remapDetector(self,detId,newPcaId,oldPcaID):
@@ -176,7 +177,7 @@ class DataBaseWrapper:
             return ECSCodes.ok
         except Exception as e:
             self.connection.rollback()
-            print("error remapping %s from %s to %s: %s" % (str(detId),str(oldPcaID),str(newPcaId),str(e)))
+            self.log("error remapping %s from %s to %s: %s" % (str(detId),str(oldPcaID),str(newPcaId),str(e)),True)
             return ECSCodes.error
 
     def unmapDetectorFromPCA(self,detId):
@@ -189,7 +190,7 @@ class DataBaseWrapper:
             return ECSCodes.ok
         except Exception as e:
             self.connection.rollback()
-            print("error unmapping %s: %s " % (str(detId),str(e)))
+            self.log("error unmapping %s: %s " % (str(detId),str(e)),True)
             return ECSCodes.error
 
     def usedPortsForAddress(self,address):
@@ -210,7 +211,7 @@ class DataBaseWrapper:
                     ports.append(val)
             return ports
         except Exception as e:
-            print("error getting Ports for Address %s: %s " % (address,str(e)))
+            self.log("error getting Ports for Address %s: %s " % (address,str(e)),True)
             return ECSCodes.error
 
 import zmq
@@ -223,12 +224,13 @@ import json
 from multiprocessing import Queue
 import time
 import ECS_tools
+from datetime import datetime
 #import DataObjects
 
 class ECS:
     """The Experiment Control System"""
     def __init__(self):
-        self.database = DataBaseWrapper()
+        self.database = DataBaseWrapper(self.log)
         self.detectors = self.database.getAllDetectors()
         self.partitions = ECS_tools.MapWrapper()
         partitions = self.database.getAllPartitions()
@@ -237,25 +239,47 @@ class ECS:
         self.connectedPartitions = ECS_tools.MapWrapper()
         self.stateMap = ECS_tools.MapWrapper()
 
-        self.commandSocketQueue = Queue()
         self.disconnectedPCAQueue = Queue()
 
         config = configparser.ConfigParser()
         config.read("init.cfg")
         conf = config["Default"]
-        #todo configfile?
-        self.receive_timeout = 2000
-        self.pingIntervall = 2
-        self.pingTimeout = 2000
+
+        self.receive_timeout = int(conf["receive_timeout"])
+        self.pingInterval = int(conf["pingInterval"])
+        self.pingTimeout = int(conf["pingTimeout"])
 
         #subscribe to all PCAs
-        self.ports = config["ZMQPorts"]
         self.zmqContext = zmq.Context()
 
         #socket for receiving requests from WebUI
         self.replySocket = self.zmqContext.socket(zmq.REP)
         #todo port out of config file
-        self.replySocket.bind("tcp://*:%s" % "5000")
+        self.replySocket.bind("tcp://*:%s" % conf["ECSRequestPort"])
+
+        #log publish socket
+        self.socketLogPublish = self.zmqContext.socket(zmq.PUB)
+        self.socketLogPublish.bind("tcp://*:%s" % conf["ECSLogPort"])
+
+        #init logger
+        self.logfile = conf["logPathECS"]
+        debugMode = bool(conf["debugMode"])
+        logging.basicConfig(
+            format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p',
+            #level = logging.DEBUG,
+            handlers=[
+            #logging to file
+            logging.FileHandler(self.logfile),
+            #logging on console and WebUI
+            logging.StreamHandler()
+        ])
+        logging.getLogger().setLevel(logging.INFO)
+        logging.getLogger().handlers[0].setLevel(logging.INFO)
+        #set console log to info level if in debug mode
+        if debugMode:
+            logging.getLogger().handlers[1].setLevel(logging.INFO)
+        else:
+            logging.getLogger().handlers[1].setLevel(logging.CRITICAL)
 
         #subscribe to all Partitions
         self.socketSubscription = self.zmqContext.socket(zmq.SUB)
@@ -286,47 +310,30 @@ class ECS:
         self.reconnectorThread =  threading.Thread(name="reconnectorThread", target=self.reconnector)
         self.reconnectorThread.start()
 
-        t = threading.Thread(name="commandHandler", target=self.commandSocketHandler)
+        t = threading.Thread(name="commandHandler", target=self.pingHandler)
         t.start()
 
-
-    def commandSocketHandler(self):
-        """send heartbeat/ping and commands on command socket"""
-        nextPing = time.time() + self.pingIntervall
+    def pingHandler(self):
+        """send heartbeat/ping"""
         while True:
-            if not self.commandSocketQueue.empty():
-                #sequential message processing might scale very badly if there a lot of pca especially if a pca has timeout
-                id, command = self.commandSocketQueue.get()
+            #sequential message processing might scale very badly if there a lot of pca especially if a pca has timeout
+            nextPing = time.time() + self.pingInterval
+            socket = None
+            for id in self.connectedPartitions:
                 pca = self.partitions[id]
-                socket = None
                 socket = self.resetSocket(socket,pca.address,pca.portCommand,zmq.REQ)
-                if command == ECSCodes.ping:
-                    socket.setsockopt(zmq.RCVTIMEO, self.pingTimeout)
-                else:
-                    socket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-
-                #try to send message
-                socket.send(command)
-                r = None
+                socket.setsockopt(zmq.RCVTIMEO, self.pingTimeout)
+                socket.send(ECSCodes.ping)
                 try:
                     r = socket.recv()
                 except zmq.Again:
                     self.handleDisconnection(id)
-                if r != ECSCodes.ok:
-                    print("received error for sending command: %s " % str(command))
-                socket.close()
-                if not r:
-                    #try to resend later ?
-                    #self.commandSocketQueue.put(m)
-                    continue
-                if command != ECSCodes.ping:
-                    #we've just send a message we don't need a ping
-                    nextPing = time.time() + self.pingIntervall
+                finally:
+                    socket.close()
             if time.time() > nextPing:
-                #it is time for a ping
-                for id in self.connectedPartitions:
-                    self.commandSocketQueue.put((id,ECSCodes.ping))
-                    nextPing = time.time() + self.pingIntervall
+                continue
+            else:
+                time.sleep(self.pingInterval)
 
     def reconnector(self):
         """Thread which trys to reconnect to PCAs"""
@@ -343,7 +350,7 @@ class ECS:
 
     def waitForRequests(self):
         #SQLite objects created in a thread can only be used in that same thread. So we need a second connection -_-
-        db = DataBaseWrapper()
+        db = DataBaseWrapper(self.log)
         while True:
             m = self.replySocket.recv_multipart()
             arg = None
@@ -353,7 +360,7 @@ class ECS:
             elif len(m) == 1:
                 code = m[0]
             else:
-                print ("received malformed request message: %s", str(m))
+                self.log("received malformed request message: %s", str(m),True)
                 continue
 
             def createPCA(arg):
@@ -385,8 +392,46 @@ class ECS:
                     ret = db.mapDetectorToPCA(k,v)
                     if ret == ECSCodes.error:
                         return ECSCodes.error
+
+                #inform DetectorController
+                requestSocket = self.zmqContext.socket(zmq.REQ)
+                requestSocket.connect("tcp://%s:%s"  % (detector.address,detector.portCommand))
+                requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+                requestSocket.send_multipart([ECSCodes.detectorChangePartition,newPartition.asJsonString().encode()])
+                try:
+                    ret = requestSocket.recv()
+                    requestSocket.close()
+                except zmq.Again:
+                    self.log("timeout changing Detector %s PCA" % (detector.id),True)
+                    requestSocket.close()
+                    return ECSCodes.error
+                except Exception as e:
+                    self.log("error changing Detector %s PCA: %s " % (detector.id),str(e),True)
+                    requestSocket.close()
+                    return ECSCodes.error
+                if ret != ECSCodes.ok:
+                    self.log("%s returned error for changing PCA" % (detector.id),True)
+                    requestSocket.close()
+                    return ECSCodes.error
+                requestSocket.close()
+
+                #add to Partition
+                requestSocket = self.zmqContext.socket(zmq.REQ)
+                requestSocket.connect("tcp://%s:%s"  % (newPartition.address,newPartition.portCommand))
+                requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+                requestSocket.send_multipart([ECSCodes.addDetector,detector.asJsonString().encode()])
+                try:
+                    ret = requestSocket.recv()
+                    requestSocket.close()
+                except zmq.Again:
+                    self.log("timeout adding Detector to %s" % (newPartition.id),True)
+                    requestSocket.close()
+                    return ECSCodes.error
+                except Exception as e:
+                    self.log("error adding Detector to %s: %s " % (newPartition.id,str(e)),True)
+                    requestSocket.close()
+                    return ECSCodes.error
                 return ECSCodes.ok
-                #todo add Detectors to running system
 
             def remapDetector(arg):
                 """moves a Detector between Partitions"""
@@ -414,42 +459,19 @@ class ECS:
                     ret = requestSocket.recv()
                     requestSocket.close()
                 except zmq.Again:
-                    print ("timeout removing Detector from %s" % (oldPartition.id))
+                    self.log("timeout removing Detector from %s" % (oldPartition.id),True)
                     requestSocket.close()
                     return ECSCodes.error
                 except Exception as e:
-                    print ("error removing Detector from %s: %s " % (oldPartition.id,str(e)))
+                    self.log("error removing Detector from %s: %s " % (oldPartition.id,str(e)),True)
                     requestSocket.close()
                     return ECSCodes.error
                 if ret != ECSCodes.ok:
-                    print("%s returned error for removing Detector" % (oldPartition.id))
+                    self.log("%s returned error for removing Detector" % (oldPartition.id),True)
                     requestSocket.close()
                     return ECSCodes.error
                 requestSocket.close()
                 print("removed")
-
-                #inform DetectorController
-                requestSocket = self.zmqContext.socket(zmq.REQ)
-                requestSocket.connect("tcp://%s:%s"  % (detector.address,detector.portCommand))
-                requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-                requestSocket.send_multipart([ECSCodes.detectorChangePartition,newPartition.asJsonString().encode()])
-                try:
-                    ret = requestSocket.recv()
-                    requestSocket.close()
-                except zmq.Again:
-                    print ("timeout changing Detector %s PCA" % (detector.id))
-                    requestSocket.close()
-                    return ECSCodes.error
-                except Exception as e:
-                    print ("error changing Detector %s PCA: %s " % (detector.id),str(e))
-                    requestSocket.close()
-                    return ECSCodes.error
-                if ret != ECSCodes.ok:
-                    print("%s returned error for changing PCA" % (detector.id))
-                    requestSocket.close()
-                    return ECSCodes.error
-                requestSocket.close()
-                print("detector informed")
 
                 #add to new Partition
                 requestSocket = self.zmqContext.socket(zmq.REQ)
@@ -460,19 +482,43 @@ class ECS:
                     ret = requestSocket.recv()
                     requestSocket.close()
                 except zmq.Again:
-                    print ("timeout adding Detector to %s" % (newPartition.id))
+                    self.log("timeout adding Detector to %s" % (newPartition.id),True)
                     requestSocket.close()
                     return ECSCodes.error
                 except Exception as e:
-                    print ("error adding Detector to %s: %s " % (newPartition.id,str(e)))
+                    self.log("error adding Detector to %s: %s " % (newPartition.id,str(e)),True)
                     requestSocket.close()
                     return ECSCodes.error
                 if ret != ECSCodes.ok:
-                    print("%s returned error for removing Detector" % (newPartition.id))
+                    self.log("%s returned error for removing Detector" % (newPartition.id),True)
                     requestSocket.close()
                     return ECSCodes.error
                 requestSocket.close()
                 print("detector added")
+
+                #inform DetectorController
+                requestSocket = self.zmqContext.socket(zmq.REQ)
+                requestSocket.connect("tcp://%s:%s"  % (detector.address,detector.portCommand))
+                requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+                requestSocket.send_multipart([ECSCodes.detectorChangePartition,newPartition.asJsonString().encode()])
+                try:
+                    ret = requestSocket.recv()
+                    requestSocket.close()
+                except zmq.Again:
+                    self.log("timeout changing Detector %s PCA" % (detector.id),True)
+                    requestSocket.close()
+                    return ECSCodes.error
+                except Exception as e:
+                    self.log("error changing Detector %s PCA: %s " % (detector.id),str(e),True)
+                    requestSocket.close()
+                    return ECSCodes.error
+                if ret != ECSCodes.ok:
+                    self.log("%s returned error for changing PCA" % (detector.id),True)
+                    requestSocket.close()
+                    return ECSCodes.error
+                requestSocket.close()
+                print("detector informed")
+
                 return ECSCodes.ok
 
             def switcher(code,arg=None):
@@ -534,7 +580,7 @@ class ECS:
                 id = id.decode()
                 if state == ECSCodes.reset:
                     #delete PCA and Detectors associated with PCA From Map
-                    db = DataBaseWrapper()
+                    db = DataBaseWrapper(self.log)
                     dets = db.getDetectorsForPartition(id).asDictionary()
                     arg = list(dets.keys())
                     arg.append(id)
@@ -554,6 +600,13 @@ class ECS:
             else:
                 self.stateMap[id] = (sequence, state)
 
+    def log(self,logmessage,error=False):
+        str=datetime.now().strftime("%Y-%m-%d %H:%M:%S")+":" + logmessage
+        self.socketLogPublish.send(str.encode())
+        if error:
+            logging.critical(logmessage)
+        else:
+            logging.info(logmessage)
 
 if __name__ == "__main__":
     test = ECS()

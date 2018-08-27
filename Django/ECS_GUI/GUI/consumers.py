@@ -25,13 +25,20 @@ class updateConsumer(WebsocketConsumer):
         message = text_data_json["message"]
 
     def update(self,event):
-        self.send(text_data=json.dumps({
+        message = {
             "type": "state",
             "message": event["text"]
-        }))
+        }
+        if "origin" in event:
+            message["origin"] = event["origin"]
+        self.send(text_data=json.dumps(message))
+
 
     def logUpdate(self,event):
-        self.send(text_data=json.dumps({
+        message = {
             "type": "log",
             "message": event["text"]
-        }))
+        }
+        if "origin" in event:
+            message["origin"] = event["origin"]
+        self.send(text_data=json.dumps(message))

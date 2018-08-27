@@ -1,53 +1,70 @@
 <!DOCTYPE html>
 <html>
 <head>
+{%block control%}
+{% load guardian_tags %}
+{% get_obj_perms request.user for pcaObject as "pcaPerms" %}
+<meta http-equiv=”Pragma” content=”no-cache”>
+<meta http-equiv=”Expires” content=”-1″>
+<meta http-equiv=”CACHE-CONTROL” content=”NO-CACHE”>
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
 <script>
-var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/{{pcaId}}/');
-//todo autoreconnect
+function createWebSocket(){
+    var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/{{pcaId}}/');
 
-updateSocket.onmessage = function(e) {
-    var data = JSON.parse(e.data);
-    var message = data['message'];
-    var type = data['type'];
-
-    if (type == "state"){
-      var update = JSON.parse(message);
-      var id = update['id'];
-      var newState = update['state'];
-      if(newState == "reset"){
-          //clear Table
-          $(".tableRow").remove()
-      }
-      else if (type == "remove"){
-          //delete Row
-          $('#dRow'+id).remove()
-      }
-      else{
-        buttonHtml = "";
-        if (newState == "inactive")
-          buttonHtml = '<button id="activeToggle" onclick="setactive('+ update['id'] +')" > activate  </button>';
-        else
-          buttonHtml = '<button id="activeToggle" onclick="setinactive('+ update['id'] +')" > deactivate  </button>';
-        stateObject = $('#dState'+id)
-        //check if state already exists
-        if(stateObject.length){
-            stateObject.html(newState+buttonHtml);
-        }
-        else{
-            newRow = '<tr class="tableRow"> <td>'+id+'</td><td id="dState'+id+'">'+newState+buttonHtml+'</td></tr>'
-            $("#stateTable").append(newRow)
-        }
-      }
-    }
-    else if (type == "log"){
-      $('#log').append(message+"\n");
-      //allways scroll directly to bottom
-      var textarea = document.getElementById('log');
-      textarea.scrollTop = textarea.scrollHeight;
+    updateSocket.onclose = function(e){
+       setTimeout(function(){
+      		console.log("trying to reconnect Websocket");
+      		createWebSocket()
+  	   },2000);
     }
 
-};
+    updateSocket.onmessage = function(e) {
+        var data = JSON.parse(e.data);
+        var message = data['message'];
+        var type = data['type'];
+
+        if (type == "state"){
+          var update = JSON.parse(message);
+          var id = update['id'];
+          var newState = update['state'];
+          if(newState == "reset"){
+              //clear Table
+              $(".tableRow").remove()
+          }
+          else if (type == "remove"){
+              //delete Row
+              $('#dRow'+id).remove()
+          }
+          else{
+            buttonHtml = "";
+            {% if "has_control" in pcaPerms %}
+            if (newState == "inactive")
+              buttonHtml = '<button id="activeToggle" onclick="setactive('+ update['id'] +')" > activate  </button>';
+            else
+              buttonHtml = '<button id="activeToggle" onclick="setinactive('+ update['id'] +')" > deactivate  </button>';
+            {% endif %}
+            stateObject = $('#dState'+id)
+            //check if state already exists
+            if(stateObject.length){
+                stateObject.html(newState+buttonHtml);
+            }
+            else{
+                newRow = '<tr class="tableRow"> <td>'+id+'</td><td id="dState'+id+'">'+newState+buttonHtml+'</td></tr>'
+                $("#stateTable").append(newRow)
+            }
+          }
+        }
+        else if (type == "log"){
+          $('#log').append(message+"\n");
+          //allways scroll directly to bottom
+          var textarea = document.getElementById('log');
+          textarea.scrollTop = textarea.scrollHeight;
+        }
+
+    };
+}
+createWebSocket()
 
 function setactive(id){
   $.ajax({
@@ -112,9 +129,6 @@ $(document).ready(function() {
 </head>
 
 <body>
-{%block control%}
-{% load guardian_tags %}
-{% get_obj_perms request.user for pcaObject as "pcaPerms" %}
 {% if perms.GUI.can_take_control %}
   {% if userInControl %}
       <p>Control already Taken by User : {{userInControl}}</p>
@@ -150,10 +164,12 @@ $(document).ready(function() {
         </td>
         <td id="dState{{state.0}}" >
           {{state.1.1}}
-          {%if state.1.1 == "inactive" %}
-            <button id="activeToggle" onclick="setactive({{state.0}})" > activate  </button>
-          {% else %}
-            <button id="activeToggle" onclick="setinactive({{state.0}})" > deactivate  </button>
+          {% if "has_control" in pcaPerms %}
+            {%if state.1.1 == "inactive" %}
+              <button id="activeToggle" onclick="setactive({{state.0}})" > activate  </button>
+            {% else %}
+              <button id="activeToggle" onclick="setinactive({{state.0}})" > deactivate  </button>
+            {% endif %}
           {% endif %}
         </td>
     </tr>
