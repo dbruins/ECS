@@ -32,6 +32,7 @@ class ECSHandler:
         self.context = zmq.Context()
         self.pcaCollection = None
         self.pcaHandlers = {}
+        self.receive_timeout = settings.TIMEOUT
 
         #logsubscription
         self.socketSubLog = self.context.socket(zmq.SUB)
@@ -46,7 +47,6 @@ class ECSHandler:
             ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.getAllPCAs])
             if ret == ECSCodes.timeout:
                 self.log("timeout getting PCA List")
-                print("timeout getting PCA List")
             else:
                 pJSON = ret.decode()
                 pJSON = json.loads(pJSON)
@@ -60,10 +60,22 @@ class ECSHandler:
             self.pcaHandlers[p.id] = PCAHandler(p)
             #add database object for storing user permissions
             pcaModel.objects.create(id=p.id)
+        #user Permissions ecs
+        pcaModel.objects.create(id="ecs")
+
+        #Unused Detector Controller
+        self.unmappedStateTable = ECS_tools.MapWrapper()
+        #UpdateSubscription
+        self.socketSubUpdate = self.context.socket(zmq.SUB)
+        self.socketSubUpdate.connect("tcp://%s:%s" % (settings.ECS_ADDRESS,settings.ECS_PUBLISHPORT))
+        self.socketSubUpdate.setsockopt(zmq.SUBSCRIBE, b'')
+        ECS_tools.getStateSnapshot(self.unmappedStateTable,settings.ECS_ADDRESS,settings.ECS_GET_STATETABLE_PORT,timeout=self.receive_timeout,pcaid="unmapped")
+        t = threading.Thread(name="logUpdaterECS", target=self.waitForUnmappedDetectorUpdate)
+        t.start()
 
 
     def request(self,address,port,message):
-        """sends a request from a REQ to REP socket; sends with send_multipart so message hast to be a list; returns encoded return message or timeout code when recv times out"""
+        """sends a request from a REQ to REP socket; sends with send_multipart so message has to be a list; returns encoded returnmessage or timeout code when recv times out"""
         requestSocket = self.context.socket(zmq.REQ)
         requestSocket.connect("tcp://%s:%s" % (address,port))
         requestSocket.setsockopt(zmq.RCVTIMEO, int(settings.TIMEOUT))
@@ -72,12 +84,13 @@ class ECSHandler:
         requestSocket.send_multipart(message)
         try:
             ret = requestSocket.recv()
-            print(ret)
             requestSocket.close()
             return ret
         except zmq.Again:
             requestSocket.close()
             return ECSCodes.timeout
+        finally:
+            requestSocket.close()
 
     def getPCAHandler(self,id):
         if id in self.pcaHandlers:
@@ -89,6 +102,9 @@ class ECSHandler:
         ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.getPartitionForId, id.encode()])
         if ret == ECSCodes.timeout:
             self.log("timeout getting Partition")
+            return False
+        if ret == ECSCodes.timeout:
+            self.log("partition id is unknown")
             return False
         partition = partitionDataObject(json.loads(ret.decode()))
         return partition
@@ -103,14 +119,15 @@ class ECSHandler:
             self.pcaCollection.add(partitionObject)
             self.pcaHandlers[partitionObject.id] = PCAHandler(partitionObject)
             self.log("partition %s created" % partitionObject.id)
+            #add Model for permissions
+            pcaModel.objects.create(id=partitionObject.id)
             return True
         if ret == ECSCodes.timeout:
             self.log("timeout creating partition")
-        if ret == ECS.errorCreatingPartition:
-            self.log("error creating Partition")
-        if ret == ECSCodes.errorMapping:
-            self.log("error mapping detectors to Partition")
-        return False
+            return "timeout creating partition"
+        errorDict = json.loads(ret.decode())
+        self.log("error creating pca: %s" % (errorDict["error"]))
+        return errorDict["error"]
 
     def createDetector(self,detectorObject):
         ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.createDetector, detectorObject.asJsonString().encode()])
@@ -168,13 +185,61 @@ class ECSHandler:
         arg["detectorId"] = detectorId
         arg["partitionId"] = toPCAId
         ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.detectorChangePartition, json.dumps(arg).encode()])
-        if ret == ECSCodes.error:
-            self.log("error moving Detector to pca %s" % toPCAId)
-            return False
+        if ret == ECSCodes.ok:
+            return True
         if ret == ECSCodes.timeout:
-            self.log("timeout moving Detector to pca %s" % toPCAId)
+            self.log("timeout moving Detector %s to pca %s" % (detectorId,toPCAId))
             return False
-        return True
+        if ret == ECSCodes.error:
+            self.log("error moving Detector %s to pca %s" % (detectorId,toPCAId))
+            return False
+        errorDict = json.loads(ret.decode())
+        self.log("error moving Detector %s to pca %s: %s" % (detectorId,toPCAId,errorDict["error"]))
+        return errorDict["error"]
+
+    def waitForUnmappedDetectorUpdate(self):
+        while True:
+            m = self.socketSubUpdate.recv_multipart()
+            if len(m) != 3:
+                print ("malformed update: "+m)
+                continue
+            else:
+                id,sequence,state = m
+
+            id = id.decode()
+            sequence = ECS_tools.intFromBytes(sequence)
+
+            if state == ECSCodes.reset:
+                self.unmappedStateTable.reset()
+                #reset code for Web Browser
+                state = "reset"
+            elif state == ECSCodes.removed:
+                del self.unmappedStateTable[id]
+                #remove code for Web Browser
+                state = "remove"
+            else:
+                state = state.decode()
+                print("received update",id, sequence, state)
+                self.unmappedStateTable[id] = (sequence, state)
+
+            #send update to WebUI(s)
+            jsonWebUpdate = {"id" : id,
+                             "state" : state,
+                            }
+            jsonWebUpdate = json.dumps(jsonWebUpdate)
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                #the group name
+                "ecs",
+                {
+                    #calls method update in the consumer which is registered to channel layer
+                    'type': "update",
+                    #argument(s) with which update is called
+                    'text': jsonWebUpdate,
+                    #ecs page needs to know where the update came from
+                    'origin': "unmapped"
+                }
+            )
 
     def waitForECSLogs(self):
         """wait for new log messages from ecs"""
@@ -378,21 +443,44 @@ class PCAHandler:
 ecs = ECSHandler()
 
 
-# from django.contrib.auth import user_logged_in, user_logged_out
-# from django.dispatch import receiver
 # gui = apps.get_app_config('GUI')
 # print(gui.test)
 #
-# @receiver(user_logged_in)
-# def on_user_logged_in(sender, request, **kwargs):
-#     print(request.user)
+from django.contrib.auth import user_logged_out
+from django.core.signals import request_finished
+from django.dispatch import receiver
+from django.contrib.auth.models import User
 
-def checkIfHasControl(user,pcaId):
-    pcaObject = pcaModel.objects.filter(id=pcaId).get()
-    if not user.has_perm("has_control",pcaObject):
-        return False
-    return True
+from django.dispatch import Signal
 
+#@receiver(request_finished2)
+def my_callback(sender, request, **kwargs):
+    print(sender)
+    print(kwargs)
+    print(request.user)
+    print("Request finished!")
+
+request_finished2 = Signal(providing_args=["request"])
+request_finished2.connect(my_callback)
+@receiver(user_logged_out)
+def on_user_logged_out(sender, request, **kwargs):
+     #pcas
+    for pca in ecs.pcaHandlers.items():
+        pcaObject = pcaModel.objects.filter(id=pca[0]).get()
+        if request.user.has_perm("has_control",pcaObject):
+         remove_perm('has_control', request.user, pcaObject)
+    #ecs
+    pcaObject = pcaModel.objects.filter(id="ecs").get()
+    if request.user.has_perm("has_control",pcaObject):
+        remove_perm('has_control', request.user, pcaObject)
+
+def permission_timeout():
+    time.sleep(10)
+    for user, perms in usersWithPermission.items():
+        if "has_control" in perms:
+            return redirect
+
+from django.views.generic import TemplateView
 #views
 @login_required
 def index(request):
@@ -400,12 +488,32 @@ def index(request):
     ecsMap = {}
     for pca in ecs.pcaHandlers.items():
         ecsMap[pca[0]] = pca[1].stateMap.map
-    return render(request, "GUI/ECS.html",{"ecsMap" : ecsMap, })
+    ecsMap["unmapped"] = ecs.unmappedStateTable.map
+
+    pcaObject = pcaModel.objects.filter(id="ecs").get()
+
+    #check if another user has control over pca
+    userInControl = None
+    usersWithPermission = get_users_with_perms(pcaObject, attach_perms = True)
+    for user, perms in usersWithPermission.items():
+        if "has_control" in perms:
+            userInControl = user
+            break
+    if userInControl == request.user:
+        userInControl = "You"
+    request_finished2.send(sender=None,request=request)
+    return render(request, "GUI/ECS.html",{"ecsMap" : ecsMap,"pcaObject" : pcaObject, "userInControl":userInControl,})
+
+class AboutView(TemplateView):
+    template_name = "GUI/states.html"
+    stateMap = ecs.unmappedStateTable.map
+
+
+
 
 @login_required
 def input_create_pca(request):
-    unmappedDetectors = ecs.getUnmappedDetectors()
-    return render(request, 'GUI/ECS_Create_Partition.html',{"unmappedDetectors" : unmappedDetectors})
+    return render(request, 'GUI/ECS_Create_Partition.html')
 
 @login_required
 def create_pca(request):
@@ -421,10 +529,13 @@ def create_pca(request):
             }
     selectedDetectors = request.POST.getlist("unmappedDetectors")
     obj = partitionDataObject(values)
-    if ecs.createPartition(obj,selectedDetectors):
+    errorMessage = ""
+    ret = ecs.createPartition(obj,selectedDetectors)
+    if ret == True:
         return HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
-    unmappedDetectors = ecs.getUnmappedDetectors()
-    return render(request, 'GUI/ECS_Create_Partition.html', {"error" : True, "post":request.POST, "unmappedDetectors" : unmappedDetectors})
+    else:
+        errorMessage = ret
+        return render(request, 'GUI/ECS_Create_Partition.html', {"errorMessage" : errorMessage, "post":request.POST})
 
 @login_required
 def input_edit_pca(request):
@@ -475,7 +586,6 @@ def pca(request,pcaId):
             break
     if userInControl == request.user:
         userInControl = "You"
-    print(userInControl)
     return render(request, "GUI/monitor.html",{'stateMap': pca.stateMap.map, "pcaId" : pcaId, "pcaObject" : pcaObject, "userInControl":userInControl})
 
 @login_required
@@ -534,49 +644,67 @@ def stop(request,pcaId):
 
 @login_required
 def input_MoveDetectors(request):
-    return render(request, 'GUI/ECS_moveDetectors.html',{"partitions" : ecs.pcaHandlers.items()})
+    unmappedDetectors = ecs.getUnmappedDetectors()
+    return render(request, 'GUI/ECS_moveDetectors.html',{"partitions" : ecs.pcaHandlers.items(), "unmappedDetectors" : unmappedDetectors})
 
 @login_required
 def moveDetectors(request):
     toPcaId = request.POST['toPartition']
     detectors = request.POST.getlist("selectedDetectors")
     for dId in detectors:
-        print(dId,toPcaId)
-        if not ecs.moveDetector(dId,toPcaId):
-            return render(request, 'GUI/ECS_moveDetectors.html',{"partitions" : ecs.pcaHandlers.items(), "error":True})
+        ret = ecs.moveDetector(dId,toPcaId)
+        if ret != True:
+            errorMessage = ret
+            return render(request, 'GUI/ECS_moveDetectors.html',{"partitions" : ecs.pcaHandlers.items(), "errorMessage" : errorMessage})
     return HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
+
 
 @login_required
 def getDetectorListForPCA(request):
     """Ask ECS for DetectorList from Database"""
     pcaId = request.POST['pcaId']
-    print(pcaId)
     detList = ecs.getDetectorListForPartition(pcaId)
     if detList == ECSCodes.error:
         return HttpResponse(status=404)
     else:
-        print(detList.asDictionary())
+        return JsonResponse(detList.asDictionary())
+
+@login_required
+def getUnmappedDetectors(request):
+    """Ask ECS for DetectorList from Database"""
+    detList = ecs.ecs.getUnmappedDetectors()
+    if detList == ECSCodes.error:
+        return HttpResponse(status=404)
+    else:
         return JsonResponse(detList.asDictionary())
 
 @permission_required('GUI.can_take_control')
 @login_required
 def takeControl(request,pcaId):
-    pca = ecs.getPCAHandler(pcaId)
     pcaObject = pcaModel.objects.filter(id=pcaId).get()
-
+    if pcaId == "ecs":
+        redirect = HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
+    else:
+        pca = ecs.getPCAHandler(pcaId)
+        redirect = HttpResponseRedirect("/pca/"+pcaId,{'stateMap': pca.stateMap.map, "pcaId" : pcaId, "pcaObject" : pcaObject})
     #check if other user has control for pca
     usersWithPermission = get_users_with_perms(pcaObject, attach_perms = True)
     for user, perms in usersWithPermission.items():
         if "has_control" in perms:
-            return HttpResponseRedirect("/pca/"+pcaId,{'stateMap': pca.stateMap.map, "pcaId" : pcaId, "pcaObject" : pcaObject})
+            return redirect
     assign_perm('has_control', request.user, pcaObject)
-    return HttpResponseRedirect("/pca/"+pcaId,{'stateMap': pca.stateMap.map, "pcaId" : pcaId, "pcaObject" : pcaObject})
+    return redirect
 
 @permission_required('GUI.can_take_control')
 @login_required
 def giveUpControl(request,pcaId):
-    pca = ecs.getPCAHandler(pcaId)
     pcaObject = pcaModel.objects.filter(id=pcaId).get()
+    if pcaId == "ecs":
+        redirect = HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
+    else:
+        pca = ecs.getPCAHandler(pcaId)
+        redirect = HttpResponseRedirect("/pca/"+pcaId,{'stateMap': pca.stateMap.map, "pcaId" : pcaId, "pcaObject" : pcaObject})
+
     remove_perm('has_control', request.user, pcaObject)
 
-    return HttpResponseRedirect("/pca/"+pcaId,{'stateMap': pca.stateMap.map, "pcaId" : pcaId, "pcaObject" : pcaObject})
+    return redirect

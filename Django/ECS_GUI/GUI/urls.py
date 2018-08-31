@@ -26,4 +26,5 @@ urlpatterns = [
     path('setActive/<str:pcaId>',views.setActive, name='setActive' ),
     path('setInactive/<str:pcaId>',views.setInactive, name='setInactive' ),
     path('getDetectorListForPca/',views.getDetectorListForPCA,name='getDetectorListForPCA'),
+    path('about/', views.AboutView.as_view()),
 ]

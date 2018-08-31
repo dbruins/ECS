@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html>
 <head>
+{%block control%}
+{% load guardian_tags %}
+{% get_obj_perms request.user for pcaObject as "pcaPerms" %}
 <meta http-equiv=”Pragma” content=”no-cache”>
 <meta http-equiv=”Expires” content=”-1″>
 <meta http-equiv=”CACHE-CONTROL” content=”NO-CACHE”>
@@ -71,16 +74,38 @@ createWebSocket()
 {% else %}
   <li><a href="{% url 'GUI:login'%}?next={{request.path}}">Login</a></li>
 {% endif %}
+{% if perms.GUI.can_take_control %}
+  {% if userInControl %}
+      <p>Control already Taken by User : {{userInControl}}</p>
+  {% endif %}
+  {% if "has_control" in pcaPerms %}
+      <form action="{% url 'GUI:giveup_control' 'ecs'%}" method="post">
+        {% csrf_token %}
+        <input type="submit" value="give up control">
+      </form>
+  {% else %}
+      <form action="{% url 'GUI:take_control' 'ecs'%}" method="post">
+        {% csrf_token %}
+        <input type="submit" value="take control">
+      </form>
+  {% endif %}
+{% endif %}
 <h1>ECS Status</h1>
 
 <div>
   {% for pca in ecsMap.items %}
+  {% if pca.0 != "unmapped"%}
   <h2>PCA <a href="{%url 'GUI:pca' pca.0%}">{{pca.0}}</a> </h2>
+  {% if "has_control" in pcaPerms %}
   <form action="{% url 'GUI:input_edit_pca' %}" method="post">
     <input type="hidden" name="id" value="{{pca.0}}" />
     {% csrf_token %}
     <input type="submit" value="edit Partition">
   </form>
+  {%endif%}
+  {%else%}
+  <h2>Unused Detectors</h2>
+  {%endif%}
   <table id="stateTable{{pca.0}}">
     <tr>
       <th>Detector</th>
@@ -101,6 +126,7 @@ createWebSocket()
   </table>
   {% endfor %}
 </div>
+{% if "has_control" in pcaPerms %}
 <div>
   <form action="{% url 'GUI:input_create_pca' %}" method="post">
     {% csrf_token %}
@@ -115,7 +141,8 @@ createWebSocket()
     <input type="submit" value="MoveDetectors">
   </form>
 </div>
+{%endif%}
 <textarea readonly id="log"></textarea>
-
+{%endblock%}
 </body>
 </html>

@@ -4,7 +4,8 @@
     <th>Detector</th>
     <th>Status</th>
   </tr>
-  {% for state in stateMap.items %}
+  {{view.stateMap}}
+  {% for state in view.stateMap.items %}
   <tr>
       <td id="det{{state.0}}">
         {% if state.0 == 0%}
@@ -17,5 +18,3 @@
   </tr>
   {% endfor %}
 </table>
-<div id="log">{% for log in logs %}{{log}}
-{% endfor %}</div>

@@ -33,10 +33,12 @@ class Detector:
         self.receive_timeout = int(conf["timeout"])
         self.pingInterval = int(conf["pingInterval"])
         self.pingAddress = ("tcp://%s:%s" % (address ,portCommand))
-        self.address = ("tcp://%s:%s" % (address ,portTransition))
+        self.transitionAddress = ("tcp://%s:%s" % (address ,portTransition))
+        self.address = address
 
         #zmq Context for Detector
         self.zmqContext = zmq.Context()
+
 
         #init with the current state of the Detector
         self.connected = False
@@ -57,10 +59,16 @@ class Detector:
             if not self.active.isSet():
                 #hold pings while inactive
                 self.active.wait()
-            try:
                 if self.zmqContext.closed:
+                    pingSocket.close()
                     break
+            try:
+                #for whatever reason this raises a different Exception for ContextTerminated than send or recv
                 pingSocket = self.zmqContext.socket(zmq.REQ)
+            except zmq.error.ZMQError:
+                pingSocket.close()
+                break
+            try:
                 pingSocket.connect(self.pingAddress)
                 pingSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
                 pingSocket.setsockopt(zmq.LINGER,0)
@@ -84,7 +92,6 @@ class Detector:
                     self.pcaTimeoutFunktion(self.id)
             except zmq.error.ContextTerminated:
                 #termination during sending ping
-                self.logfunction("Detector "+str(self.id)+" was terminated",True)
                 pingSocket.close()
                 break
             finally:
@@ -100,7 +107,7 @@ class Detector:
     def createSendSocket(self):
         """init or reset the send Socket"""
         socketSender = self.zmqContext.socket(zmq.REQ)
-        socketSender.connect(self.address)
+        socketSender.connect(self.transitionAddress)
         socketSender.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
         socketSender.setsockopt(zmq.LINGER,0)
         return socketSender
@@ -179,7 +186,9 @@ class Detector:
 
     def terminate(self):
         """ stops the ping thread"""
+        self.setActive()
         self.zmqContext.term()
+        self.logfunction("Detector "+str(self.id)+" was terminated",True)
 
     def getReady(self):
         pass

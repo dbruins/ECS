@@ -1,7 +1,7 @@
 <html>
   <body>
-    {% if error%}
-      <a>error creating Partion</a>
+    {% if errorMessage%}
+      <a>{{errorMessage}}</a>
     {% endif %}
     <form action="{% url 'GUI:create_pca' %}" method="post">
       {% csrf_token %}
@@ -13,15 +13,6 @@
       <div><a>get Current State Port</a><input id="portCurrentState" name="portCurrentState" type="text" value = "{% if post %}{{post.portCurrentState}}{% endif%}"></div>
       <div><a>Single Request Port</a><input id="portSingleRequest" name="portSingleRequest" type="text" value = "{% if post %}{{post.portSingleRequest}}{% endif%}"></div>
       <div><a>Command Port</a><input id="portCommand" name="portCommand" type="text" value = "{% if post %}{{post.portCommand}}{% endif%}"></div>
-      {%if unmappedDetectors %}
-      <div id="unmappedDetectors">
-          <a>select Detectors for Partition</a>
-          <br>
-          {% for d in unmappedDetectors %}
-            <a>Detector {{d.id}} </a><input type="checkbox" name="unmappedDetectors" value="{{d.id}}"<br/>
-          {% endfor %}
-      </div>
-      {%endif%}
       <br/>
       <input type="submit" value="create new Partition">
     </form>

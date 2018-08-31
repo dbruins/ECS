@@ -134,6 +134,8 @@ PINGTIMEOUT = 2000
 ECS_ADDRESS = "localhost"
 ECS_REQUEST_PORT = 5000
 ECS_LOG_PORT = 5001
+ECS_PUBLISHPORT = 5002
+ECS_GET_STATETABLE_PORT = 5003
 
 PCACODESPATH = "/home/daniel/Dokumente/Masterarbeit/Statemachine"
 PCACONFIGPATH = "/home/daniel/Dokumente/Masterarbeit/Statemachine/init.cfg"

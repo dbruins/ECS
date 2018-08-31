@@ -1,18 +1,25 @@
 <html>
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
   <script>
-    var oldFrom = ""
-    var oldTo = ""
+
+    unmappedDetectorsHTML = ""
+    {% for d in unmappedDetectors %}
+    unmappedDetectorsHTML += "<a>Detector "+{{d.id}}+" </a><input type='checkbox' name='selectedDetectors' value='"+{{d.id}}+"'><br/>";
+    {% endfor %}
 
     function changeDetectorList(pcaId){
       //set the DetectorList for the currently selected Parttion
       $("#detectors").empty()
+      if (pcaId == "unmapped"){
+        detDiv = document.getElementById("detectors");
+        detDiv.innerHTML = unmappedDetectorsHTML
+        return
+      }
       $.ajax({
           type: "POST",
           url: "{% url 'GUI:getDetectorListForPCA'%}",
           data:{csrfmiddlewaretoken: '{{ csrf_token }}','pcaId' : pcaId},
           "success": function(result) {
-              console.log(result);
               idArr = Object.keys(result);
               detDiv = document.getElementById("detectors");
               for (i in idArr){
@@ -22,6 +29,8 @@
           },
       });
     }
+    var oldFrom = ""
+    var oldTo = ""
 
     function check(dropdown){
       $("#message").html("")
@@ -43,7 +52,15 @@
           }
           if (dropdown.value == $("#"+otherId).val()){
               //switch places
+              console.log(dropdown.value)
+              console.log(old)
               $("#"+otherId).val(old)
+              if (otherId == "toPartition"){
+                  oldTo = old
+              }
+              else {
+                  oldFrom = old
+              }
               if(changeDetectors)
                   changeDetectorList($("#"+otherId).val())
           }
@@ -54,7 +71,7 @@
       return true
     }
     $(document).ready(function() {
-      //set to to-Dropdown to second entry
+      //set to-Dropdown to second entry
       $("#toPartition").val($("#toPartition option")[1].value)
       oldFrom = $("#fromPartition").val()
       oldTo = $("#toPartition").val()
@@ -63,15 +80,15 @@
     });
   </script>
   <body>
-    <a id="message"></a>
-    {%if error%}
-    <a>error moving Detectors</a>
+    {%if errorMessage%}
+    <a>{{errorMessage}}</a>
     {%endif%}
     <form action="{% url 'GUI:move_detectors' %}" method="post">
       {% csrf_token %}
       <div>
         <label>From Partition</label>
         <select id="fromPartition" name="fromPartition" onchange="check(this);changeDetectorList(this.value)">
+          <option value="unmapped">unused Detectors</option>
           {% for p in partitions %}
             <option value="{{p.1.id}}">{{p.1.id}}</option>
           {% endfor %}
@@ -84,6 +101,7 @@
       <div>
         <label>To Partition</label>
         <select id="toPartition" name="toPartition" onchange="check(this)">
+          <option value="unmapped">unused Detectors</option>
           {% for p in partitions %}
             <option value="{{p.1.id}}">{{p.1.id}}</option>
           {% endfor %}

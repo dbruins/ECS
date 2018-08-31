@@ -19,34 +19,54 @@ import Detector
 from ECS_tools import MapWrapper
 import ECS_tools
 import time
+import zc.lockfile #pip3 install zc.lockfile
+import signal
 
 class PCA:
     def __init__(self,id):
         self.id = id
+
+        #create lock
+        try:
+            self.lock = zc.lockfile.LockFile('lock'+self.id, content_template='{pid}')
+        except zc.lockfile.LockError:
+            print("other Process is already Running "+self.id)
+            exit(1)
+        self.terminate = threading.Event()
+        #handle SIGTERM signal
+        signal.signal(signal.SIGTERM, self.terminatePCA)
+
         #read config File
         config = configparser.ConfigParser()
         config.read("init.cfg")
         conf = config["Default"]
-        context = zmq.Context()
+        self.context = zmq.Context()
 
         #get your config
         configECS = None
         while configECS == None:
-            requestSocket = context.socket(zmq.REQ)
+            requestSocket = self.context.socket(zmq.REQ)
             requestSocket.connect("tcp://%s:%s" % (conf['ECSAddress'],conf['ECSRequestPort']))
             requestSocket.setsockopt(zmq.RCVTIMEO, int(conf['receive_timeout']))
             requestSocket.setsockopt(zmq.LINGER,0)
 
             requestSocket.send_multipart([ECSCodes.pcaAsksForConfig, id.encode()])
             try:
-                configJSON = requestSocket.recv().decode()
-                configJSON = json.loads(configJSON)
+                #returns None in pca is unknown
+                configJSON = requestSocket.recv()
+                if configJSON == ECSCodes.idUnknown:
+                    print("id %s is not in Database" % self.id)
+                    sys.exit(1)
+                configJSON = json.loads(configJSON.decode())
                 configECS = partitionDataObject(configJSON)
             except zmq.Again:
                 print("timeout getting configuration")
                 requestSocket.close()
                 continue
-            requestSocket.close()
+            except zmq.error.ContextTerminated:
+                requestSocket.close()
+            finally:
+                requestSocket.close()
 
         #init stuff
         self.detectors = {}
@@ -62,24 +82,24 @@ class PCA:
         self.commandQueue = Queue()
 
         #ZMQ Socket to publish new state Updates
-        self.socketPublish = context.socket(zmq.PUB)
+        self.socketPublish = self.context.socket(zmq.PUB)
         #todo the connect takes a little time messages until then will be lost
         self.socketPublish.bind("tcp://*:%s" % configECS.portPublish)
 
         #publish logmessages
-        self.socketLogPublish = context.socket(zmq.PUB)
+        self.socketLogPublish = self.context.socket(zmq.PUB)
         self.socketLogPublish.bind("tcp://*:%s" % configECS.portLog)
 
         #Socket to wait for Updates From Detectors
-        self.socketDetectorUpdates = context.socket(zmq.REP)
+        self.socketDetectorUpdates = self.context.socket(zmq.REP)
         self.socketDetectorUpdates.bind("tcp://*:%s" % configECS.portUpdates)
 
         #Socket to serve current statusMap
-        self.socketServeCurrentStatus = context.socket(zmq.ROUTER)
+        self.socketServeCurrentStatus = self.context.socket(zmq.ROUTER)
         self.socketServeCurrentStatus.bind("tcp://*:%s" % configECS.portCurrentState)
 
         #socket for receiving commands
-        self.remoteCommandSocket = context.socket(zmq.REP)
+        self.remoteCommandSocket = self.context.socket(zmq.REP)
         self.remoteCommandSocket.bind("tcp://*:%s" % configECS.portCommand)
 
         #init logger
@@ -105,7 +125,7 @@ class PCA:
         #get your Detectorlist
         detList = None
         while detList == None:
-            requestSocket = context.socket(zmq.REQ)
+            requestSocket = self.context.socket(zmq.REQ)
             requestSocket.connect("tcp://%s:%s" % (conf['ECSAddress'],conf['ECSRequestPort']))
             requestSocket.setsockopt(zmq.RCVTIMEO, int(conf['receive_timeout']))
             requestSocket.setsockopt(zmq.LINGER,0)
@@ -125,7 +145,10 @@ class PCA:
                 self.log("timeout getting DetectorList", True)
                 requestSocket.close()
                 continue
-            requestSocket.close()
+            except zmq.error.ContextTerminated:
+                requestSocket.close()
+            finally:
+                requestSocket.close()
 
         start_new_thread(self.publisher,())
 
@@ -183,6 +206,8 @@ class PCA:
         """watch the command Queue und execute incoming commands"""
         while True:
             m = self.commandQueue.get()
+            if self.terminate.is_set():
+                break
             command,arg = m
             if command==ECSCodes.getReady:
                 self.makeReady()
@@ -217,25 +242,59 @@ class PCA:
         """wait for an external(start,stop etc.) command e.g. from that "gorgeous" WebGUI
         sends an Ok for received command"""
         while True:
-            command = self.remoteCommandSocket.recv_multipart()
-            arg = None
-            if len(command) > 1:
-                arg = command[1].decode()
-            command = command[0]
+            try:
+                command = self.remoteCommandSocket.recv_multipart()
+                arg = None
+                if len(command) > 1:
+                    arg = command[1].decode()
+                command = command[0]
 
-            if command!=ECSCodes.ping:
-                print (command)
-            self.remoteCommandSocket.send(ECSCodes.ok)
-            if command==ECSCodes.ping:
-                #it's just a ping
-                continue
-            self.commandQueue.put((command,arg))
+                if command==ECSCodes.ping:
+                    self.remoteCommandSocket.send(ECSCodes.ok)
+                    #it's just a ping
+                    continue
+                #self.commandQueue.put((command,arg))
+
+                def switcher(code,arg=None):
+                    #functions for codes
+                    dbFunctionDictionary = {
+                        ECSCodes.getReady: self.makeReady,
+                        ECSCodes.start: self.start,
+                        ECSCodes.stop: self.stop,
+                        ECSCodes.shutdown: self.shutdown,
+                        ECSCodes.setActive: self.setDetectorActive,
+                        ECSCodes.setInactive: self.setDetectorInactive,
+                        ECSCodes.removeDetector: self.removeDetector,
+                        ECSCodes.addDetector: self.addDetector,
+                        ECSCodes.abort: self.abort,
+                    }
+                    #returns function for Code or None if the received code is unknown
+                    f = dbFunctionDictionary.get(code,None)
+                    if not f:
+                        self.remoteCommandSocket.send(ECSCodes.unknownCommand)
+                        return
+                    if arg:
+                        ret = f(arg)
+                    else:
+                        ret = f()
+                    print(ret)
+                    self.remoteCommandSocket.send(ret)
+                if arg:
+                    switcher(command,arg)
+                else:
+                    switcher(command)
+            except zmq.error.ContextTerminated:
+                self.remoteCommandSocket.close()
+                break
+
 
 
     def publisher(self):
         """publishes all state changes inside the Queue"""
         while True:
             id,state = self.publishQueue.get()
+            if self.terminate.is_set():
+                break
             self.sequence = self.sequence + 1
             if state == ECSCodes.removed:
                 del self.statusMap[id]
@@ -247,70 +306,81 @@ class PCA:
     def waitForUpdates(self):
         """wait for updates from Detectors"""
         while True:
-            message = self.socketDetectorUpdates.recv_multipart()
-            print (message)
-            if len(message) != 3:
-                self.log("received too short or too long message: %s" % message,True)
-                continue
-            id, transitionNumber, state = message
-            id = id.decode()
-            transitionNumber = ECS_tools.intFromBytes(transitionNumber)
-            state = state.decode()
+            try:
+                message = self.socketDetectorUpdates.recv_multipart()
+                print (message)
+                if len(message) != 3:
+                    self.log("received too short or too long message: %s" % message,True)
+                    continue
+                id, transitionNumber, state = message
+                id = id.decode()
+                transitionNumber = ECS_tools.intFromBytes(transitionNumber)
+                state = state.decode()
 
-            if id not in self.detectors:
-                self.log("received message with unknown id: %s" % id,True)
-                self.socketDetectorUpdates.send(ECSCodes.idUnknown)
-                continue
-            self.socketDetectorUpdates.send(ECSCodes.ok)
+                if id not in self.detectors:
+                    self.log("received message with unknown id: %s" % id,True)
+                    self.socketDetectorUpdates.send(ECSCodes.idUnknown)
+                    continue
+                self.socketDetectorUpdates.send(ECSCodes.ok)
 
-            det = self.detectors[id]
-            if (det.stateMachine.currentState == state):
-                continue
-            oldstate = det.stateMachine.currentState
-            det.stateMachine.currentState = state
+                det = self.detectors[id]
+                if (det.stateMachine.currentState == state):
+                    continue
+                oldstate = det.stateMachine.currentState
+                det.stateMachine.currentState = state
 
-            print(self.pendingTransitions)
-            if id in self.pendingTransitions:
-                if self.pendingTransitions[id] == transitionNumber:
-                    self.log("Detector %s Transition %i done %s -> %s" % (det.id,transitionNumber,oldstate,det.stateMachine.currentState))
-                    det.inTransition = False
+                print(self.pendingTransitions)
+                if id in self.pendingTransitions:
+                    if self.pendingTransitions[id] == transitionNumber:
+                        self.log("Detector %s Transition %i done %s -> %s" % (det.id,transitionNumber,oldstate,det.stateMachine.currentState))
+                        det.inTransition = False
+                    else:
+                        self.log("Detector "+det.id+" send wrong Transition Number %i (expected %i) Transition: %s -> %s" % (transitionNumber,self.pendingTransitions[id],oldstate,det.stateMachine.currentState),True )
+                        #todo what to do?
+                        det.inTransition = False
+                    del self.pendingTransitions[id]
                 else:
-                    self.log("Detector "+det.id+" send wrong Transition Number %i (expected %i) Transition: %s -> %s" % (transitionNumber,self.pendingTransitions[id],oldstate,det.stateMachine.currentState),True )
-                    #todo what to do?
-                    det.inTransition = False
-                del self.pendingTransitions[id]
-            else:
-                #if Detector was never connected oldstate will be False (no log necessary)
-                if oldstate:
-                    self.log("Detector "+det.id+" had an unexpected Statechange "+ str(oldstate) +" -> " + det.stateMachine.currentState )
-                self.transitionDetectorIntoGlobalState(det.id)
-            self.publishQueue.put((det.id,det.getMappedState()))
-            self.checkGlobalState()
+                    #if Detector was never connected oldstate will be False (no log necessary)
+                    if oldstate:
+                        self.log("Detector "+det.id+" had an unexpected Statechange "+ str(oldstate) +" -> " + det.stateMachine.currentState )
+                    self.transitionDetectorIntoGlobalState(det.id)
+                self.publishQueue.put((det.id,det.getMappedState()))
+                self.checkGlobalState()
+            except zmq.error.ContextTerminated:
+                self.socketDetectorUpdates.close()
+                break
 
     def waitForRequests(self):
         """waits for messages from detectors/ECS/WebServer"""
         while True:
             #request for entire statusMap e.g. if a new Detector/Client connects
-            messsage = self.socketServeCurrentStatus.recv_multipart()
-            origin = messsage[0]
-            request = messsage[1]
-            if request != ECSCodes.hello:
-                self.log("wrong request in socketServeCurrentStatus \n",True)
-                continue
+            try:
+                messsage = self.socketServeCurrentStatus.recv_multipart()
 
-            # send each Statusmap entry to origin
-            items = self.statusMap.copy().items()
-            for key, value in items:
-                #send identity of origin first
-                self.socketServeCurrentStatus.send(origin,zmq.SNDMORE)
-                #send key,sequence number,status
-                ECS_tools.send_status(self.socketServeCurrentStatus,key,value[0],value[1])
-            # Final message
-            self.socketServeCurrentStatus.send(origin, zmq.SNDMORE)
-            ECS_tools.send_status(self.socketServeCurrentStatus,ECSCodes.done,self.sequence,b'')
+                origin = messsage[0]
+                request = messsage[1]
+                if request != ECSCodes.hello:
+                    self.log("wrong request in socketServeCurrentStatus \n",True)
+                    continue
+
+                # send each Statusmap entry to origin
+                items = self.statusMap.copy().items()
+                for key, value in items:
+                    #send identity of origin first
+                    self.socketServeCurrentStatus.send(origin,zmq.SNDMORE)
+                    #send key,sequence number,status
+                    ECS_tools.send_status(self.socketServeCurrentStatus,key,value[0],value[1])
+                # Final message
+                self.socketServeCurrentStatus.send(origin, zmq.SNDMORE)
+                ECS_tools.send_status(self.socketServeCurrentStatus,ECSCodes.done,self.sequence,b'')
+            except zmq.error.ContextTerminated:
+                self.socketServeCurrentStatus.close()
+                break
 
     def addDetector(self,detector):
         """add Detector to Dictionary and pubish it's state"""
+        if isinstance(detector,str):
+            detector = detectorDataObject(json.loads(detector))
         #create the corresponding class for the specified type
         types = Detector.DetectorTypes()
         typeClass = types.getClassForType(detector.type)
@@ -323,43 +393,51 @@ class PCA:
         self.publishQueue.put((det.id,det.getMappedState()))
         #global state doesn't exist during start up
         if self.stateMachine:
-            self.transitionDetectorIntoGlobalState(det.id)
+            start_new_thread(self.transitionDetectorIntoGlobalState,(det.id,))
+        return ECSCodes.ok
 
     def removeDetector(self,id):
         """remove Detector from Dictionary"""
         if id not in self.detectors:
             self.log("Detector with id %s is unknown" % id,True)
+            return ECSCodes.idUnknown
         det = self.detectors[id]
         #todo add possibility to cancel transitions?
         self.sem.acquire()
         self.publishQueue.put((id,ECSCodes.removed))
         del self.detectors[id]
         del self.activeDetectors[id]
-        det.terminate()
+        #this might take a few seconds dending on ping interval
+        start_new_thread(det.terminate,())
         self.sem.release()
+        return ECSCodes.ok
 
     def setDetectorActive(self,id):
         """set detector active"""
         if id not in self.detectors:
             self.log("Detector with id %s is unknown" % id,True)
+            return ECSCodes.idUnknown
         detector = self.detectors[id]
         detector.setActive()
         self.activeDetectors[id] = id
         self.publishQueue.put((id,detector.getMappedState()))
         self.checkGlobalState()
-        self.transitionDetectorIntoGlobalState(id)
+        start_new_thread(self.transitionDetectorIntoGlobalState,(id,))
+        return ECSCodes.ok
 
 
     def setDetectorInactive(self,id):
         """set Detector inactive"""
         if id not in self.detectors:
             self.log("Detector with id %s is unknown" % id,True)
+            return ECSCodes.idUnknown
         detector = self.detectors[id]
         del self.activeDetectors[id]
-        detector.powerOff()
+        #detector.powerOff()
         detector.setInactive()
         self.publishQueue.put((id,"inactive"))
         self.checkGlobalState()
+        return ECSCodes.ok
 
     def handleDetectorTimeout(self,id):
         self.publishQueue.put((id,"Connection Problem"))
@@ -408,7 +486,7 @@ class PCA:
                 d = self.detectors[id]
                 #The PCA is not allowed to move into the Running State on his own
                 #only ready -> not ready is possible
-                if d.getMappedState() == "NotReady":
+                if d.getMappedState() == "NotReady" or d.getMappedState() == "Connection Problem":
                     # some Detectors are not ready anymore
                     self.error()
 
@@ -472,6 +550,7 @@ class PCA:
 
         self.transition("stop")
         self.sem.release()
+        return ECSCodes.ok
 
     def makeReady(self):
         """tells all Detectors to get ready to start"""
@@ -483,16 +562,8 @@ class PCA:
             t = threading.Thread(name='dready'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.getReady, None))
             threadArray.append(t)
             t.start()
-
-        """
-        for t in threadArray:
-            ret = returnQueue.get()
-            d = self.detectors[ret[0]]
-            if ret[1] != True:
-                #todo something needs to happen here
-                1+1
-        """
         self.sem.release()
+        return ECSCodes.ok
 
     def start(self):
         """tells all Detectors to start running"""
@@ -502,7 +573,7 @@ class PCA:
         if self.stateMachine.currentState != "Ready" and self.stateMachine.currentState != "RunningInError":
             self.log("start not possible in current state")
             self.sem.release()
-            return
+            return ECSCodes.error
         threadArray = []
         returnQueue = Queue()
         for id in self.activeDetectors:
@@ -513,6 +584,7 @@ class PCA:
 
         self.transition("start")
         self.sem.release()
+        return ECSCodes.ok
 
     def stop(self):
         """tells all Detectors to stop running"""
@@ -529,6 +601,7 @@ class PCA:
 
         self.transition("stop")
         self.sem.release()
+        return ECSCodes.ok
 
     def abort(self):
         threadArray = []
@@ -541,6 +614,7 @@ class PCA:
             t.start()
 
         self.sem.release()
+        return ECSCodes.ok
 
     def checkOpenTransitions():
         for id,number in self.pendingTransitions:
@@ -554,14 +628,29 @@ class PCA:
 
     def log(self,logmessage,error=False):
         str=datetime.now().strftime("%Y-%m-%d %H:%M:%S")+":" + logmessage
-        self.socketLogPublish.send(str.encode())
+        try:
+            self.socketLogPublish.send(str.encode())
+        except zmq.error.ZMQError:
+            self.socketLogPublish.close()
         if error:
             logging.critical(logmessage)
         else:
             logging.info(logmessage)
 
 
-
+    def terminatePCA(self,_signo, _stack_frame):
+        self.log("terminating")
+        for id in self.detectors:
+            d = self.detectors[id]
+            d.terminate()
+        self.terminate.set()
+        #force Queue.get to stop blocking
+        self.publishQueue.put((False,False))
+        self.commandQueue.put(False)
+        self.socketLogPublish.close()
+        self.socketPublish.close()
+        self.context.term()
+        exit(0)
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -579,9 +668,13 @@ if __name__ == "__main__":
         print ("5: abort Transition")
         try:
             x = input()
-        except:
-            while True:
-                time.sleep(500000)
+        except KeyboardInterrupt:
+            test.terminatePCA(0,0)
+            break
+        except EOFError:
+            test.terminate.wait()
+            test.terminatePCA(0,0)
+            break
         if x == "1":
             test.commandQueue.put((ECSCodes.getReady,None))
         if x == "2":

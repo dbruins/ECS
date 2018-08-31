@@ -13,10 +13,18 @@ import json
 from DataObjects import partitionDataObject, detectorDataObject
 import ECS_tools
 import subprocess
+import zc.lockfile #pip3 install zc.lockfile
 
 class DetectorController:
 
     def __init__(self,id,startState="Shutdown"):
+        #create lock
+        try:
+            self.lock = zc.lockfile.LockFile('lock'+id, content_template='{pid}')
+        except zc.lockfile.LockError:
+            print("other Process is already Running "+id)
+            exit(1)
+
         self.context = zmq.Context()
         self.MyId = id
         self.currentTransitionNumber = 0
@@ -50,7 +58,10 @@ class DetectorController:
                 print("timeout getting detector Data")
                 requestSocket.close()
                 continue
-            requestSocket.close()
+            except zmq.error.ContextTerminated:
+                requestSocket.close()
+            finally:
+                requestSocket.close()
 
         self.portTransition = detectorData.portTransition
         self.portCommand = detectorData.portCommand
@@ -112,7 +123,10 @@ class DetectorController:
             print("timeout getting pca Data")
             requestSocket.close()
             return None
-        requestSocket.close()
+        except zmq.error.ContextTerminated:
+            requestSocket.close()
+        finally:
+            requestSocket.close()
         return pcaData
 
     def changePCA(self,partition):
@@ -147,6 +161,8 @@ class DetectorController:
                 return
         except zmq.Again:
             print("timeout sending status")
+        except zmq.error.ContextTerminated:
+            socketSendUpdateToPCA.close()
         except Exception as e:
             print("error sending status: %s" % str(e))
         finally:
@@ -192,50 +208,64 @@ class DetectorController:
 
     def waitForTransition(self):
         while True:
-            transitionNumber,command = self.socketReceiver.recv_multipart()
-            command = command.decode()
-            print (command,transitionNumber)
-            if self.inTransition:
-                self.socketReceiver.send(ECSCodes.busy)
-                continue
-            elif not self.stateMachine.checkIfPossible(command):
-                self.socketReceiver.send(ECSCodes.error)
-                continue
-            else:
-                self.socketReceiver.send(ECSCodes.ok)
-            self.currentTransitionNumber = ECS_tools.intFromBytes(transitionNumber)
-            self.inTransition = True
-            self.workThread = threading.Thread(name="worker", target=self.work, args=(command,))
-            self.workThread.start()
+            try:
+                transitionNumber,command = self.socketReceiver.recv_multipart()
+                command = command.decode()
+                print (command,transitionNumber)
+                if self.inTransition:
+                    self.socketReceiver.send(ECSCodes.busy)
+                    continue
+                elif not self.stateMachine.checkIfPossible(command):
+                    self.socketReceiver.send(ECSCodes.error)
+                    continue
+                else:
+                    self.socketReceiver.send(ECSCodes.ok)
+                self.currentTransitionNumber = ECS_tools.intFromBytes(transitionNumber)
+                self.inTransition = True
+                self.workThread = threading.Thread(name="worker", target=self.work, args=(command,))
+                self.workThread.start()
+            except zmq.error.ContextTerminated:
+                self.socketReceiver.close()
+                break
 
     def waitForCommands(self):
         while True:
-            command = self.commandSocket.recv_multipart()
-            arg = None
-            if len(command) > 1:
-                arg = command[1].decode()
-            command = command[0]
-            if command == ECSCodes.ping:
-                self.commandSocket.send(ECSCodes.ok)
-                continue
-            if command == ECSCodes.abort:
-                #terminate Transition if active
-                if self.inTransition:
-                    print("abort")
-                    self.abort = True
-                    self.scriptProcess.terminate()
-                self.commandSocket.send(ECSCodes.ok)
-                continue
-            if command == ECSCodes.pcaAsksForDetectorStatus:
-                self.commandSocket.send(self.stateMachine.currentState.encode())
-                continue
-            if command == ECSCodes.detectorChangePartition:
-                partition = partitionDataObject(json.loads(arg))
-                self.changePCA(partition)
-                self.commandSocket.send(ECSCodes.ok)
-                continue
-            self.commandSocket.send(ECSCodes.unknownCommand)
+            try:
+                command = self.commandSocket.recv_multipart()
+                arg = None
+                if len(command) > 1:
+                    arg = command[1].decode()
+                command = command[0]
+                if command == ECSCodes.ping:
+                    self.commandSocket.send(ECSCodes.ok)
+                    continue
+                if command == ECSCodes.abort:
+                    #terminate Transition if active
+                    if self.inTransition:
+                        print("abort")
+                        self.abort = True
+                        self.scriptProcess.terminate()
+                    self.commandSocket.send(ECSCodes.ok)
+                    continue
+                if command == ECSCodes.pcaAsksForDetectorStatus:
+                    self.commandSocket.send(self.stateMachine.currentState.encode())
+                    continue
+                if command == ECSCodes.detectorChangePartition:
+                    partition = partitionDataObject(json.loads(arg))
+                    self.changePCA(partition)
+                    self.commandSocket.send(ECSCodes.ok)
+                    continue
+                self.commandSocket.send(ECSCodes.unknownCommand)
+            except zmq.error.ContextTerminated:
+                self.commandSocket.close()
+                break
 
+    def terminate(self):
+        self.context.term()
+        self.subContext.term()
+        self.abort = True
+        if self.scriptProcess:
+            self.scriptProcess.terminate()
 
 
 if __name__ == "__main__":
@@ -249,7 +279,9 @@ if __name__ == "__main__":
     while True:
         try:
             x = input()
-            test.socketPushUpdate.send_string("%s %s" % (test.MyId, x))
+        except KeyboardInterrupt:
+            test.terminate()
+            break
         except EOFError:
             time.sleep(500000)
             continue
