@@ -1,21 +1,14 @@
 <html>
   <body>
-    {% if errorMessage%}
-      <a>{{errorMessage}}</a>
+    {% if view.errorMessage%}
+      <a>{{view.errorMessage}}</a>
     {% endif %}
     <form action="{% url 'GUI:create_pca' %}" method="post">
       {% csrf_token %}
-      <div><a>PCA ID</a><input id="id" name="id" type=text value = "{% if post %}{{post.id}}{% endif%}" ></div>
-      <div><a>Address</a><input id="address"  name="address" type=text value = "{% if post %}{{post.address}}{% endif%}" ></div>
-      <div><a>State Publish Port</a><input id="portPublish" name="portPublish" type="text" value = "{% if post %}{{post.portPublish}}{% endif%}"></div>
-      <div><a>Log Publish Port</a><input id="portLog" name="portLog" type="text" value = "{% if post %}{{post.portLog}}{% endif%}"></div>
-      <div><a>Updates Port</a><input id="portUpdates" name="portUpdates" type="text" value = "{% if post %}{{post.portUpdates}}{% endif%}"></div>
-      <div><a>get Current State Port</a><input id="portCurrentState" name="portCurrentState" type="text" value = "{% if post %}{{post.portCurrentState}}{% endif%}"></div>
-      <div><a>Single Request Port</a><input id="portSingleRequest" name="portSingleRequest" type="text" value = "{% if post %}{{post.portSingleRequest}}{% endif%}"></div>
-      <div><a>Command Port</a><input id="portCommand" name="portCommand" type="text" value = "{% if post %}{{post.portCommand}}{% endif%}"></div>
-      <br/>
-      <input type="submit" value="create new Partition">
+      <table>
+      {{ form.as_table }}
+      </table>
+      <input type="submit" value="Create new Partition">
     </form>
-
   </body>
 </html>

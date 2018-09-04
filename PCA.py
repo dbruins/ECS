@@ -33,6 +33,7 @@ class PCA:
             print("other Process is already Running "+self.id)
             exit(1)
         self.terminate = threading.Event()
+        self.initDone = threading.Event()
         #handle SIGTERM signal
         signal.signal(signal.SIGTERM, self.terminatePCA)
 
@@ -201,6 +202,7 @@ class PCA:
         start_new_thread(self.waitForRequests,())
         start_new_thread(self.waitForRemoteCommand,())
         start_new_thread(self.watchCommandQueue,())
+        self.initDone.set()
 
     def watchCommandQueue(self):
         """watch the command Queue und execute incoming commands"""
@@ -253,7 +255,6 @@ class PCA:
                     self.remoteCommandSocket.send(ECSCodes.ok)
                     #it's just a ping
                     continue
-                #self.commandQueue.put((command,arg))
 
                 def switcher(code,arg=None):
                     #functions for codes
@@ -379,13 +380,13 @@ class PCA:
 
     def addDetector(self,detector):
         """add Detector to Dictionary and pubish it's state"""
+        self.sem.acquire()
         if isinstance(detector,str):
             detector = detectorDataObject(json.loads(detector))
         #create the corresponding class for the specified type
         types = Detector.DetectorTypes()
         typeClass = types.getClassForType(detector.type)
         confSection = types.getConfsectionForType(detector.type)
-        #todo all Detectors are added as active; in case of a crash the PCA needs to remember which Detectors were active; maybe save this information in the ECS database?
         det = typeClass(detector.id,detector.address,detector.portTransition,detector.portCommand,confSection,self.log,self.publishQueue,self.handleDetectorTimeout,self.handleDetectorReconnect,self.putPendingTransition,self.removePendingTransition)
         self.detectors[det.id] = det
         if det.active:
@@ -394,16 +395,18 @@ class PCA:
         #global state doesn't exist during start up
         if self.stateMachine:
             start_new_thread(self.transitionDetectorIntoGlobalState,(det.id,))
+        self.sem.release()
         return ECSCodes.ok
 
     def removeDetector(self,id):
         """remove Detector from Dictionary"""
+        self.sem.acquire()
         if id not in self.detectors:
             self.log("Detector with id %s is unknown" % id,True)
+            self.sem.release()
             return ECSCodes.idUnknown
         det = self.detectors[id]
         #todo add possibility to cancel transitions?
-        self.sem.acquire()
         self.publishQueue.put((id,ECSCodes.removed))
         del self.detectors[id]
         del self.activeDetectors[id]
@@ -440,13 +443,20 @@ class PCA:
         return ECSCodes.ok
 
     def handleDetectorTimeout(self,id):
+        #wait until Statemachine initialised
+        self.initDone.wait()
         self.publishQueue.put((id,"Connection Problem"))
+        self.checkGlobalState()
 
     def handleDetectorReconnect(self,id,state):
+        #wait until Statemachine initialised
+        self.initDone.wait()
         self.publishQueue.put((id,state))
         #if detector is active try to transition him into globalState
         if id in self.activeDetectors:
             self.transitionDetectorIntoGlobalState(id)
+        else:
+            self.checkGlobalState()
 
     def transitionDetectorIntoGlobalState(self,id):
         """try to transition Detector to global State of the PCA"""
@@ -478,6 +488,7 @@ class PCA:
                 d = self.detectors[id]
                 if d.getMappedState() != "Ready":
                     ready = False
+                    break
             if ready:
                 self.transition("configured")
 
@@ -506,9 +517,6 @@ class PCA:
             if countDetectors == self.activeDetectors.size():
                 #All Detecotors are working again
                 self.transition("resolved")
-            """if countDetectors == 0:
-                #All detectors are dead :(
-                self.transition("stop")"""
 
     def transition(self,command):
         """try to transition the own Statemachine"""

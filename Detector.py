@@ -40,12 +40,9 @@ class Detector:
         self.zmqContext = zmq.Context()
 
 
-        #init with the current state of the Detector
+        #ping Thread will set Statemachine on connection
         self.connected = False
-        startState = self.getStateFromDetector()
-        if startState:
-            self.connected = True
-        self.stateMachine = Statemachine(conf["stateFile"],startState)
+        self.stateMachine = Statemachine(conf["stateFile"],False)
 
         self.mapper = {}
         with open(conf["mapFile"], 'r') as file:

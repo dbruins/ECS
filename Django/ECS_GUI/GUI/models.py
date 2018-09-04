@@ -22,6 +22,7 @@ class Choice(models.Model):
 
 class pcaModel(models.Model):
     id = models.CharField(max_length=200, primary_key=True)
+    permissionTimestamp = models.DateTimeField(null=True)
 
     def __str__(self):
         return self.id

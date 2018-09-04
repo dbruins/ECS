@@ -3,7 +3,7 @@
 <head>
 {%block control%}
 {% load guardian_tags %}
-{% get_obj_perms request.user for pcaObject as "pcaPerms" %}
+{% get_obj_perms request.user for view.pcaObject as "pcaPerms" %}
 <meta http-equiv=”Pragma” content=”no-cache”>
 <meta http-equiv=”Expires” content=”-1″>
 <meta http-equiv=”CACHE-CONTROL” content=”NO-CACHE”>
@@ -32,7 +32,7 @@ function createWebSocket(){
               //clear Table
               $(".tableRow").remove()
           }
-          else if (type == "remove"){
+          else if (newState == "remove"){
               //delete Row
               $('#dRow'+id).remove()
           }
@@ -130,8 +130,8 @@ $(document).ready(function() {
 
 <body>
 {% if perms.GUI.can_take_control %}
-  {% if userInControl %}
-      <p>Control already Taken by User : {{userInControl}}</p>
+  {% if view.userInControl %}
+      <p>Control already Taken by User : {{view.userInControl}}</p>
   {% endif %}
   {% if "has_control" in pcaPerms %}
       <form action="{% url 'GUI:giveup_control' pcaId%}" method="post">
@@ -145,7 +145,7 @@ $(document).ready(function() {
       </form>
   {% endif %}
 {% endif %}
-<h1>PCA {{pcaId}} Overview</h1>
+<h1>PCA {{view.pcaId}} Overview</h1>
 
 <div>
   <table id="stateTable">
@@ -153,7 +153,7 @@ $(document).ready(function() {
       <th>Detector</th>
       <th>Status</th>
     </tr>
-    {% for state in stateMap.items %}
+    {% for state in view.stateMap.items %}
     <tr id="dRow{{state.0}}" class="tableRow">
         <td>
           {% if state.0 == 0%}
@@ -186,8 +186,5 @@ $(document).ready(function() {
 {% endif %}
 {%endblock%}
 <textarea readonly id="log"></textarea>
-{%if error%}
-<p visibility:={{error}}>Error</p>
-{%endif%}
 </body>
 </html>

@@ -126,7 +126,7 @@ STATIC_URL = '/static/'
 #ping intervall in seconds
 PINGINTERVAL = 2
 #timeout for messages to PCA in ms
-TIMEOUT = 5000
+TIMEOUT = 7000
 #timeout for Pings to PCA in ms
 PINGTIMEOUT = 2000
 
@@ -151,9 +151,11 @@ CHANNEL_LAYERS = {
 }
 
 # Redirect to home URL after login (Default redirects to /accounts/profile/)
-LOGIN_REDIRECT_URL = '/GUI'
+LOGIN_REDIRECT_URL = '/'
 
 AUTHENTICATION_BACKENDS = (
     'django.contrib.auth.backends.ModelBackend', # this is default
     'guardian.backends.ObjectPermissionBackend',
 )
+
+PERMISSION_TIMEOUT = 60

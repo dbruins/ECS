@@ -322,8 +322,6 @@ class ECS:
         #start PCA clients via ssh
         for p in self.partitions:
             ret = self.startClient(p)
-            if ret:
-                self.clientProcesses[p.id] = ret
 
 
         #get snapshots from PCAs
@@ -449,6 +447,7 @@ class ECS:
                 ssh.close()
             else:
                 self.log("Detector Client %s is already Running with PID %s" % (id,pid))
+            self.clientProcesses[id] = pid
             return pid
         except Exception as e:
             if ssh:
@@ -508,7 +507,6 @@ class ECS:
             def createPCA(arg):
                 message = json.loads(arg)
                 partition = partitionDataObject(json.loads(message["partition"]))
-                detectors = message["detectors"]
                 ret = db.addPartition(partition)
                 if ret == ECSCodes.ok:
                     #start PCA if Not Running
@@ -603,10 +601,10 @@ class ECS:
                                     self.log("error removing Detector from %s: %s " % (partition.id,str(e)),True)
                                     requestSocket.close()
                                     raise Exception("Error removing Detector")
-                            return ECSCodes.error
+                            return e
                         except Exception as e:
                             self.log("Exception during rollback %s" % str(e))
-                            return ECSCodes.error
+                            return e
                 return ECSCodes.ok
 
             def remapDetector(arg):
@@ -653,22 +651,23 @@ class ECS:
                         except zmq.Again:
                             self.log("timeout removing Detector from %s" % (oldPartition.id),True)
                             requestSocket.close()
-                            raise Exception("Error during removing")
+                            raise Exception("timeout removing Detector from %s" % (oldPartition.id))
                         except Exception as e:
                             self.log("error removing Detector from %s: %s " % (oldPartition.id,str(e)),True)
                             requestSocket.close()
-                            raise Exception("Error during removing")
+                            raise Exception("error removing Detector from %s: %s " % (oldPartition.id,str(e)))
                         finally:
                             requestSocket.close()
                         if ret != ECSCodes.ok:
                             self.log("%s returned error for removing Detector" % (oldPartition.id),True)
                             requestSocket.close()
-                            raise Exception("Error during removing")
+                            raise Exception("%s returned error for removing Detector" % (oldPartition.id))
                         requestSocket.close()
                     else:
                         #remove from Unused Detectors
                         self.unmappedDetectorController.removeDetector(detectorId)
                     removed = True
+                    print("removed")
 
                     if newPartition:
                         #add to new Partition
@@ -682,45 +681,48 @@ class ECS:
                         except zmq.Again:
                             self.log("timeout adding Detector to %s" % (newPartition.id),True)
                             requestSocket.close()
-                            raise Exception("Error during adding")
+                            raise Exception("timeout adding Detector to %s" % (newPartition.id))
                         except Exception as e:
                             self.log("error adding Detector to %s: %s " % (newPartition.id,str(e)),True)
                             requestSocket.close()
-                            raise Exception("Error during adding")
+                            raise Exception("error adding Detector to %s: %s " % (newPartition.id,str(e)))
                         if ret != ECSCodes.ok:
                             self.log("%s returned error for adding Detector" % (newPartition.id),True)
                             requestSocket.close()
-                            raise Exception("Error during adding")
+                            raise Exception("%s returned error for adding Detector" % (newPartition.id))
                         requestSocket.close()
                     else:
                         #add to unused detectors
                         self.unmappedDetectorController.addDetector(detector)
                     added = True
-
+                    print("added")
                     #inform DetectorController
                     requestSocket = self.zmqContext.socket(zmq.REQ)
                     requestSocket.connect("tcp://%s:%s"  % (detector.address,detector.portCommand))
                     requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-                    requestSocket.send_multipart([ECSCodes.detectorChangePartition,newPartition.asJsonString().encode()])
+                    if newPartition:
+                        requestSocket.send_multipart([ECSCodes.detectorChangePartition,newPartition.asJsonString().encode()])
+                    else:
+                        requestSocket.send_multipart([ECSCodes.detectorChangePartition,self.unmappedDetectorControllerData.asJsonString().encode()])
                     try:
                         ret = requestSocket.recv()
                         requestSocket.close()
                     except zmq.Again:
-                        self.log("timeout changing Detector %s PCA" % (detector.id),True)
+                        self.log("timeout informing Detector %s" % (detector.id),True)
                         requestSocket.close()
-                        raise Exception("Error during informing Detector")
+                        raise Exception("timeout informing Detector %s" % (detector.id))
                     except Exception as e:
                         self.log("error changing Detector %s PCA: %s " % (detector.id),str(e),True)
                         requestSocket.close()
-                        raise Exception("Error during informing Detector")
+                        raise Exception("error changing Detector %s PCA: %s " % (detector.id),str(e))
                     if ret != ECSCodes.ok:
                         self.log("%s returned error for changing PCA" % (detector.id),True)
                         requestSocket.close()
-                        raise Exception("Error during informing Detector")
+                        raise Exception("%s returned error for changing PCA" % (detector.id,))
                     requestSocket.close()
                     return ECSCodes.ok
                 except Exception as e:
-                    self.log("error during remapping:%s \n starting rollback for remapping Detectors" % str(e),True)
+                    self.log("error during remapping:%s ;starting rollback for remapping Detector" % str(e),True)
                     #rollback
                     try:
                         if dbChanged:
@@ -744,18 +746,18 @@ class ECS:
                                 try:
                                     ret = requestSocket.recv()
                                     requestSocket.close()
-                                except zmq.Again:
+                                except zmq.Again as e:
                                     self.log("timeout adding Detector to %s" % (oldPartition.id),True)
                                     requestSocket.close()
-                                    return e
-                                except Exception:
+                                    raise Exception("timeout during adding for pca:%s" % oldPartition.id )
+                                except Exception as e:
                                     self.log("error adding Detector to %s: %s " % (oldPartition.id,str(e)),True)
                                     requestSocket.close()
-                                    return e
+                                    raise Exception("Error during adding :%s" % str(e) )
                                 if ret != ECSCodes.ok:
                                     self.log("%s returned error for adding Detector" % (oldPartition.id),True)
                                     requestSocket.close()
-                                    return e
+                                    raise Exception("pca returned error code during adding Detector")
                                 requestSocket.close()
                             else:
                                 #add to unused detectors
@@ -771,17 +773,17 @@ class ECS:
                                 except zmq.Again:
                                     self.log("timeout removing Detector from %s" % (newPartition.id),True)
                                     requestSocket.close()
-                                    return e
+                                    raise Exception("timeout removing Detector from %s" % (newPartition.id))
                                 except Exception:
                                     self.log("error removing Detector from %s: %s " % (newPartition.id,str(e)),True)
                                     requestSocket.close()
-                                    return e
+                                    raise Exception("error removing Detector from %s: %s " % (newPartition.id,str(e)))
                                 finally:
                                     requestSocket.close()
                                 if ret != ECSCodes.ok:
                                     self.log("%s returned error for removing Detector" % (newPartition.id),True)
                                     requestSocket.close()
-                                    return e
+                                    raise Exception("%s returned error for removing Detector" % (oldPartition.id))
                                 requestSocket.close()
                             else:
                                 #remove from Unused Detectors

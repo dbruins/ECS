@@ -1,26 +1,13 @@
 <html>
   <body>
-    {% if error%}
-      <a>error creating Detector</a>
+    {% if view.errorMessage%}
+      <a>{{view.errorMessage}}</a>
     {% endif %}
     <form action="{% url 'GUI:create_detector' %}" method="post">
       {% csrf_token %}
-      <div><a>Detector ID</a><input id="id" name="id" type=text value = "{% if post %}{{post.id}}{% endif%}" ></div>
-      <div><a>Address</a><input id="address"  name="address" type=text value = "{% if post %}{{post.address}}{% endif%}" ></div>
-      <!--a Dropdown would be better i guess-->
-      <div><a>Type</a><input id="type" name="type" type="text" value = "{% if post %}{{post.type}}{% endif%}"></div>
-      <div><a>portTransition</a><input id="portTransition" name="portTransition" type="text" value = "{% if post %}{{post.portTransition}}{% endif%}"></div>
-      <div><a>portCommand</a><input id="portCommand" name="portCommand" type="text" value = "{% if post %}{{post.portCommand}}{% endif%}"></div>
-      <div>
-          <a>Assign to Partition ?</a>
-          <br>
-          <a>None</a><input type="radio" name="partition" value="None" checked=True> <br/>
-          {% for p in pcaList %}
-            <a>Partition {{p.1.id}} </a><input type="radio" name="partition" value="{{p.1.id}}"><br/>
-          {% endfor %}
-      </div>
-
-      <br/>
+      <table>
+      {{ form.as_table }}
+      </table>
       <input type="submit" value="create new Detector">
     </form>
 

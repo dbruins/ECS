@@ -3,7 +3,7 @@
 <head>
 {%block control%}
 {% load guardian_tags %}
-{% get_obj_perms request.user for pcaObject as "pcaPerms" %}
+{% get_obj_perms request.user for view.pcaObject as "pcaPerms" %}
 <meta http-equiv=”Pragma” content=”no-cache”>
 <meta http-equiv=”Expires” content=”-1″>
 <meta http-equiv=”CACHE-CONTROL” content=”NO-CACHE”>
@@ -36,9 +36,9 @@ function createWebSocket(){
           var newState = update['state'];
           if(newState == "reset"){
               //clear Table
-              $(".tableRow").remove()
+              $(".tableRow"+origin).remove()
           }
-          else if (type == "remove"){
+          else if (newState == "remove"){
               //delete Row
               $('#dRow'+id).remove()
           }
@@ -76,7 +76,7 @@ createWebSocket()
 {% endif %}
 {% if perms.GUI.can_take_control %}
   {% if userInControl %}
-      <p>Control already Taken by User : {{userInControl}}</p>
+      <p>Control already Taken by User : {{view.userInControl}}</p>
   {% endif %}
   {% if "has_control" in pcaPerms %}
       <form action="{% url 'GUI:giveup_control' 'ecs'%}" method="post">
@@ -93,7 +93,7 @@ createWebSocket()
 <h1>ECS Status</h1>
 
 <div>
-  {% for pca in ecsMap.items %}
+  {% for pca in view.ecsMap.items %}
   {% if pca.0 != "unmapped"%}
   <h2>PCA <a href="{%url 'GUI:pca' pca.0%}">{{pca.0}}</a> </h2>
   {% if "has_control" in pcaPerms %}
@@ -112,7 +112,7 @@ createWebSocket()
       <th>Status</th>
     </tr>
     {% for state in pca.1.items %}
-    <tr id="dRow{{state.0}}" class="tableRow">
+    <tr id="dRow{{state.0}}" class="tableRow{{pca.0}}">
         <td>
           {% if state.0 == pca.0%}
             Global State
@@ -128,17 +128,14 @@ createWebSocket()
 </div>
 {% if "has_control" in pcaPerms %}
 <div>
-  <form action="{% url 'GUI:input_create_pca' %}" method="post">
-    {% csrf_token %}
+  <form action="{% url 'GUI:create_pca' %}" method="get">
     <input type="submit" value="create new Partition">
   </form>
-  <form action="{% url 'GUI:input_create_detector' %}" method="post">
-    {% csrf_token %}
+  <form action="{% url 'GUI:create_detector' %}" method="get">
     <input type="submit" value="create new Detector">
   </form>
-  <form action="{% url 'GUI:input_move_detectors' %}" method="post">
-    {% csrf_token %}
-    <input type="submit" value="MoveDetectors">
+  <form action="{% url 'GUI:move_detectors' %}" method="get">
+    <input type="submit" value="move Detectors">
   </form>
 </div>
 {%endif%}

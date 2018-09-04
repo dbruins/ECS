@@ -1,5 +1,5 @@
 from django.shortcuts import get_object_or_404,render,redirect
-from guardian.shortcuts import assign_perm, get_users_with_perms, remove_perm
+from guardian.shortcuts import assign_perm, get_users_with_perms, remove_perm, get_user_perms
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from GUI.models import Question, Choice, pcaModel
 from django.template import loader
@@ -16,7 +16,9 @@ import threading
 import struct
 from multiprocessing import Queue
 import time
+from django.utils import timezone
 import configparser
+from django import forms
 
 import sys
 #ECS Codes and DataObjects should be in the same Path later
@@ -59,9 +61,9 @@ class ECSHandler:
         for p in self.pcaCollection:
             self.pcaHandlers[p.id] = PCAHandler(p)
             #add database object for storing user permissions
-            pcaModel.objects.create(id=p.id)
+            pcaModel.objects.create(id=p.id,permissionTimestamp=timezone.now())
         #user Permissions ecs
-        pcaModel.objects.create(id="ecs")
+        pcaModel.objects.create(id="ecs",permissionTimestamp=timezone.now())
 
         #Unused Detector Controller
         self.unmappedStateTable = ECS_tools.MapWrapper()
@@ -109,10 +111,9 @@ class ECSHandler:
         partition = partitionDataObject(json.loads(ret.decode()))
         return partition
 
-    def createPartition(self,partitionObject,detectorsIds):
+    def createPartition(self,partitionObject):
         message = {}
         message["partition"] = partitionObject.asJsonString()
-        message["detectors"] = detectorsIds
         ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.createPartition, json.dumps(message).encode()])
         if ret == ECSCodes.ok:
             #connect to new PCA
@@ -120,25 +121,33 @@ class ECSHandler:
             self.pcaHandlers[partitionObject.id] = PCAHandler(partitionObject)
             self.log("partition %s created" % partitionObject.id)
             #add Model for permissions
-            pcaModel.objects.create(id=partitionObject.id)
+            pcaModel.objects.create(id=partitionObject.id,permissionTimestamp=timezone.now())
             return True
         if ret == ECSCodes.timeout:
             self.log("timeout creating partition")
             return "timeout creating partition"
-        errorDict = json.loads(ret.decode())
-        self.log("error creating pca: %s" % (errorDict["error"]))
-        return errorDict["error"]
+        if ret == ECSCodes.error:
+            self.log("ecs returned error code for creating Partition")
+            return "ecs returned error code"
+        else:
+            errorDict = json.loads(ret.decode())
+            self.log("error creating pca: %s" % (errorDict["error"]))
+            return errorDict["error"]
 
     def createDetector(self,detectorObject):
         ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.createDetector, detectorObject.asJsonString().encode()])
         if ret == ECSCodes.ok:
             self.log("Detector %s created" % detectorObject.id)
             return True
+        if ret == ECSCodes.error:
+            self.log("ecs returned error code for creating Detector")
+            return "ecs returned error code"
         if ret == ECSCodes.timeout:
             self.log("timeout creating Detector")
+            return "timeout creating Detector"
         else:
-            self.log("error creating Detector")
-        return False
+            errorDict = json.loads(ret.decode())
+            return errorDict["error"]
 
 
     def getUnmappedDetectors(self):
@@ -189,10 +198,10 @@ class ECSHandler:
             return True
         if ret == ECSCodes.timeout:
             self.log("timeout moving Detector %s to pca %s" % (detectorId,toPCAId))
-            return False
+            return "request timeout"
         if ret == ECSCodes.error:
             self.log("error moving Detector %s to pca %s" % (detectorId,toPCAId))
-            return False
+            return "ecs returned error code"
         errorDict = json.loads(ret.decode())
         self.log("error moving Detector %s to pca %s: %s" % (detectorId,toPCAId,errorDict["error"]))
         return errorDict["error"]
@@ -447,24 +456,11 @@ ecs = ECSHandler()
 # print(gui.test)
 #
 from django.contrib.auth import user_logged_out
-from django.core.signals import request_finished
 from django.dispatch import receiver
-from django.contrib.auth.models import User
 
-from django.dispatch import Signal
-
-#@receiver(request_finished2)
-def my_callback(sender, request, **kwargs):
-    print(sender)
-    print(kwargs)
-    print(request.user)
-    print("Request finished!")
-
-request_finished2 = Signal(providing_args=["request"])
-request_finished2.connect(my_callback)
 @receiver(user_logged_out)
 def on_user_logged_out(sender, request, **kwargs):
-     #pcas
+    #pcas
     for pca in ecs.pcaHandlers.items():
         pcaObject = pcaModel.objects.filter(id=pca[0]).get()
         if request.user.has_perm("has_control",pcaObject):
@@ -475,67 +471,119 @@ def on_user_logged_out(sender, request, **kwargs):
         remove_perm('has_control', request.user, pcaObject)
 
 def permission_timeout():
-    time.sleep(10)
-    for user, perms in usersWithPermission.items():
-        if "has_control" in perms:
-            return redirect
+    """remove permission has control if user has been inactive for a while"""
+    while True:
+        #seconds
+        time.sleep(settings.PERMISSION_TIMEOUT)
+        allPCAs = pcaModel.objects.all()
+        for pcaObject in allPCAs:
+            usersWithPermission = get_users_with_perms(pcaObject, attach_perms = True)
+            for user, perms in usersWithPermission.items():
+                if "has_control" in perms:
+                    timedelta = timezone.now() - pcaObject.permissionTimestamp
+                    if timedelta.total_seconds() > settings.PERMISSION_TIMEOUT:
+                        print(str(timedelta.total_seconds()) +" timeout user: "+str(user) )
+                        remove_perm('has_control', user, pcaObject)
+t = threading.Thread(name="permission_timeout", target=permission_timeout)
+t.start()
 
 from django.views.generic import TemplateView
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.views.generic.edit import FormView
+from guardian.mixins import PermissionRequiredMixin
+class resetUserTimeoutMixin(object):
+    """resets the timeout if a user makes a request"""
+    def dispatch(self, request, *args, **kwargs):
+        allPCAs = pcaModel.objects.all()
+        for pcaObject in allPCAs:
+            perm = get_user_perms(request.user,pcaObject)
+            if 'has_control' in perm:
+                pcaObject.permissionTimestamp = timezone.now()
+                pcaObject.save()
+        return super().dispatch(request, *args, **kwargs)
+
+class ecsMixin(LoginRequiredMixin,resetUserTimeoutMixin):
+    """combination of Login required and reset timeout """
+    pass
+
+def checkIfHasControl(user,pcaId):
+    pcaObject = pcaModel.objects.filter(id=pcaId).get()
+    if not user.has_perm("has_control",pcaObject):
+        return False
+    return True
 #views
-@login_required
-def index(request):
-    #create Data Map for template
+class index(ecsMixin,TemplateView):
+    template_name = "GUI/ECS.html"
     ecsMap = {}
-    for pca in ecs.pcaHandlers.items():
-        ecsMap[pca[0]] = pca[1].stateMap.map
-    ecsMap["unmapped"] = ecs.unmappedStateTable.map
-
     pcaObject = pcaModel.objects.filter(id="ecs").get()
-
-    #check if another user has control over pca
     userInControl = None
-    usersWithPermission = get_users_with_perms(pcaObject, attach_perms = True)
-    for user, perms in usersWithPermission.items():
-        if "has_control" in perms:
-            userInControl = user
-            break
-    if userInControl == request.user:
-        userInControl = "You"
-    request_finished2.send(sender=None,request=request)
-    return render(request, "GUI/ECS.html",{"ecsMap" : ecsMap,"pcaObject" : pcaObject, "userInControl":userInControl,})
+    def dispatch(self, request, *args, **kwargs):
+        for pca in ecs.pcaHandlers.items():
+            self.ecsMap[pca[0]] = pca[1].stateMap.map
+        self.ecsMap["unmapped"] = ecs.unmappedStateTable.map
+        self.pcaObject = pcaModel.objects.filter(id="ecs").get()
+        #check if another user has control over pca
+        self.userInControl = None
+        usersWithPermission = get_users_with_perms(self.pcaObject, attach_perms = True)
+        for user, perms in usersWithPermission.items():
+            if "has_control" in perms:
+                self.userInControl = user
+                break
+        if self.userInControl == request.user:
+            self.userInControl = "You"
+        return super().dispatch(request, *args, **kwargs)
 
-class AboutView(TemplateView):
-    template_name = "GUI/states.html"
-    stateMap = ecs.unmappedStateTable.map
 
+class pcaForm(forms.Form):
+    id = forms.CharField(label="id")
+    address = forms.CharField(label="address")
+    portPublish = forms.IntegerField(min_value= 1,label="Publish Port")
+    portLog = forms.IntegerField(min_value= 1,label="Port Logmessages")
+    portUpdates = forms.IntegerField(min_value= 1,label="Port Updates")
+    portCurrentState = forms.IntegerField(min_value= 1,label="Port Current State")
+    portSingleRequest = forms.IntegerField(min_value= 1)
+    portCommand = forms.IntegerField(min_value= 1,label="Port Command")
 
+class detectorForm(forms.Form):
+    id = forms.CharField(label="id")
+    address = forms.CharField(label="address")
+    type = forms.CharField(label="type")
+    portTransition = forms.IntegerField(min_value= 1,label="Port Transition")
+    portCommand = forms.IntegerField(min_value= 1,label="Port Command")
 
+class create_pca(ecsMixin,PermissionRequiredMixin,FormView):
+    #FormView
+    template_name = 'GUI/ECS_Create_Partition.html'
+    form_class = pcaForm
+    success_url = '/'
+    errorMessage = None
 
-@login_required
-def input_create_pca(request):
-    return render(request, 'GUI/ECS_Create_Partition.html')
+    #PermissionRequiredMixin
+    return_403 = True
+    raise_exception = True
+    permission_required = 'has_control'
+    permission_object = pcaModel.objects.filter(id="ecs").get()
 
-@login_required
-def create_pca(request):
-    values = {
-            "id" : request.POST["id"],
-            "address": request.POST["address"],
-            "portPublish" : int(request.POST["portPublish"]),
-            "portLog" : int(request.POST["portLog"]),
-            "portUpdates" : int(request.POST["portUpdates"]),
-            "portCurrentState" : int(request.POST["portCurrentState"]),
-            "portSingleRequest" : int(request.POST["portSingleRequest"]),
-            "portCommand" : int(request.POST["portCommand"]),
-            }
-    selectedDetectors = request.POST.getlist("unmappedDetectors")
-    obj = partitionDataObject(values)
-    errorMessage = ""
-    ret = ecs.createPartition(obj,selectedDetectors)
-    if ret == True:
-        return HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
-    else:
-        errorMessage = ret
-        return render(request, 'GUI/ECS_Create_Partition.html', {"errorMessage" : errorMessage, "post":request.POST})
+    def form_valid(self, form):
+        if not form.is_valid():
+            return super().form_invalid(form)
+        values = {
+                "id" :  form.cleaned_data["id"],
+                "address":  form.cleaned_data["address"],
+                "portPublish" :  form.cleaned_data["portPublish"],
+                "portLog" :  form.cleaned_data["portLog"],
+                "portUpdates" :  form.cleaned_data["portUpdates"],
+                "portCurrentState" :  form.cleaned_data["portCurrentState"],
+                "portSingleRequest" :  form.cleaned_data["portSingleRequest"],
+                "portCommand" :  form.cleaned_data["portCommand"],
+        }
+        obj = partitionDataObject(values)
+        ret = ecs.createPartition(obj)
+        if ret == True:
+            return super().form_valid(form)
+        else:
+            self.errorMessage = ret
+            return super().form_invalid(form)
 
 @login_required
 def input_edit_pca(request):
@@ -548,10 +596,37 @@ def input_edit_pca(request):
 def edit_pca(request):
     pass
 
-@login_required
-def input_create_detector(request):
-    return render(request, 'GUI/ECS_Create_Detector.html',{"pcaList" : ecs.pcaHandlers.items()})
+class create_detector(ecsMixin,PermissionRequiredMixin,FormView):
+    #FormView
+    template_name = 'GUI/ECS_Create_Detector.html'
+    form_class = detectorForm
+    success_url = '/'
+    errorMessage = None
 
+    #PermissionRequiredMixin
+    return_403 = True
+    raise_exception = True
+    permission_required = 'has_control'
+    permission_object = pcaModel.objects.filter(id="ecs").get()
+
+    def form_valid(self, form):
+        if not form.is_valid():
+            return super().form_invalid(form)
+        values = {
+                "id" : form.cleaned_data["id"],
+                "address": form.cleaned_data["address"],
+                "type" : form.cleaned_data["type"],
+                "portTransition" : form.cleaned_data["portTransition"],
+                "portCommand" : form.cleaned_data["portCommand"],
+        }
+        obj = detectorDataObject(values)
+        ret = ecs.createDetector(obj)
+        if ret == True:
+            return super().form_valid(form)
+        else:
+            self.errorMessage = ret
+            return super().form_invalid(form)
+"""
 @login_required
 def create_detector(request):
     values = {
@@ -571,22 +646,23 @@ def create_detector(request):
             ecs.mapDetectors(partition,[obj.id])
         return HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
     return render(request, '/ECS_Create_Detector.html', {"error" : True, "post":request.POST, "pcaList" : ecs.pcaHandlers.items()})
+"""
+class pcaView(ecsMixin,TemplateView):
+    template_name = "GUI/monitor.html"
 
-@login_required
-def pca(request,pcaId):
-    pca = ecs.getPCAHandler(pcaId)
-    pcaObject = pcaModel.objects.filter(id=pcaId).get()
-
-    #check if another user has control over pca
-    userInControl = None
-    usersWithPermission = get_users_with_perms(pcaObject, attach_perms = True)
-    for user, perms in usersWithPermission.items():
-        if "has_control" in perms:
-            userInControl = user
-            break
-    if userInControl == request.user:
-        userInControl = "You"
-    return render(request, "GUI/monitor.html",{'stateMap': pca.stateMap.map, "pcaId" : pcaId, "pcaObject" : pcaObject, "userInControl":userInControl})
+    def dispatch(self, request, *args, **kwargs):
+        self.pcaId = self.kwargs['pcaId']
+        self.stateMap = ecs.getPCAHandler(self.pcaId).stateMap.map
+        self.pcaObject = pcaModel.objects.filter(id=self.pcaId).get()
+        self.userInControl = None
+        usersWithPermission = get_users_with_perms(self.pcaObject, attach_perms = True)
+        for user, perms in usersWithPermission.items():
+            if "has_control" in perms:
+                self.userInControl = user
+                break
+        if self.userInControl == request.user:
+            self.userInControl = "You"
+        return super().dispatch(request, *args, **kwargs)
 
 @login_required
 def setActive(request,pcaId):
@@ -642,21 +718,41 @@ def stop(request,pcaId):
     pca.sendCommand(ECSCodes.stop)
     return HttpResponse(status=200)
 
-@login_required
-def input_MoveDetectors(request):
-    unmappedDetectors = ecs.getUnmappedDetectors()
-    return render(request, 'GUI/ECS_moveDetectors.html',{"partitions" : ecs.pcaHandlers.items(), "unmappedDetectors" : unmappedDetectors})
+class moveDetectors(ecsMixin,PermissionRequiredMixin,TemplateView):
+        template_name = 'GUI/ECS_moveDetectors.html'
 
-@login_required
-def moveDetectors(request):
-    toPcaId = request.POST['toPartition']
-    detectors = request.POST.getlist("selectedDetectors")
-    for dId in detectors:
-        ret = ecs.moveDetector(dId,toPcaId)
-        if ret != True:
-            errorMessage = ret
-            return render(request, 'GUI/ECS_moveDetectors.html',{"partitions" : ecs.pcaHandlers.items(), "errorMessage" : errorMessage})
-    return HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
+        #PermissionRequiredMixin
+        return_403 = True
+        raise_exception = True
+        permission_required = 'has_control'
+        permission_object = pcaModel.objects.filter(id="ecs").get()
+
+        def dispatch(self, request, *args, **kwargs):
+            self.unmappedDetectors = ecs.getUnmappedDetectors()
+            self.partitions = ecs.pcaHandlers.items()
+            return super().dispatch(request, *args, **kwargs)
+
+        def post(self, request, *args, **kwargs):
+            toPcaId = request.POST['toPartition']
+            detectors = request.POST.getlist("selectedDetectors")
+            for dId in detectors:
+                ret = ecs.moveDetector(dId,toPcaId)
+                if ret != True:
+                    self.errorMessage = ret
+                    return self.get(request, *args, **kwargs)
+            return HttpResponseRedirect('/')
+
+class deleteDetector(ecsMixin,PermissionRequiredMixin,TemplateView):
+    #PermissionRequiredMixin
+    return_403 = True
+    raise_exception = True
+    permission_required = 'has_control'
+    permission_object = pcaModel.objects.filter(id="ecs").get()
+
+    def dispatch(self, request, *args, **kwargs):
+        self.unmappedDetectors = ecs.getUnmappedDetectors()
+        self.partitions = ecs.pcaHandlers.items()
+        return super().dispatch(request, *args, **kwargs)
 
 
 @login_required
@@ -693,6 +789,8 @@ def takeControl(request,pcaId):
         if "has_control" in perms:
             return redirect
     assign_perm('has_control', request.user, pcaObject)
+    pcaObject.permissionTimestamp = timezone.now()
+    pcaObject.save()
     return redirect
 
 @permission_required('GUI.can_take_control')
