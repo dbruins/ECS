@@ -40,13 +40,13 @@ class DetectorController:
         #get Detector Information
         detectorData = None
         while detectorData == None:
-            requestSocket = self.context.socket(zmq.REQ)
-            requestSocket.connect("tcp://%s:%s" % (self.conf['ECSAddress'],self.conf['ECSRequestPort']))
-            requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-            requestSocket.setsockopt(zmq.LINGER,0)
-
-            requestSocket.send_multipart([ECSCodes.getDetectorForId, self.MyId.encode()])
             try:
+                requestSocket = self.context.socket(zmq.REQ)
+                requestSocket.connect("tcp://%s:%s" % (self.conf['ECSAddress'],self.conf['ECSRequestPort']))
+                requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+                requestSocket.setsockopt(zmq.LINGER,0)
+
+                requestSocket.send_multipart([ECSCodes.getDetectorForId, self.MyId.encode()])
                 detectorDataJSON = requestSocket.recv()
                 if detectorDataJSON == ECSCodes.idUnknown:
                     print("The ECS doesn't know who I am :(")
@@ -56,10 +56,9 @@ class DetectorController:
                 detectorData = detectorDataObject(detectorDataJSON)
             except zmq.Again:
                 print("timeout getting detector Data")
-                requestSocket.close()
                 continue
             except zmq.error.ContextTerminated:
-                requestSocket.close()
+                pass
             finally:
                 requestSocket.close()
 
@@ -79,6 +78,7 @@ class DetectorController:
         self.stateMachine = Statemachine(configDet["stateFile"],startState)
         self.pcaAddress = pcaData.address
         self.pcaUpdatePort = pcaData.portUpdates
+        self.pcaID = pcaData.id
 
         self.commandSocket = self.context.socket(zmq.REP)
         self.commandSocket.bind("tcp://*:%s" % self.portCommand)
@@ -134,6 +134,7 @@ class DetectorController:
         self.stateMap.reset()
         self.pcaAddress = partition.address
         self.pcaUpdatePort = partition.portUpdates
+        self.pcaID = partition.id
 
         #blocks until subscription socket is closed
         self.subContext.term()
@@ -149,10 +150,10 @@ class DetectorController:
 
     def sendUpdate(self):
         """send current state to PCA"""
-        socketSendUpdateToPCA = self.context.socket(zmq.REQ)
-        socketSendUpdateToPCA.connect("tcp://%s:%s" % (self.pcaAddress,self.pcaUpdatePort))
-        socketSendUpdateToPCA.send_multipart([self.MyId.encode(),ECS_tools.intToBytes(self.currentTransitionNumber),self.stateMachine.currentState.encode()])
         try:
+            socketSendUpdateToPCA = self.context.socket(zmq.REQ)
+            socketSendUpdateToPCA.connect("tcp://%s:%s" % (self.pcaAddress,self.pcaUpdatePort))
+            socketSendUpdateToPCA.send_multipart([self.MyId.encode(),ECS_tools.intToBytes(self.currentTransitionNumber),self.stateMachine.currentState.encode()])
             r = socketSendUpdateToPCA.recv()
             if r == ECSCodes.idUnknown:
                 socketSendUpdateToPCA.close()
@@ -162,7 +163,7 @@ class DetectorController:
         except zmq.Again:
             print("timeout sending status")
         except zmq.error.ContextTerminated:
-            socketSendUpdateToPCA.close()
+            pass
         except Exception as e:
             print("error sending status: %s" % str(e))
         finally:
@@ -254,6 +255,12 @@ class DetectorController:
                     partition = partitionDataObject(json.loads(arg))
                     self.changePCA(partition)
                     self.commandSocket.send(ECSCodes.ok)
+                    continue
+                if command == ECSCodes.check:
+                    self.commandSocket.send(ECSCodes.ok)
+                    partition = partitionDataObject(json.loads(arg))
+                    if partition.id != self.pcaID:
+                        self.changePCA(partition)
                     continue
                 self.commandSocket.send(ECSCodes.unknownCommand)
             except zmq.error.ContextTerminated:

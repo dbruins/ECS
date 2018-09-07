@@ -58,6 +58,7 @@ class UnmappedDetectorController:
         while True:
             id,state = self.publishQueue.get()
             if self.terminate.is_set():
+                self.socketPublish.close()
                 break
             self.sequence = self.sequence + 1
             if state == ECSCodes.removed:
@@ -153,6 +154,24 @@ class UnmappedDetectorController:
         start_new_thread(det.terminate,())
         return True
 
+    def terminateContoller(self):
+        self.terminate.set()
+        self.publishQueue.put((False,False))
+        self.context.term()
+
+    def isDetectorConnected(self,detectorId):
+        return self.detectors[detectorId].connected
+
+    def abortDetector(self,detId):
+        det = self.detectors[detId]
+        return det.abort()
+
+    def isShutdown(self,detectorId):
+        return self.detectors[detectorId].isShutdown()
+
     def shutdownDetector(self,detId):
         det = self.detectors[detId]
-        det.shutdown()
+        if not det.powerOff():
+            return False
+        else:
+            return True

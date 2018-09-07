@@ -1,0 +1,35 @@
+<html>
+  <body>
+    {%if view.failedPartitions%}
+    <a>error messages</a><br/>
+    {% for key,value in view.failedPartitions.items %}
+      {%if value.0 == "unmapFail"%}
+        <a>{{key}}: {{value.1}}</a><br/>
+        {%for key,value in view.failedDetectors.items%}
+          <a>{{key}}: {{value}}</a><br/>
+        {%endfor%}
+      {%else%}
+        <a>{{key}}: {{value.1}}</a><br/>
+      {%endif%}
+    {% endfor %}
+    <br/>
+    <form action="{% url 'GUI:delete_pca' %}" method="post">
+      {% csrf_token %}
+      <a>there had been errors while deleting some Partitions. Delete anyway?</a><br/>
+      {% for p in view.failedPartitions %}
+        <label>Partition {{p}}</label><input type='checkbox' name='selectedPartitions' value='{{p}}'><br/>
+      {% endfor %}
+      <input type="hidden" name="forceDelete" value="True">
+      <input type="submit" value="delete anyway">
+    </form>
+    {%else%}
+    <form action="{% url 'GUI:delete_pca' %}" method="post">
+      {% csrf_token %}
+      {%for p in view.partitions%}
+        <label>Partition {{p.0}}</label><input type='checkbox' name='selectedPartitions' value='{{p.0}}'><br/>
+      {%endfor%}
+      <input type="submit" value="delete">
+    </form>
+    {%endif%}
+  </body>
+</html>

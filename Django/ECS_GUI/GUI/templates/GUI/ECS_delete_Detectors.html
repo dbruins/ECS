@@ -1,0 +1,28 @@
+<html>
+  <body>
+    {%if view.failedDetectors%}
+    <a>error messages</a><br/>
+    {% for d in view.failedDetectors.items %}
+      <a>{{d.0}}: {{d.1}}</a><br/>
+    {% endfor %}
+    <br/>
+    <form action="{% url 'GUI:delete_detectors' %}" method="post">
+      {% csrf_token %}
+      <a>there had been errors while shutting down some Detectors. Delete anyway?</a><br/>
+      {% for d in view.failedDetectors %}
+        <label>Detector {{d.0}}</label><input type='checkbox' name='selectedDetectors' value='{{d.0}}'><br/>
+      {% endfor %}
+      <input type="hidden" name="forceDelete" value="True">
+      <input type="submit" value="delete anyway">
+    </form>
+    {%else%}
+    <form action="{% url 'GUI:delete_detectors' %}" method="post">
+      {% csrf_token %}
+      {%for d in view.unmappedDetectors%}
+        <label>Detector {{d.id}}</label><input type='checkbox' name='selectedDetectors' value='{{d.id}}'><br/>
+      {%endfor%}
+      <input type="submit" value="delete">
+    </form>
+    {%endif%}
+  </body>
+</html>

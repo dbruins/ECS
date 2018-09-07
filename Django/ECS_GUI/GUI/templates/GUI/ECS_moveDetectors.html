@@ -1,7 +1,7 @@
 <html>
+  {%if not view.failedDetectors%}
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
   <script>
-
     unmappedDetectorsHTML = ""
     {% for d in view.unmappedDetectors %}
     unmappedDetectorsHTML += "<a>Detector "+{{d.id}}+" </a><input type='checkbox' name='selectedDetectors' value='"+{{d.id}}+"'><br/>";
@@ -79,37 +79,52 @@
       changeDetectorList($("#fromPartition").val())
     });
   </script>
+  {%endif%}
   <body>
-    {%if view.errorMessage%}
-    <a>{{view.errorMessage}}</a>
+    {%if view.failedDetectors%}
+      <a>error messages</a><br/>
+      {% for d in view.failedDetectors.items %}
+        <a>{{d.0}}: {{d.1}}</a><br/>
+      {% endfor %}
+      <br/>
+      <form action="{% url 'GUI:move_detectors' %}" method="post">
+        {% csrf_token %}
+        <a>there had been errors while moving some Detectors. Move anyway?</a><br/>
+        {% for d in view.failedDetectors %}
+          <label>Detector {{d.0}}</label><input type='checkbox' name='selectedDetectors' value='{{d.0}}'><br/>
+        {% endfor %}
+        <input type="hidden" name="toPartition" value="{{view.toPcaId}}">
+        <input type="hidden" name="forceMove" value="True">
+        <input type="submit" value="move anyway">
+      </form>
+    {%else%}
+      <form action="{% url 'GUI:move_detectors' %}" method="post">
+        {% csrf_token %}
+        <div>
+          <label>From Partition</label>
+          <select id="fromPartition" name="fromPartition" onchange="check(this);changeDetectorList(this.value)">
+            <option value="unmapped">unused Detectors</option>
+            {% for p in view.partitions %}
+              <option value="{{p.1.id}}">{{p.1.id}}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <br/>
+        <div id ="detectors">
+        </div>
+        <br/>
+        <div>
+          <label>To Partition</label>
+          <select id="toPartition" name="toPartition" onchange="check(this)">
+            <option value="unmapped">unused Detectors</option>
+            {% for p in view.partitions %}
+              <option value="{{p.1.id}}">{{p.1.id}}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <br/>
+        <input type="submit" value="move">
+      </form>
     {%endif%}
-    <form action="{% url 'GUI:move_detectors' %}" method="post">
-      {% csrf_token %}
-      <div>
-        <label>From Partition</label>
-        <select id="fromPartition" name="fromPartition" onchange="check(this);changeDetectorList(this.value)">
-          <option value="unmapped">unused Detectors</option>
-          {% for p in view.partitions %}
-            <option value="{{p.1.id}}">{{p.1.id}}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <br/>
-      <div id ="detectors">
-      </div>
-      <br/>
-      <div>
-        <label>To Partition</label>
-        <select id="toPartition" name="toPartition" onchange="check(this)">
-          <option value="unmapped">unused Detectors</option>
-          {% for p in view.partitions %}
-            <option value="{{p.1.id}}">{{p.1.id}}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <br/>
-      <input type="submit" value="move">
-    </form>
-
   </body>
 </html>

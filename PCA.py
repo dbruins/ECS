@@ -42,6 +42,9 @@ class PCA:
         config.read("init.cfg")
         conf = config["Default"]
         self.context = zmq.Context()
+        self.receive_timeout = int(conf['receive_timeout'])
+        self.ECSAdress = conf['ECSAddress']
+        self.ECSRequestPort = conf['ECSRequestPort']
 
         #get your config
         configECS = None
@@ -62,10 +65,9 @@ class PCA:
                 configECS = partitionDataObject(configJSON)
             except zmq.Again:
                 print("timeout getting configuration")
-                requestSocket.close()
                 continue
             except zmq.error.ContextTerminated:
-                requestSocket.close()
+                pass
             finally:
                 requestSocket.close()
 
@@ -137,17 +139,15 @@ class PCA:
                 ret = requestSocket.recv()
                 if ret == ECSCodes.error:
                     self.log("received error getting DetectorList", True)
-                    requestSocket.close()
                     continue
                 detJSON = json.loads(ret.decode())
                 #create DataObjectCollection from JSON
                 detList = DataObjectCollection(detJSON,detectorDataObject)
             except zmq.Again:
                 self.log("timeout getting DetectorList", True)
-                requestSocket.close()
                 continue
             except zmq.error.ContextTerminated:
-                requestSocket.close()
+                pass
             finally:
                 requestSocket.close()
 
@@ -256,6 +256,11 @@ class PCA:
                     #it's just a ping
                     continue
 
+                def checkConsistencyRequest(detectorList):
+                    detectorList = DataObjectCollection(json.loads(detectorList),detectorDataObject)
+                    start_new_thread(self.checkSystemConsistency,(detectorList,))
+                    return ECSCodes.ok
+
                 def switcher(code,arg=None):
                     #functions for codes
                     dbFunctionDictionary = {
@@ -268,6 +273,7 @@ class PCA:
                         ECSCodes.removeDetector: self.removeDetector,
                         ECSCodes.addDetector: self.addDetector,
                         ECSCodes.abort: self.abort,
+                        ECSCodes.check: checkConsistencyRequest,
                     }
                     #returns function for Code or None if the received code is unknown
                     f = dbFunctionDictionary.get(code,None)
@@ -278,7 +284,6 @@ class PCA:
                         ret = f(arg)
                     else:
                         ret = f()
-                    print(ret)
                     self.remoteCommandSocket.send(ret)
                 if arg:
                     switcher(command,arg)
@@ -378,6 +383,29 @@ class PCA:
                 self.socketServeCurrentStatus.close()
                 break
 
+    def checkSystemConsistency(self,detList):
+        """check wether the Detector List and States are correct"""
+        #check detectorList
+        for d in self.detectors.values():
+            if d.id not in detList.asDictionary():
+                self.log("System check: Detector %s should not have been a Part of Partition %s" % (d.id,self.id),True)
+                self.removeDetector(d.id)
+        for d in detList:
+            if d.id not in self.detectors:
+                self.log("System check: Detector %s was not in Partition %s" % (d.id,self.id),True)
+                self.addDetector(d)
+
+        #check DetectorStates
+        for d in self.detectors.values():
+            state = d.getStateFromDetector()
+            if not state:
+                #timeout getting State let the pingThread handele it
+                continue
+            if d.stateMachine.currentState != state:
+                self.log("During System check Detector %s returned an unexpected state: %s" % (d.id,state),True)
+                d.stateMachine.currentState = state
+        print("check done")
+
     def addDetector(self,detector):
         """add Detector to Dictionary and pubish it's state"""
         self.sem.acquire()
@@ -410,6 +438,7 @@ class PCA:
         self.publishQueue.put((id,ECSCodes.removed))
         del self.detectors[id]
         del self.activeDetectors[id]
+        self.removePendingTransition(id)
         #this might take a few seconds dending on ping interval
         start_new_thread(det.terminate,())
         self.sem.release()
@@ -534,7 +563,8 @@ class PCA:
         self.pendingTransitions[id] = number
 
     def removePendingTransition(self,id):
-        del self.pendingTransitions[id]
+        if id in self.pendingTransitions:
+            del self.pendingTransitions[id]
 
 
     def threadFunctionCall(self,id,function,retq):
@@ -623,16 +653,6 @@ class PCA:
 
         self.sem.release()
         return ECSCodes.ok
-
-    def checkOpenTransitions():
-        for id,number in self.pendingTransitions:
-            det = self.detectors[id]
-            socket = self.context.socket(zmq.REQ)
-            socket.connect("tcp://%s:%s" %(det.addres,det.portCommand))
-            socket.send_multipart([ECSCodes.PCAAsksForTransitionsStatus,number])
-            #todo what to do?
-
-
 
     def log(self,logmessage,error=False):
         str=datetime.now().strftime("%Y-%m-%d %H:%M:%S")+":" + logmessage

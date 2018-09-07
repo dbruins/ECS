@@ -6,7 +6,6 @@ import logging
 import ECSCodes
 import configparser
 import time
-from ECS_tools import MapWrapper
 import ECS_tools
 import threading
 
@@ -77,7 +76,6 @@ class Detector:
                     self.stateMachine.currentState = self.getStateFromDetector()
                     if not self.stateMachine.currentState:
                         #sometimes when PCA and DC start both at once there is a timeout from getting state(maybe the socket isn't ready idk)
-                        pingSocket.close()
                         continue
                     #todo there could be a race condition Problem somewhere around here
                     self.connected = True
@@ -89,7 +87,6 @@ class Detector:
                     self.pcaTimeoutFunktion(self.id)
             except zmq.error.ContextTerminated:
                 #termination during sending ping
-                pingSocket.close()
                 break
             finally:
                 pingSocket.close()
@@ -120,7 +117,7 @@ class Detector:
                 if self.abort_bool:
                     return False
 
-            if not self.active.isSet():
+            if not self.active.isSet() or not self.stateMachine.currentState:
                 return False
             if not self.stateMachine.checkIfPossible(command):
                 self.logfunction("Transition %s is not possible for Detector %s in current state" % (command,self.id))
@@ -139,12 +136,12 @@ class Detector:
                     return False
             except zmq.Again:
                 self.logfunction("timeout from Detector "+str(self.id)+" for sending "+ command,True)
-                socketSender.close()
                 return False
             except zmq.error.ContextTerminated:
                 self.logfunction("Detector "+str(self.id)+" was terminated during "+ command,True)
-                socketSender.close()
                 return False
+            finally:
+                socketSender.close()
         return True
 
     def getId(self):
@@ -167,18 +164,19 @@ class Detector:
     def getStateFromDetector(self):
         """get's the state from the dummy returns False when a Problem occurs. Use on startup or if there has been a crash or a connection Problem"""
         state = False
-        requestSocket = self.zmqContext.socket(zmq.REQ)
-        requestSocket.connect(self.pingAddress)
-        requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-        requestSocket.setsockopt(zmq.LINGER,0)
-        requestSocket.send(ECSCodes.pcaAsksForDetectorStatus)
         try:
+            requestSocket = self.zmqContext.socket(zmq.REQ)
+            requestSocket.connect(self.pingAddress)
+            requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+            requestSocket.setsockopt(zmq.LINGER,0)
+            requestSocket.send(ECSCodes.pcaAsksForDetectorStatus)
             state = requestSocket.recv().decode()
         except zmq.Again:
             self.logfunction("timeout getting Detector Status for Detector %s" % (self.id) ,True)
         except Exception as e:
             self.logfunction("error getting Detector Status for Detector %s: %s" % (self.id,str(e)) ,True)
-        requestSocket.close()
+        finally:
+            requestSocket.close()
         return state
 
     def terminate(self):
@@ -195,13 +193,15 @@ class Detector:
         pass
     def powerOff(self):
         pass
+    def isShutdown(self):
+        pass
 
     def abort(self):
-        requestSocket = self.zmqContext.socket(zmq.REQ)
-        requestSocket.connect(self.pingAddress)
-        requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-        requestSocket.setsockopt(zmq.LINGER,0)
         try:
+            requestSocket = self.zmqContext.socket(zmq.REQ)
+            requestSocket.connect(self.pingAddress)
+            requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+            requestSocket.setsockopt(zmq.LINGER,0)
             requestSocket.send(ECSCodes.abort)
             state = requestSocket.recv().decode()
             self.removePendingTransition(self.id)
@@ -209,17 +209,21 @@ class Detector:
             self.abort_bool = True
         except zmq.Again:
             self.logfunction("timeout aborting Detector %s" % (self.id) ,True)
+            return False
         except Exception as e:
             self.logfunction("error aborting Detector %s: %s" % (self.id,str(e)) ,True)
-        requestSocket.close()
+            return False
+        finally:
+            requestSocket.close()
+        return True
 
 class DetectorA(Detector):
 
     def getReady(self):
-        if not (self.stateMachine.currentState == "Shutdown" or self.stateMachine.currentState == "Uncofigured"):
+        if not (self.isShutdown() or self.stateMachine.currentState == "Uncofigured"):
             self.logfunction("nothing to be done for Detector %s" % self.id)
             return False
-        if self.stateMachine.currentState == "Shutdown":
+        if self.isShutdown():
             return self.transitionRequest(["poweron","configure"])
         else:
             return self.transitionRequest(["configure"])
@@ -239,7 +243,7 @@ class DetectorA(Detector):
         return self.transitionRequest(["stop"])
 
     def powerOff(self):
-        if self.stateMachine.currentState == "Shutdown":
+        if self.isShutdown():
             self.logfunction("nothing to be done for Detector %s" % self.id)
             return False
         return self.transitionRequest(["poweroff"])
@@ -248,6 +252,12 @@ class DetectorA(Detector):
         return self.transitionRequest(["configure"])
     def reconfigure(self):
         return self.transitionRequest(["reconfigure"])
+
+    def isShutdown(self):
+        if self.getState() == "Shutdown":
+            return True
+        else:
+            return False
 
 class DetectorB(Detector):
     def getReady(self):

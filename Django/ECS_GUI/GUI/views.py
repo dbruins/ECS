@@ -111,13 +111,46 @@ class ECSHandler:
         partition = partitionDataObject(json.loads(ret.decode()))
         return partition
 
+    def deletePartition(self,partitionId,forceDelete=False):
+        arg = {}
+        arg["partitionId"] = partitionId
+        if forceDelete:
+            arg["forceDelete"] = True
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.deletePartition, json.dumps(arg).encode()])
+        if ret == ECSCodes.ok:
+            #connect to new PCA
+            handler = self.pcaHandlers[partitionId]
+            #terminate Handlers
+            handler.terminatePCAHandler()
+            del self.pcaHandlers[partitionId]
+            self.log("partition %s deleted" % partitionId)
+            #delete Model for permissions
+            pcaModel.objects.filter(id=partitionId).delete()
+            return True
+        if ret == ECSCodes.timeout:
+            self.log("timeout deleting partition")
+            return "timeout deleting partition"
+        if ret == ECSCodes.idUnknown:
+            self.log("Partition Id is unknown")
+            return "Partition Id is unknown"
+        if ret == ECSCodes.error:
+            self.log("ECS returned error code deleting partition")
+            return "ECS returned error code deleting partition"
+        else:
+            try:
+                errorDict = json.loads(ret.decode())
+                return errorDict["error"]
+            except:
+                self.log("ECS returned unknown error deleting partition")
+                return "unknown Error"
+
+
     def createPartition(self,partitionObject):
         message = {}
         message["partition"] = partitionObject.asJsonString()
         ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.createPartition, json.dumps(message).encode()])
         if ret == ECSCodes.ok:
             #connect to new PCA
-            self.pcaCollection.add(partitionObject)
             self.pcaHandlers[partitionObject.id] = PCAHandler(partitionObject)
             self.log("partition %s created" % partitionObject.id)
             #add Model for permissions
@@ -130,9 +163,13 @@ class ECSHandler:
             self.log("ecs returned error code for creating Partition")
             return "ecs returned error code"
         else:
-            errorDict = json.loads(ret.decode())
-            self.log("error creating pca: %s" % (errorDict["error"]))
-            return errorDict["error"]
+            try:
+                errorDict = json.loads(ret.decode())
+                self.log("error creating pca: %s" % (errorDict["error"]))
+                return errorDict["error"]
+            except:
+                self.log("ECS returned unknown error creating partition")
+                return "unknown Error"
 
     def createDetector(self,detectorObject):
         ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.createDetector, detectorObject.asJsonString().encode()])
@@ -146,8 +183,38 @@ class ECSHandler:
             self.log("timeout creating Detector")
             return "timeout creating Detector"
         else:
-            errorDict = json.loads(ret.decode())
-            return errorDict["error"]
+            try:
+                errorDict = json.loads(ret.decode())
+                return errorDict["error"]
+            except:
+                self.log("ECS returned unknown error creating detector")
+                return "unknown Error"
+
+    def deleteDetector(self,detectorId,forceDelete=False):
+        arg = {}
+        arg["detectorId"] = detectorId
+        if forceDelete:
+            arg["forceDelete"] = True
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.deleteDetector, json.dumps(arg).encode()])
+        if ret == ECSCodes.ok:
+            self.log("Detector %s deleted" % detectorId)
+            return True
+        if ret == ECSCodes.timeout:
+            self.log("timeout deleting Detector")
+            return "timeout deleting Detector"
+        if ret == ECSCodes.error:
+            self.log("ECS returned error code deleting Detector")
+            return "ECS returned error code deleting Detector"
+        if ret == ECSCodes.connectionProblemDetector:
+            self.log("Detector %s could not be reached" % detectorId)
+            return "Detector %s could not be reached" % detectorId
+        else:
+            try:
+                errorDict = json.loads(ret.decode())
+                return errorDict["error"]
+            except:
+                self.log("ECS returned unknown error deleting Detector")
+                return "unknown Error"
 
 
     def getUnmappedDetectors(self):
@@ -188,11 +255,13 @@ class ECSHandler:
         detList = DataObjectCollection(json.loads(ret),detectorDataObject)
         return detList
 
-    def moveDetector(self,detectorId,toPCAId):
+    def moveDetector(self,detectorId,toPCAId,forceMove=False):
         """maps Detector to Partition (ECS knows where the Detector currently is)"""
         arg={}
         arg["detectorId"] = detectorId
         arg["partitionId"] = toPCAId
+        if forceMove:
+            arg["forceMove"] = True
         ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.detectorChangePartition, json.dumps(arg).encode()])
         if ret == ECSCodes.ok:
             return True
@@ -202,9 +271,19 @@ class ECSHandler:
         if ret == ECSCodes.error:
             self.log("error moving Detector %s to pca %s" % (detectorId,toPCAId))
             return "ecs returned error code"
-        errorDict = json.loads(ret.decode())
-        self.log("error moving Detector %s to pca %s: %s" % (detectorId,toPCAId,errorDict["error"]))
-        return errorDict["error"]
+        if ret == ECSCodes.connectionProblemOldPartition:
+            self.log("error moving Detector %s to pca %s" % (detectorId,toPCAId))
+            return "Old Partition is not connected"
+        if ret == ECSCodes.connectionProblemNewPartition:
+            self.log("error moving Detector %s to pca %s" % (detectorId,toPCAId))
+            return "New Partition is not connected"
+        try:
+            errorDict = json.loads(ret.decode())
+            self.log("error moving Detector %s to pca %s: %s" % (detectorId,toPCAId,errorDict["error"]))
+            return errorDict["error"]
+        except:
+            self.log("ECS returned unknown error moving Detector")
+            return "unknown Error"
 
     def waitForUnmappedDetectorUpdate(self):
         while True:
@@ -266,7 +345,8 @@ class ECSHandler:
             {
                 #method called in consumer
                 'type': 'logUpdate',
-                'text': message
+                'text': message,
+                'origin': 'ecs',
             }
         )
 
@@ -305,8 +385,8 @@ class PCAHandler:
         r = ECS_tools.getStateSnapshot(self.stateMap,partitionInfo.address,partitionInfo.portCurrentState,timeout=self.receive_timeout,pcaid=self.id)
         if r:
             self.PCAConnection = True
-
         t.start()
+
         t = threading.Thread(name="logUpdater", target=self.waitForLogUpdates)
         t.start()
         t = threading.Thread(name="heartbeat", target=self.pingHandler)
@@ -316,13 +396,24 @@ class PCAHandler:
         """send heartbeat/ping"""
         while True:
             nextPing = time.time() + self.pingInterval
-            socket = self.createCommandSocket()
-            socket.setsockopt(zmq.RCVTIMEO, self.pingTimeout)
-            socket.send(ECSCodes.ping)
             try:
+                #for whatever reason this raises a different Exception for ContextTerminated than send or recv
+                socket = self.context.socket(zmq.REQ)
+            except zmq.error.ZMQError:
+                pingSocket.close()
+                break
+            try:
+                socket.connect(self.commandSocketAddress)
+                socket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+                socket.setsockopt(zmq.LINGER,0)
+                socket.send(ECSCodes.ping)
                 r = socket.recv()
+            except zmq.error.ContextTerminated:
+                break
             except zmq.Again:
                 self.handleDisconnection()
+            except Exception as e:
+                self.log("Exception while sending Ping: %s" % str(e))
             finally:
                 socket.close()
 
@@ -337,8 +428,10 @@ class PCAHandler:
         command = [command]
         if arg:
             command.append(arg.encode())
-
-        commandSocket = self.createCommandSocket()
+        commandSocket = self.context.socket(zmq.REQ)
+        commandSocket.connect(self.commandSocketAddress)
+        commandSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+        commandSocket.setsockopt(zmq.LINGER,0)
         commandSocket.send_multipart(command)
         try:
             r = commandSocket.recv()
@@ -352,19 +445,9 @@ class PCAHandler:
             return False
         return True
 
-    def createCommandSocket(self):
-        """init or reset the command Socket"""
-        socket = self.context.socket(zmq.REQ)
-        socket.connect(self.commandSocketAddress)
-        socket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-        socket.setsockopt(zmq.LINGER,0)
-        return socket
-
     def handleDisconnection(self):
         if self.PCAConnection:
             self.log("PCA %s Connection Lost" % self.id)
-        #reset commandSocket
-        self.createCommandSocket()
         self.PCAConnection = False
         r = ECS_tools.getStateSnapshot(self.stateMap,self.address,self.portCurrentState,timeout=self.receive_timeout,pcaid=self.id)
         if r:
@@ -383,7 +466,11 @@ class PCAHandler:
 
     def waitForUpdates(self):
         while True:
-            m = self.socketSubscription.recv_multipart()
+            try:
+                m = self.socketSubscription.recv_multipart()
+            except zmq.error.ContextTerminated:
+                self.socketSubscription.close()
+                break
             if len(m) != 3:
                 print (m)
             else:
@@ -446,14 +533,22 @@ class PCAHandler:
     def waitForLogUpdates(self):
         """wait for new log messages from PCA"""
         while True:
-            m = self.socketSubLog.recv().decode()
+            try:
+                m = self.socketSubLog.recv().decode()
+            except zmq.error.ContextTerminated:
+                self.socketSubLog.close()
+                break
             self.log(m)
+
+    def terminatePCAHandler(self):
+        self.context.term()
+        print("%s terminated" % self.id)
 
 ecs = ECSHandler()
 
 
-# gui = apps.get_app_config('GUI')
-# print(gui.test)
+gui = apps.get_app_config('GUI')
+print(gui.test)
 #
 from django.contrib.auth import user_logged_out
 from django.dispatch import receiver
@@ -511,28 +606,6 @@ def checkIfHasControl(user,pcaId):
     if not user.has_perm("has_control",pcaObject):
         return False
     return True
-#views
-class index(ecsMixin,TemplateView):
-    template_name = "GUI/ECS.html"
-    ecsMap = {}
-    pcaObject = pcaModel.objects.filter(id="ecs").get()
-    userInControl = None
-    def dispatch(self, request, *args, **kwargs):
-        for pca in ecs.pcaHandlers.items():
-            self.ecsMap[pca[0]] = pca[1].stateMap.map
-        self.ecsMap["unmapped"] = ecs.unmappedStateTable.map
-        self.pcaObject = pcaModel.objects.filter(id="ecs").get()
-        #check if another user has control over pca
-        self.userInControl = None
-        usersWithPermission = get_users_with_perms(self.pcaObject, attach_perms = True)
-        for user, perms in usersWithPermission.items():
-            if "has_control" in perms:
-                self.userInControl = user
-                break
-        if self.userInControl == request.user:
-            self.userInControl = "You"
-        return super().dispatch(request, *args, **kwargs)
-
 
 class pcaForm(forms.Form):
     id = forms.CharField(label="id")
@@ -550,6 +623,47 @@ class detectorForm(forms.Form):
     type = forms.CharField(label="type")
     portTransition = forms.IntegerField(min_value= 1,label="Port Transition")
     portCommand = forms.IntegerField(min_value= 1,label="Port Command")
+
+
+#views
+class index(ecsMixin,TemplateView):
+    template_name = "GUI/ECS.html"
+    ecsMap = {}
+    pcaObject = pcaModel.objects.filter(id="ecs").get()
+    userInControl = None
+    def dispatch(self, request, *args, **kwargs):
+        self.ecsMap = {}
+        for pca in ecs.pcaHandlers.items():
+            self.ecsMap[pca[0]] = pca[1].stateMap.map
+        self.ecsMap["unmapped"] = ecs.unmappedStateTable.map
+        self.pcaObject = pcaModel.objects.filter(id="ecs").get()
+        #check if another user has control over pca
+        self.userInControl = None
+        usersWithPermission = get_users_with_perms(self.pcaObject, attach_perms = True)
+        for user, perms in usersWithPermission.items():
+            if "has_control" in perms:
+                self.userInControl = user
+                break
+        if self.userInControl == request.user:
+            self.userInControl = "You"
+        return super().dispatch(request, *args, **kwargs)
+
+class pcaView(ecsMixin,TemplateView):
+    template_name = "GUI/monitor.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.pcaId = self.kwargs['pcaId']
+        self.stateMap = ecs.getPCAHandler(self.pcaId).stateMap.map
+        self.pcaObject = pcaModel.objects.filter(id=self.pcaId).get()
+        self.userInControl = None
+        usersWithPermission = get_users_with_perms(self.pcaObject, attach_perms = True)
+        for user, perms in usersWithPermission.items():
+            if "has_control" in perms:
+                self.userInControl = user
+                break
+        if self.userInControl == request.user:
+            self.userInControl = "You"
+        return super().dispatch(request, *args, **kwargs)
 
 class create_pca(ecsMixin,PermissionRequiredMixin,FormView):
     #FormView
@@ -584,6 +698,51 @@ class create_pca(ecsMixin,PermissionRequiredMixin,FormView):
         else:
             self.errorMessage = ret
             return super().form_invalid(form)
+
+class delete_pca(ecsMixin,PermissionRequiredMixin,TemplateView):
+    template_name = 'GUI/ECS_Delete_Partition.html'
+    #PermissionRequiredMixin
+    return_403 = True
+    raise_exception = True
+    permission_required = 'has_control'
+    permission_object = pcaModel.objects.filter(id="ecs").get()
+
+    def dispatch(self, request, *args, **kwargs):
+        self.partitions = ecs.pcaHandlers.items()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        partitions = request.POST.getlist("selectedPartitions")
+        self.failedPartitions = False
+        for pcaId in partitions:
+            detectors = ecs.getDetectorListForPartition(pcaId)
+            self.forceDelete = False
+            if "forceDelete" in request.POST:
+                self.forceDelete = True
+            #unmap detectors
+            self.failedDetectors = False
+            for d in detectors:
+                ret = ecs.moveDetector(d.id,"unmapped",self.forceDelete)
+                if ret != True:
+                    if not self.failedDetectors:
+                        self.failedDetectors = {}
+                    self.failedDetectors[d.id] = ret
+            if self.failedDetectors:
+                if not self.failedPartitions:
+                    self.failedPartitions = {}
+                self.failedPartitions[pcaId] = ("unmapFail","Not all assigned Detectors could be unmapped")
+                continue
+            ret = ecs.deletePartition(pcaId,self.forceDelete)
+            if ret != True:
+                if not self.failedPartitions:
+                    self.failedPartitions = {}
+                self.failedPartitions[pcaId] = ("deleteFail",ret,)
+        if self.failedPartitions:
+            return self.get(request, *args, **kwargs)
+        return HttpResponseRedirect('/')
+
+
+
 
 @login_required
 def input_edit_pca(request):
@@ -626,43 +785,66 @@ class create_detector(ecsMixin,PermissionRequiredMixin,FormView):
         else:
             self.errorMessage = ret
             return super().form_invalid(form)
-"""
-@login_required
-def create_detector(request):
-    values = {
-            "id" : request.POST["id"],
-            "address": request.POST["address"],
-            "type" : request.POST["type"],
-            "portTransition" : int(request.POST["portTransition"]),
-            "portCommand" : int(request.POST["portCommand"]),
-            }
-    if request.POST["partition"] == "None":
-        partition = None
-    else:
-        partition = request.POST["partition"]
-    obj = detectorDataObject(values)
-    if ecs.createDetector(obj):
-        if partition:
-            ecs.mapDetectors(partition,[obj.id])
-        return HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
-    return render(request, '/ECS_Create_Detector.html', {"error" : True, "post":request.POST, "pcaList" : ecs.pcaHandlers.items()})
-"""
-class pcaView(ecsMixin,TemplateView):
-    template_name = "GUI/monitor.html"
+
+class moveDetectors(ecsMixin,PermissionRequiredMixin,TemplateView):
+        template_name = 'GUI/ECS_moveDetectors.html'
+
+        #PermissionRequiredMixin
+        return_403 = True
+        raise_exception = True
+        permission_required = 'has_control'
+        permission_object = pcaModel.objects.filter(id="ecs").get()
+
+        def dispatch(self, request, *args, **kwargs):
+            self.unmappedDetectors = ecs.getUnmappedDetectors()
+            self.partitions = ecs.pcaHandlers.items()
+            return super().dispatch(request, *args, **kwargs)
+
+        def post(self, request, *args, **kwargs):
+            self.toPcaId = request.POST['toPartition']
+            detectors = request.POST.getlist("selectedDetectors")
+            self.forceMove = False
+            if "forceMove" in request.POST:
+                self.forceMove = True
+            self.failedDetectors = False
+            for dId in detectors:
+                ret = ecs.moveDetector(dId,self.toPcaId,self.forceMove)
+                if ret != True:
+                    if not self.failedDetectors:
+                        self.failedDetectors = {}
+                    self.failedDetectors[dId] = ret
+            if self.failedDetectors:
+                return self.get(request, *args, **kwargs)
+            return HttpResponseRedirect('/')
+
+class deleteDetector(ecsMixin,PermissionRequiredMixin,TemplateView):
+    template_name = 'GUI/ECS_delete_Detectors.html'
+
+    #PermissionRequiredMixin
+    return_403 = True
+    raise_exception = True
+    permission_required = 'has_control'
+    permission_object = pcaModel.objects.filter(id="ecs").get()
 
     def dispatch(self, request, *args, **kwargs):
-        self.pcaId = self.kwargs['pcaId']
-        self.stateMap = ecs.getPCAHandler(self.pcaId).stateMap.map
-        self.pcaObject = pcaModel.objects.filter(id=self.pcaId).get()
-        self.userInControl = None
-        usersWithPermission = get_users_with_perms(self.pcaObject, attach_perms = True)
-        for user, perms in usersWithPermission.items():
-            if "has_control" in perms:
-                self.userInControl = user
-                break
-        if self.userInControl == request.user:
-            self.userInControl = "You"
+        self.unmappedDetectors = ecs.getUnmappedDetectors()
         return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        detectors = request.POST.getlist("selectedDetectors")
+        self.failedDetectors = False
+        self.forceDelete = False
+        if "forceDelete" in request.POST:
+            self.forceDelete = True
+        for detectorId in detectors:
+            ret = ecs.deleteDetector(detectorId,self.forceDelete)
+            if ret != True:
+                if not self.failedDetectors:
+                    self.failedDetectors = {}
+                self.failedDetectors[detectorId] = ret
+        if self.failedDetectors:
+            return self.get(request, *args, **kwargs)
+        return HttpResponseRedirect('/')
 
 @login_required
 def setActive(request,pcaId):
@@ -717,43 +899,6 @@ def stop(request,pcaId):
     pca = ecs.getPCAHandler(pcaId)
     pca.sendCommand(ECSCodes.stop)
     return HttpResponse(status=200)
-
-class moveDetectors(ecsMixin,PermissionRequiredMixin,TemplateView):
-        template_name = 'GUI/ECS_moveDetectors.html'
-
-        #PermissionRequiredMixin
-        return_403 = True
-        raise_exception = True
-        permission_required = 'has_control'
-        permission_object = pcaModel.objects.filter(id="ecs").get()
-
-        def dispatch(self, request, *args, **kwargs):
-            self.unmappedDetectors = ecs.getUnmappedDetectors()
-            self.partitions = ecs.pcaHandlers.items()
-            return super().dispatch(request, *args, **kwargs)
-
-        def post(self, request, *args, **kwargs):
-            toPcaId = request.POST['toPartition']
-            detectors = request.POST.getlist("selectedDetectors")
-            for dId in detectors:
-                ret = ecs.moveDetector(dId,toPcaId)
-                if ret != True:
-                    self.errorMessage = ret
-                    return self.get(request, *args, **kwargs)
-            return HttpResponseRedirect('/')
-
-class deleteDetector(ecsMixin,PermissionRequiredMixin,TemplateView):
-    #PermissionRequiredMixin
-    return_403 = True
-    raise_exception = True
-    permission_required = 'has_control'
-    permission_object = pcaModel.objects.filter(id="ecs").get()
-
-    def dispatch(self, request, *args, **kwargs):
-        self.unmappedDetectors = ecs.getUnmappedDetectors()
-        self.partitions = ecs.pcaHandlers.items()
-        return super().dispatch(request, *args, **kwargs)
-
 
 @login_required
 def getDetectorListForPCA(request):

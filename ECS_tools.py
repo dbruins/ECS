@@ -12,6 +12,9 @@ class MapWrapper:
     def __iter__(self):
         return self.copy().values().__iter__()
 
+    def keyIterator(self):
+        return copy.deepcopy(list(self.map.keys()))
+
     def __getitem__(self, key):
         """get value for key returns None if key doesn't exist"""
         self.semaphore.acquire()

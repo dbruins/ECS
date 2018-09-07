@@ -157,5 +157,5 @@ AUTHENTICATION_BACKENDS = (
     'django.contrib.auth.backends.ModelBackend', # this is default
     'guardian.backends.ObjectPermissionBackend',
 )
-
-PERMISSION_TIMEOUT = 60
+#in seconds
+PERMISSION_TIMEOUT = 5*60

@@ -29,7 +29,6 @@ function createWebSocket(){
         var message = data['message'];
         var type = data['type'];
         var origin = data['origin']
-
         if (type == "state"){
           var update = JSON.parse(message);
           var id = update['id'];
@@ -136,6 +135,12 @@ createWebSocket()
   </form>
   <form action="{% url 'GUI:move_detectors' %}" method="get">
     <input type="submit" value="move Detectors">
+  </form>
+  <form action="{% url 'GUI:delete_detectors' %}" method="get">
+    <input type="submit" value="delete Detectors">
+  </form>
+  <form action="{% url 'GUI:delete_pca' %}" method="get">
+    <input type="submit" value="delete Partitions">
   </form>
 </div>
 {%endif%}
