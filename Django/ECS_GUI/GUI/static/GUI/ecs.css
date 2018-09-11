@@ -1,0 +1,23 @@
+
+.NotReady{
+  color: #F00000;
+  margin-right: 1em;
+}
+
+.Ready{
+  color: #F0F200;
+  margin-right: 1em;
+}
+
+.Running{
+  color: #5CB85C;
+  margin-right: 1em;
+}
+
+.log{
+  margin-top: 1em;
+}
+
+.activeButton {
+  margin-left: 1em;
+}

@@ -441,7 +441,7 @@ class PCAHandler:
         finally:
             commandSocket.close()
         if r != ECSCodes.ok:
-            self.log("received error for sending command: " + command)
+            self.log("received error for sending command: " + str(command[0]))
             return False
         return True
 
@@ -627,7 +627,7 @@ class detectorForm(forms.Form):
 
 #views
 class index(ecsMixin,TemplateView):
-    template_name = "GUI/ECS.html"
+    template_name = "GUI/index.html"
     ecsMap = {}
     pcaObject = pcaModel.objects.filter(id="ecs").get()
     userInControl = None
@@ -652,9 +652,14 @@ class pcaView(ecsMixin,TemplateView):
     template_name = "GUI/monitor.html"
 
     def dispatch(self, request, *args, **kwargs):
+        self.partitions = []
+        for pca in ecs.pcaHandlers:
+            self.partitions.append(pca)
+        print(self.partitions)
         self.pcaId = self.kwargs['pcaId']
         self.stateMap = ecs.getPCAHandler(self.pcaId).stateMap.map
         self.pcaObject = pcaModel.objects.filter(id=self.pcaId).get()
+        self.ecsObject = pcaModel.objects.filter(id="ecs").get()
         self.userInControl = None
         usersWithPermission = get_users_with_perms(self.pcaObject, attach_perms = True)
         for user, perms in usersWithPermission.items():

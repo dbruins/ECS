@@ -4,10 +4,19 @@
 {%block control%}
 {% load guardian_tags %}
 {% get_obj_perms request.user for view.pcaObject as "pcaPerms" %}
+{% get_obj_perms request.user for view.ecsObject as "ecsPerms" %}
 <meta http-equiv=”Pragma” content=”no-cache”>
 <meta http-equiv=”Expires” content=”-1″>
 <meta http-equiv=”CACHE-CONTROL” content=”NO-CACHE”>
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+{% load static %}
+<!-- Bootstrap core CSS-->
+<link rel="stylesheet" type="text/css" href="{% static 'GUI/vendor/bootstrap/css/bootstrap.min.css' %}">
+<!-- Page level plugin CSS-->
+<link rel="stylesheet" type="text/css" href="{% static 'GUI/vendor/fontawesome-free/css/all.min.css' %}">
+<!-- Custom styles for this template-->
+<link href="{% static 'GUI/sb-admin.css' %}" rel="stylesheet">
+<link href="{% static 'GUI/ecs.css' %}" rel="stylesheet">
 <script>
 function createWebSocket(){
     var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/{{pcaId}}/');
@@ -37,20 +46,26 @@ function createWebSocket(){
               $('#dRow'+id).remove()
           }
           else{
-            buttonHtml = "";
-            {% if "has_control" in pcaPerms %}
-            if (newState == "inactive")
-              buttonHtml = '<button id="activeToggle" onclick="setactive('+ update['id'] +')" > activate  </button>';
+            if (newState == "Running" || newState == "Ready")
+              var cssClass = newState
             else
-              buttonHtml = '<button id="activeToggle" onclick="setinactive('+ update['id'] +')" > deactivate  </button>';
+              var cssClass = "NotReady"
+            {% if "has_control" in pcaPerms %}
+            buttonHtml = "";
+            if (id == "{{view.pcaId}}")
+              buttonHtml = ""
+            else if (newState == "inactive")
+              buttonHtml = '<button id="activeToggle" class="btn btn-primary activeButton" onclick="setactive('+ update['id'] +')" > activate  </button>';
+            else
+              buttonHtml = '<button id="activeToggle" class="btn btn-primary activeButton" onclick="setinactive('+ update['id'] +')" > deactivate  </button>';
             {% endif %}
             stateObject = $('#dState'+id)
             //check if state already exists
             if(stateObject.length){
-                stateObject.html(newState+buttonHtml);
+                stateObject.html('<i class="fas fa-circle '+cssClass+'"></i>'+newState+buttonHtml);
             }
             else{
-                newRow = '<tr class="tableRow"> <td>'+id+'</td><td id="dState'+id+'">'+newState+buttonHtml+'</td></tr>'
+                newRow = '<tr class="tableRow"> <td class="col-md-3">'+id+'</td><td id="dState'+id+'"><i class="fas fa-circle '+cssClass+'"></i>'+newState+buttonHtml+'</td></tr>'
                 $("#stateTable").append(newRow)
             }
           }
@@ -126,65 +141,226 @@ $(document).ready(function() {
     });
 });
 </script>
+<title>PCA{{view.pcaId}} Monitor</title>
 </head>
 
-<body>
-{% if perms.GUI.can_take_control %}
-  {% if view.userInControl %}
-      <p>Control already Taken by User : {{view.userInControl}}</p>
-  {% endif %}
-  {% if "has_control" in pcaPerms %}
-      <form action="{% url 'GUI:giveup_control' pcaId%}" method="post">
-        {% csrf_token %}
-        <input type="submit" value="give up control">
-      </form>
-  {% else %}
-      <form action="{% url 'GUI:take_control' pcaId%}" method="post">
-        {% csrf_token %}
-        <input type="submit" value="take control">
-      </form>
-  {% endif %}
-{% endif %}
-<h1>PCA {{view.pcaId}} Overview</h1>
+<body id="page-top">
 
-<div>
-  <table id="stateTable">
-    <tr>
-      <th>Detector</th>
-      <th>Status</th>
-    </tr>
-    {% for state in view.stateMap.items %}
-    <tr id="dRow{{state.0}}" class="tableRow">
-        <td>
-          {% if state.0 == 0%}
-            Global State
-          {%else%}
-            {{state.0}}
-          {% endif %}
-        </td>
-        <td id="dState{{state.0}}" >
-          {{state.1.1}}
-          {% if "has_control" in pcaPerms %}
-            {%if state.1.1 == "inactive" %}
-              <button id="activeToggle" onclick="setactive({{state.0}})" > activate  </button>
-            {% else %}
-              <button id="activeToggle" onclick="setinactive({{state.0}})" > deactivate  </button>
+  <nav class="navbar navbar-expand navbar-dark bg-dark static-top">
+
+    <a class="navbar-brand mr-1" href="{% url 'GUI:index'%}">Start ECS</a>
+
+    <button class="btn btn-link btn-sm text-white order-1 order-sm-0" id="sidebarToggle" href="#">
+      <i class="fas fa-bars"></i>
+    </button>
+
+    <ul class="navbar-nav ml-auto mr-0 mr-md-3 my-2 my-md-0">
+      <li class="nav-item dropdown no-arrow">
+        <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+          <i class="fas fa-user-circle fa-fw"></i>
+        </a>
+        <div class="dropdown-menu dropdown-menu-right" aria-labelledby="userDropdown">
+          {% if perms.GUI.can_take_control %}
+            {% if userInControl %}
+              <p>Control already Taken by User : {{view.userInControl}}</p>
             {% endif %}
+            {% if "has_control" in pcaPerms %}
+              <form action="{% url 'GUI:giveup_control' pcaId%}" method="post">
+                {% csrf_token %}
+                <input class="dropdown-item" type="submit" value="give up control">
+              </form>
+            {% else %}
+              <form action="{% url 'GUI:take_control' pcaId%}" method="post">
+                {% csrf_token %}
+                <input class="dropdown-item" type="submit" value="take control">
+              </form>
+            {% endif %}
+            <div class="dropdown-divider"></div>
           {% endif %}
-        </td>
-    </tr>
-    {% endfor %}
-  </table>
+          <a class="dropdown-item" href="#" data-toggle="modal" data-target="#logoutModal">Logout</a>
+        </div>
+      </li>
+    </ul>
+
+  </nav>
+
+  <div id="wrapper">
+
+    <!-- Sidebar -->
+    <ul class="sidebar navbar-nav">
+      <li class="nav-item active">
+        <a class="nav-link" href="{% url 'GUI:index' %}">
+          <i class="fas fa-fw fa-tachometer-alt"></i>
+          <span>Overview</span>
+        </a>
+      </li>
+      <li class="nav-item dropdown">
+        <a class="nav-link dropdown-toggle" href="#" id="pcaDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+          <i class="fas fa-fw fa-desktop"></i>
+          <span>PCAs</span>
+        </a>
+        <div class="dropdown-menu" aria-labelledby="pcaDropdown">
+          {% for pca in view.partitions %}
+            <h6 class="dropdown-header">PCA <a href="{%url 'GUI:pca' pca%}">{{pca}}</a> </h6>
+            <div class="dropdown-divider"></div>
+          {%endfor%}
+        </div>
+      </li>
+      {% if "has_control" in ecsPerms %}
+      <li class="nav-item dropdown">
+        <a class="nav-link dropdown-toggle" href="#" id="detectorActDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+          <i class="fas fa-fw fa-desktop"></i>
+          <span>Detector Activities</span>
+        </a>
+        <div class="dropdown-menu" aria-labelledby="detectorActDropdown">
+          <a class="dropdown-item" href="{% url 'GUI:create_detector' %}">Create Detector</a>
+          <a class="dropdown-item" href="{% url 'GUI:delete_detectors' %}">Delete Detector</a>
+          <a class="dropdown-item" href="{% url 'GUI:move_detectors' %}">Move Detector</a>
+        </div>
+      </li>
+      <li class="nav-item dropdown">
+        <a class="nav-link dropdown-toggle" href="#" id="partitionActDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+          <i class="fas fa-fw fa-desktop"></i>
+          <span>Partition Activities</span>
+        </a>
+        <div class="dropdown-menu" aria-labelledby="partitionActDropdown">
+          <a class="dropdown-item" href="{% url 'GUI:create_pca' %}">Create Partition</a>
+          <a class="dropdown-item" href="{% url 'GUI:delete_pca' %}">Delete Partition</a>
+        </div>
+      </li>
+      {%endif%}
+    </ul>
+
+    <div id="content-wrapper">
+
+      <div class="container-fluid">
+
+        <!-- Breadcrumbs-->
+        <ol class="breadcrumb">
+          <li class="breadcrumb-item">
+            <a href="{% url 'GUI:index' %}">Overview</a>
+          </li>
+          <li class="breadcrumb-item active">PCA {{view.pcaId}} Monitor</li>
+        </ol>
+        <h1>PCA {{view.pcaId}} Monitor</h1>
+        <div>
+          <table class="table table-bordered" id="stateTable">
+            <tr>
+              <th>Detector</th>
+              <th>Status</th>
+            </tr>
+            {% for state in view.stateMap.items %}
+            <tr id="dRow{{state.0}}" class="tableRow">
+                <td class="col-md-3">
+                  {% if state.0 == view.pcaId%}
+                    Global State
+                  {%else%}
+                    {{state.0}}
+                  {% endif %}
+                </td>
+                <td id="dState{{state.0}}" >
+                  {%if state.1.1 == "Ready"%}
+                    <i class="fas fa-circle Ready"></i>{{state.1.1}}
+                  {%elif state.1.1 == "Running"%}
+                    <i class="fas fa-circle Running"></i>{{state.1.1}}
+                  {%else%}
+                    <i class="fas fa-circle NotReady"></i>{{state.1.1}}
+                  {%endif%}
+                  {% if "has_control" in pcaPerms and state.0 != view.pcaId %}
+                    {%if state.1.1 == "inactive" %}
+                      <button id="activeToggle" class="btn btn-primary activeButton" onclick="setactive({{state.0}})" > activate  </button>
+                    {% else %}
+                      <button id="activeToggle" class="btn btn-primary activeButton" onclick="setinactive({{state.0}})" > deactivate  </button>
+                    {% endif %}
+                  {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+          </table>
+        </div>
+        {% if "has_control" in pcaPerms %}
+        <div visibility:{{PCAConnection}}>
+          <button id="ready" class="btn btn-primary">ready</button>
+          <button id="start" class="btn btn-primary">start</button>
+          <button id="stop" class="btn btn-primary">stop</button>
+          <button id="shutdown" class="btn btn-primary">shutdown</button>
+        </div>
+        {% endif %}
+      </div>
+      <textarea class="form-control log" rows="10" readonly id="log"></textarea>
+  </div>
+
+<!-- Sticky Footer -->
+<footer class="sticky-footer">
+  <div class="container my-auto">
+    <div class="copyright text-center my-auto">
+      <span>CBM ECS</span>
+    </div>
+  </div>
+</footer>
+
 </div>
-{% if "has_control" in pcaPerms %}
-<div visibility:{{PCAConnection}}>
-  <button id="ready">ready</button>
-  <button id="start">start</button>
-  <button id="stop">stop</button>
-  <button id="shutdown">shutdown</button>
+<!-- /.content-wrapper -->
+
+</div>
+<!-- /#wrapper -->
+
+<!-- Scroll to Top Button-->
+<a class="scroll-to-top rounded" href="#page-top">
+<i class="fas fa-angle-up"></i>
+</a>
+
+<!-- Logout Modal-->
+{% if user.is_authenticated %}
+<div class="modal fade" id="logoutModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true">
+<div class="modal-dialog" role="document">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h5 class="modal-title" id="exampleModalLabel">{{ user.get_username }}, ready to Leave?</h5>
+      <button class="close" type="button" data-dismiss="modal" aria-label="Close">
+        <span aria-hidden="true">×</span>
+      </button>
+    </div>
+    <div class="modal-body">Select "Logout" below if you are ready to end your current session.</div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" type="button" data-dismiss="modal">Cancel</button>
+      <a class="btn btn-primary" href="{% url 'GUI:logout'%}?next={{request.path}}">Logout</a>
+    </div>
+  </div>
+</div>
+</div>
+{% else %}
+<div class="modal fade" id="logoutModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true">
+<div class="modal-dialog" role="document">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h5 class="modal-title" id="exampleModalLabel">Login?</h5>
+      <button class="close" type="button" data-dismiss="modal" aria-label="Close">
+        <span aria-hidden="true">×</span>
+      </button>
+    </div>
+    <div class="modal-body">Select "Login" below if you are ready to login.</div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" type="button" data-dismiss="modal">Cancel</button>
+      <a class="btn btn-primary" href="{% url 'GUI:login'%}?next={{request.path}}">Login</a>
+    </div>
+  </div>
+</div>
 </div>
 {% endif %}
 {%endblock%}
+
+
+<!-- Bootstrap core JavaScript-->
+<script src="{% static 'GUI/vendor/jquery/jquery.min.js' %}"></script>
+<script src="{% static 'GUI/vendor/bootstrap/js/bootstrap.bundle.min.js' %}"></script>
+
+<!-- Core plugin JavaScript-->
+<script src="{% static 'GUI/vendor/jquery-easing/jquery.easing.min.js' %}"></script>
+
+<!-- Custom scripts for all pages-->
+<script src="{% static 'GUI/scripts/sb-admin.js' %}"></script>
+
 <textarea readonly id="log"></textarea>
 </body>
 </html>

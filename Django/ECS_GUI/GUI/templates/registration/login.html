@@ -1,38 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
 
-{% block content %}
+  <head>
 
-{% if form.errors %}
-  <p>Your username and password didn't match. Please try again.</p>
-{% endif %}
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 
-{% if next %}
-  {% if user.is_authenticated %}
-    <p>Your account doesn't have access to this page. To proceed,
-    please login with an account that has access.</p>
-  {% else %}
-    <p>Please login to see this page.</p>
-  {% endif %}
-{% endif %}
+    <title>ECS Login</title>
 
-<form method="post" action="{% url 'GUI:login' %}">
-{% csrf_token %}
+    {% load static %}
+    <!-- Bootstrap core CSS-->
+    <link rel="stylesheet" type="text/css" href="{% static 'GUI/vendor/bootstrap/css/bootstrap.min.css' %}">
+    <!-- Page level plugin CSS-->
+    <link rel="stylesheet" type="text/css" href="{% static 'GUI/vendor/fontawesome-free/css/all.min.css' %}">
+    <!-- Custom styles for this template-->
+    <link href="{% static 'GUI/sb-admin.css' %}" rel="stylesheet">
 
-<div>
-  <td>{{ form.username.label_tag }}</td>
-  <td>{{ form.username }}</td>
-</div>
-<div>
-  <td>{{ form.password.label_tag }}</td>
-  <td>{{ form.password }}</td>
-</div>
+  </head>
 
-<div>
-  <input type="submit" value="login" />
-  <input type="hidden" name="next" value="{{ next }}" />
-</div>
-</form>
+  <body class="bg-dark">
 
-{# Assumes you setup the password_reset view in your URLconf #}
-<p><a href="{% url 'GUI:password_reset' %}">Lost password?</a></p>
+    <div class="container">
+      <div class="card card-login mx-auto mt-5">
+        <div class="card-header">Login</div>
+        <div class="card-body">
+          <form method="post" action="{% url 'GUI:login' %}">
+            {% csrf_token %}
+            <div class="form-group">
+              <div class="form-label-group">
+                <input name="username" type="text" id="inputUsername" class="form-control" placeholder="Username" required="required" autofocus="autofocus">
+                <label for="inputUsername">{{ form.username.label_tag }}</label>
+              </div>
+            </div>
+            <div class="form-group">
+              <div class="form-label-group">
+                <input name="password" type="password" id="inputPassword" class="form-control" placeholder="Password" required="required">
+                <label for="inputPassword">{{ form.password.label_tag }}</label>
+              </div>
+            </div>
+            <input class="btn btn-primary btn-block" type="submit" value="Login" />
+            <input type="hidden" name="next" value="{{ next }}" />
+          </form>
+        </div>
+      </div>
+    </div>
 
-{% endblock %}
+    <!-- Bootstrap core JavaScript-->
+    <script src="{% static 'GUI/vendor/jquery/jquery.min.js' %}"></script>
+    <script src="{% static 'GUI/vendor/bootstrap/js/bootstrap.bundle.min.js' %}"></script>
+
+    <!-- Core plugin JavaScript-->
+    <script src="{% static 'GUI/vendor/jquery-easing/jquery.easing.min.js' %}"></script>
+
+  </body>
+
+</html>
