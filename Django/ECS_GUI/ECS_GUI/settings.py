@@ -33,6 +33,7 @@ ALLOWED_HOSTS = []
 INSTALLED_APPS = [
     'guardian',
     'channels',
+    'widget_tweaks',
     'GUI.apps.GuiConfig',
     'django.contrib.admin',
     'django.contrib.auth',
@@ -163,3 +164,6 @@ AUTHENTICATION_BACKENDS = (
 )
 #in seconds
 PERMISSION_TIMEOUT = 5*60
+
+#number of send Log entrys on connect
+BUFFERED_LOG_ENTRIES =  50

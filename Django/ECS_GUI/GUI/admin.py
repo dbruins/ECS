@@ -6,6 +6,7 @@ from .models import Question, Choice, pcaModel
 
 class PCAAdmin(GuardedModelAdmin):
     prepopulated_fields = {"id": ("id",)}
+    exclude = ('has_control',)
     ordering = ('-id',)
 
 admin.site.register(Question)

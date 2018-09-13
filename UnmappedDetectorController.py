@@ -129,11 +129,20 @@ class UnmappedDetectorController:
     def dummyFunction(self,a,b=None):
         pass
 
+    def checkIfTypeIsKnown(self,detector):
+        types = Detector.DetectorTypes()
+        typeClass = types.getClassForType(detector.type)
+        if not typeClass:
+            return False
+        return True
+
     def addDetector(self,detector):
         """add Detector to Dictionary and pubish it's state"""
         #create the corresponding class for the specified type
         types = Detector.DetectorTypes()
         typeClass = types.getClassForType(detector.type)
+        if not typeClass:
+            return False
         confSection = types.getConfsectionForType(detector.type)
         #todo all Detectors are added as active; in case of a crash the PCA needs to remember which Detectors were active; maybe save this information in the ECS database?
         det = typeClass(detector.id,detector.address,detector.portTransition,detector.portCommand,confSection,self.log,self.publishQueue,self.handleDetectorTimeout,self.handleDetectorReconnect,self.dummyFunction,self.dummyFunction)

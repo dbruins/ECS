@@ -23,10 +23,105 @@
     <link href="{% static 'GUI/sb-admin.css' %}" rel="stylesheet">
     <link href="{% static 'GUI/ecs.css' %}" rel="stylesheet">
 
+    <script>
+    function createWebSocket(){
+        var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/ecs/');
+
+        function updateState(id,newState,sequenceNumber,origin){
+          if (newState == "Running" || newState == "Ready")
+            var cssClass = newState
+          else
+            var cssClass = "NotReady"
+          stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>'
+          stateObject = $('#dState'+id)
+          //check if state already exists
+          if(stateObject.length){
+            if(parseInt(stateObject.attr("sequencenumber")) < sequenceNumber)
+              stateObject.attr("sequencenumber",sequenceNumber)
+              stateObject.html(stateCircle+newState);
+          }
+          else{
+              newRow = '<tr id="dRow'+id+'" class="tableRow'+origin+'"> <td class="col-md-3">'+id+'</td><td id="dState'+id+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+'</td></tr>';
+              $("#stateTable"+origin).append(newRow)
+          }
+        }
+
+        updateSocket.onopen = function(e){
+          console.log("socket open")
+          $(".tableRow").remove()
+          //get stateTables
+          updateSocket.send("ecs")
+        }
+
+        updateSocket.onclose = function(e){
+          if (e.code == 1000)
+            //normal shutdown
+            return
+          else{
+             setTimeout(function(){
+                console.log("trying to reconnect Websocket");
+                createWebSocket()
+             },2000);
+          }
+        }
+
+        updateSocket.onmessage = function(e) {
+            var data = JSON.parse(e.data);
+            var message = data['message'];
+            var type = data['type'];
+            var origin = data['origin']
+            if (type == "state"){
+              var update = JSON.parse(message);
+              var id = update['id'];
+              var newState = update['state'];
+              var sequenceNumber = update['sequence']
+              if(newState == "reset"){
+                  //clear Table
+                  $(".tableRow"+origin).remove()
+              }
+              else if (newState == "remove"){
+                  //delete Row
+                  $('#dRow'+id).remove()
+              }
+              else{
+                updateState(id,newState,sequenceNumber,origin)
+              }
+            }
+            else if (type == "log"){
+              $('#log').append(message+"\n");
+              //allways scroll directly to bottom
+              var textarea = document.getElementById('log');
+              textarea.scrollTop = textarea.scrollHeight;
+            }
+            else if (type == "table_ecs"){
+              var partitions = JSON.parse(message);
+              for (var pca in partitions){
+                var stateTable = partitions[pca]
+                for (var id in stateTable){
+                  var sequenceNumber = stateTable[id][0]
+                  var newState = stateTable[id][1]
+                  updateState(id,newState,sequenceNumber,pca)
+                }
+              }
+            }
+            else if (type == "bufferedLog_ecs"){
+              //empty log
+              $('#log').html("")
+              $('#log').append(message+"\n");
+              //allways scroll directly to bottom
+              var textarea = document.getElementById('log');
+              textarea.scrollTop = textarea.scrollHeight;
+            }
+
+        };
+    }
+    createWebSocket()
+    </script>
+
   </head>
   {%block control%}
   {% load guardian_tags %}
-  {% get_obj_perms request.user for view.pcaObject as "pcaPerms" %}
+  {% get_obj_perms request.user for view.ecsObject as "ecsPerms" %}
   <body id="page-top">
 
     <nav class="navbar navbar-expand navbar-dark bg-dark static-top">
@@ -43,20 +138,16 @@
             <i class="fas fa-user-circle fa-fw"></i>
           </a>
           <div class="dropdown-menu dropdown-menu-right" aria-labelledby="userDropdown">
+            <h5 class="dropdown-header">Logged in as {{user}}</h5>
             {% if perms.GUI.can_take_control %}
-              {% if userInControl %}
-                <p>Control already Taken by User : {{view.userInControl}}</p>
+              {% if view.userInControl and view.userInControl != "You" %}
+                <h5 class="dropdown-header">Control already Taken by User : {{view.userInControl}}</h5>
               {% endif %}
-              {% if "has_control" in pcaPerms %}
-                <form action="{% url 'GUI:giveup_control' 'ecs'%}" method="post">
-                  {% csrf_token %}
-                  <input class="dropdown-item" type="submit" value="give up control">
-                </form>
-              {% else %}
-                <form action="{% url 'GUI:take_control' 'ecs'%}" method="post">
-                  {% csrf_token %}
-                  <input class="dropdown-item" type="submit" value="take control">
-                </form>
+              {% if "has_control" in ecsPerms %}
+                <h5 class="dropdown-header">You are currently controlling the ECS</h5>
+                <a class="dropdown-item" href="{% url 'GUI:giveup_control' 'ecs'%}">give up control of {{view.ecsObject}}</a>
+              {% elif not view.userInControl %}
+                <a class="dropdown-item" href="{% url 'GUI:take_control' 'ecs'%}">take control of {{view.ecsObject}}</a>
               {% endif %}
               <div class="dropdown-divider"></div>
             {% endif %}
@@ -91,7 +182,7 @@
             {%endfor%}
           </div>
         </li>
-        {% if "has_control" in pcaPerms %}
+        {% if "has_control" in ecsPerms %}
         <li class="nav-item dropdown">
           <a class="nav-link dropdown-toggle" href="#" id="detectorActDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
             <i class="fas fa-fw fa-desktop"></i>
@@ -139,24 +230,6 @@
                 <th>Detector</th>
                 <th>Status</th>
               </tr>
-              {% for state in pca.1.items %}
-              <tr id="dRow{{state.0}}" class="tableRow{{pca.0}}">
-                  <td class="col-md-3">
-                    {% if state.0 == pca.0%}
-                      Global State
-                    {%else%}
-                      {{state.0}}
-                    {% endif %}
-                  </td>
-                  {%if state.1.1 == "Ready"%}
-                    <td id="dState{{state.0}}" ><i class="fas fa-circle Ready"></i>{{state.1.1}}</td>
-                  {%elif state.1.1 == "Running"%}
-                    <td id="dState{{state.0}}" ><i class="fas fa-circle Running"></i>{{state.1.1}}</td>
-                  {%else%}
-                    <td id="dState{{state.0}}" ><i class="fas fa-circle NotReady"></i>{{state.1.1}}</td>
-                  {%endif%}
-              </tr>
-              {% endfor %}
             </table>
             {% endfor %}
           </div>
@@ -164,7 +237,7 @@
         </div>
         <!-- /.container-fluid -->
 
-        <!-- Sticky Footer -->
+        <!-- Sticky Footer
         <footer class="sticky-footer">
           <div class="container my-auto">
             <div class="copyright text-center my-auto">
@@ -172,17 +245,17 @@
             </div>
           </div>
         </footer>
-
+        -->
       </div>
       <!-- /.content-wrapper -->
 
     </div>
     <!-- /#wrapper -->
 
-    <!-- Scroll to Top Button-->
+    <!-- Scroll to Top Button
     <a class="scroll-to-top rounded" href="#page-top">
       <i class="fas fa-angle-up"></i>
-    </a>
+    </a>-->
 
     <!-- Logout Modal-->
     {% if user.is_authenticated %}
@@ -234,69 +307,6 @@
 
     <!-- Custom scripts for all pages-->
     <script src="{% static 'GUI/scripts/sb-admin.js' %}"></script>
-
-    <script>
-    function createWebSocket(){
-        var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/ecs/');
-
-        updateSocket.onclose = function(e){
-          if (e.code == 1000)
-            //normal shutdown
-            return
-          else{
-             setTimeout(function(){
-            		console.log("trying to reconnect Websocket");
-            		createWebSocket()
-        	   },2000);
-          }
-        }
-
-        updateSocket.onmessage = function(e) {
-            var data = JSON.parse(e.data);
-            var message = data['message'];
-            var type = data['type'];
-            var origin = data['origin']
-            if (type == "state"){
-              var update = JSON.parse(message);
-              var id = update['id'];
-              var newState = update['state'];
-              if(newState == "reset"){
-                  //clear Table
-                  $(".tableRow"+origin).remove()
-              }
-              else if (newState == "remove"){
-                  //delete Row
-                  $('#dRow'+id).remove()
-              }
-              else{
-                if (newState == "Running" || newState == "Ready")
-                  var cssClass = newState
-                else
-                  var cssClass = "NotReady"
-                stateObject = $('#dState'+id)
-                //check if state already exists
-                if(stateObject.length){
-                    stateObject.html('<i class="fas fa-circle '+cssClass+'"></i>'+newState);
-                }
-                else{
-                    newRow = '<tr id="dRow'+id+'" class="tableRow'+origin+'"> <td class="col-md-3">'+id+'</td><td id="dState'+id+'"><i class="fas fa-circle '+cssClass+'"></i>'+newState+'</td></tr>';
-                    $("#stateTable"+origin).append(newRow)
-                }
-              }
-            }
-            else if (type == "log"){
-              $('#log').append(origin+": "+message+"\n");
-              //allways scroll directly to bottom
-              var textarea = document.getElementById('log');
-              textarea.scrollTop = textarea.scrollHeight;
-            }
-
-        };
-    }
-    createWebSocket()
-    </script>
-
-
   </body>
 
 </html>

@@ -19,7 +19,7 @@ import time
 from django.utils import timezone
 import configparser
 from django import forms
-
+from collections import deque
 import sys
 #ECS Codes and DataObjects should be in the same Path later
 projectPath = settings.PCACODESPATH
@@ -35,6 +35,7 @@ class ECSHandler:
         self.pcaCollection = None
         self.pcaHandlers = {}
         self.receive_timeout = settings.TIMEOUT
+        self.logQueue = deque(maxlen=settings.BUFFERED_LOG_ENTRIES)
 
         #logsubscription
         self.socketSubLog = self.context.socket(zmq.SUB)
@@ -59,7 +60,7 @@ class ECSHandler:
 
         #create Handlers for PCAs
         for p in self.pcaCollection:
-            self.pcaHandlers[p.id] = PCAHandler(p)
+            self.pcaHandlers[p.id] = PCAHandler(p,self.log)
             #add database object for storing user permissions
             pcaModel.objects.create(id=p.id,permissionTimestamp=timezone.now())
         #user Permissions ecs
@@ -74,6 +75,54 @@ class ECSHandler:
         ECS_tools.getStateSnapshot(self.unmappedStateTable,settings.ECS_ADDRESS,settings.ECS_GET_STATETABLE_PORT,timeout=self.receive_timeout,pcaid="unmapped")
         t = threading.Thread(name="logUpdaterECS", target=self.waitForUnmappedDetectorUpdate)
         t.start()
+
+        t = threading.Thread(name="webClientRequest", target=self.webClientStateTableRequest)
+        t.start()
+
+    def webClientStateTableRequest(self):
+        while True:
+            channel_layer = get_channel_layer()
+            #pca page
+            message = async_to_sync(channel_layer.receive)("ecs")
+            pcaId = message["pcaId"]
+            bufferdLog = False
+            if pcaId == "ecs":
+                #all pcas for ECS Overview
+                map = {}
+                for pca in self.pcaHandlers.items():
+                    map[pca[0]] = pca[1].stateMap.map
+                map["unmapped"] = self.unmappedStateTable.map
+                map = json.dumps(map)
+                if len(self.logQueue) > 0:
+                    bufferdLog = "\n".join(list(self.logQueue))
+            else:
+                #single pca
+                handler = self.pcaHandlers[pcaId]
+                map = json.dumps(handler.stateMap.map)
+                #send buffered log entries
+                if len(handler.logQueue) > 0:
+                    bufferdLog = "\n".join(list(handler.logQueue))
+            async_to_sync(channel_layer.group_send)(
+                #group name
+                message["user"],
+                {
+                    #method called in consumer
+                    'type': 'stateTable',
+                    'id' : pcaId,
+                    'text': map,
+                }
+            )
+            if bufferdLog:
+                async_to_sync(channel_layer.group_send)(
+                    #group name
+                    message["user"],
+                    {
+                        #method called in consumer
+                        'type': 'bufferedLog',
+                        'id' : pcaId,
+                        'text': bufferdLog,
+                    }
+                )
 
 
     def request(self,address,port,message):
@@ -151,7 +200,7 @@ class ECSHandler:
         ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.createPartition, json.dumps(message).encode()])
         if ret == ECSCodes.ok:
             #connect to new PCA
-            self.pcaHandlers[partitionObject.id] = PCAHandler(partitionObject)
+            self.pcaHandlers[partitionObject.id] = PCAHandler(partitionObject,self.log)
             self.log("partition %s created" % partitionObject.id)
             #add Model for permissions
             pcaModel.objects.create(id=partitionObject.id,permissionTimestamp=timezone.now())
@@ -336,9 +385,11 @@ class ECSHandler:
             self.log(m)
 
 
-    def log(self,message):
+    def log(self,message,origin="ecs"):
         """spread log message through websocket(channel)"""
         channel_layer = get_channel_layer()
+        message = origin+": "+message
+        self.logQueue.append(message)
         async_to_sync(channel_layer.group_send)(
             #group name
             "ecs",
@@ -346,22 +397,24 @@ class ECSHandler:
                 #method called in consumer
                 'type': 'logUpdate',
                 'text': message,
-                'origin': 'ecs',
+                'origin': origin,
             }
         )
 
 
 class PCAHandler:
-    def __init__(self,partitionInfo):
+    def __init__(self,partitionInfo,ecsLogfunction):
         self.id = partitionInfo.id
         self.address = partitionInfo.address
         self.portLog = partitionInfo.portLog
         self.portCommand = partitionInfo.portCommand
         self.portPublish = partitionInfo.portPublish
         self.portCurrentState = partitionInfo.portCurrentState
+        self.ecsLogfunction = ecsLogfunction
 
         self.context = zmq.Context()
         self.stateMap = ECS_tools.MapWrapper()
+        self.logQueue = deque(maxlen=settings.BUFFERED_LOG_ENTRIES)
 
         self.PCAConnection = False
         self.receive_timeout = settings.TIMEOUT
@@ -416,7 +469,6 @@ class PCAHandler:
                 self.log("Exception while sending Ping: %s" % str(e))
             finally:
                 socket.close()
-
                 nextPing = time.time() + self.pingInterval
             if time.time() > nextPing:
                 nextPing = time.time() + self.pingInterval
@@ -496,12 +548,15 @@ class PCAHandler:
             #send update to WebUI(s)
             jsonWebUpdate = {"id" : id,
                              "state" : state,
+                             "sequence" : sequence
                             }
             jsonWebUpdate = json.dumps(jsonWebUpdate)
             self.sendUpdateToWebsockets("update",jsonWebUpdate)
 
     def log(self,message):
         """spread log message through websocket(channel)"""
+        self.logQueue.append(message)
+        self.ecsLogfunction(message,self.id)
         self.sendUpdateToWebsockets("logUpdate",message)
 
     def sendUpdateToWebsockets(self,type,message):
@@ -636,7 +691,7 @@ class index(ecsMixin,TemplateView):
         for pca in ecs.pcaHandlers.items():
             self.ecsMap[pca[0]] = pca[1].stateMap.map
         self.ecsMap["unmapped"] = ecs.unmappedStateTable.map
-        self.pcaObject = pcaModel.objects.filter(id="ecs").get()
+        self.ecsObject = pcaModel.objects.filter(id="ecs").get()
         #check if another user has control over pca
         self.userInControl = None
         usersWithPermission = get_users_with_perms(self.pcaObject, attach_perms = True)
@@ -657,7 +712,7 @@ class pcaView(ecsMixin,TemplateView):
             self.partitions.append(pca)
         print(self.partitions)
         self.pcaId = self.kwargs['pcaId']
-        self.stateMap = ecs.getPCAHandler(self.pcaId).stateMap.map
+        #self.stateMap = ecs.getPCAHandler(self.pcaId).stateMap.map
         self.pcaObject = pcaModel.objects.filter(id=self.pcaId).get()
         self.ecsObject = pcaModel.objects.filter(id="ecs").get()
         self.userInControl = None
@@ -682,6 +737,10 @@ class create_pca(ecsMixin,PermissionRequiredMixin,FormView):
     raise_exception = True
     permission_required = 'has_control'
     permission_object = pcaModel.objects.filter(id="ecs").get()
+
+    def dispatch(self, request, *args, **kwargs):
+        self.partitions = ecs.pcaHandlers.items()
+        return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form):
         if not form.is_valid():
@@ -833,6 +892,7 @@ class deleteDetector(ecsMixin,PermissionRequiredMixin,TemplateView):
 
     def dispatch(self, request, *args, **kwargs):
         self.unmappedDetectors = ecs.getUnmappedDetectors()
+        self.partitions = ecs.pcaHandlers.items()
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):

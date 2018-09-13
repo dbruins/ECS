@@ -12,71 +12,97 @@ class MapWrapper:
     def __iter__(self):
         return self.copy().values().__iter__()
 
+    def __len__(self):
+        self.semaphore.acquire()
+        try:
+            ret = len(self.map)
+            return ret
+        finally:
+            self.semaphore.release()
+
     def keyIterator(self):
         return copy.deepcopy(list(self.map.keys()))
 
     def __getitem__(self, key):
         """get value for key returns None if key doesn't exist"""
         self.semaphore.acquire()
-        if key in self.map:
-            ret = self.map[key]
-        else:
-            ret = None
-        self.semaphore.release()
-        return ret
+        try:
+            if key in self.map:
+                ret = self.map[key]
+            else:
+                ret = None
+            return ret
+        finally:
+            self.semaphore.release()
 
     def __delitem__(self,key):
         self.semaphore.acquire()
-        if key in self.map:
-            del self.map[key]
-        self.semaphore.release()
+        try:
+            if key in self.map:
+                del self.map[key]
+        finally:
+            self.semaphore.release()
 
 
     def __setitem__(self,key,value):
         self.semaphore.acquire()
-        self.map[key] = value
-        self.semaphore.release()
+        try:
+            self.map[key] = value
+        finally:
+            self.semaphore.release()
 
     def __str__(self):
         self.semaphore.acquire()
-        ret = self.map.__str__()
-        self.semaphore.release()
-        return ret
+        try:
+            ret = self.map.__str__()
+            return ret
+        finally:
+            self.semaphore.release()
 
     def copy(self):
         """returns a deepcopy off all items for iteration"""
         #create copy of statusMap so loop dosn't crash if there are changes on statusMap during the loop
         #probably not the best solution
         self.semaphore.acquire()
-        mapCopy = copy.deepcopy(self.map)
-        self.semaphore.release()
-        return mapCopy
+        try:
+            mapCopy = copy.deepcopy(self.map)
+            return mapCopy
+        finally:
+            self.semaphore.release()
 
     def __contains__(self, key):
         self.semaphore.acquire()
-        ret = key in self.map
-        self.semaphore.release()
-        return ret
+        try:
+            ret = key in self.map
+            return ret
+        finally:
+            self.semaphore.release()
 
     def size(self):
         self.semaphore.acquire()
-        ret = len(self.map)
-        self.semaphore.release()
-        return ret
+        try:
+            ret = len(self.map)
+            return ret
+        finally:
+            self.semaphore.release()
 
     def delMany(self,items):
         """deletes a given list of ids"""
         self.semaphore.acquire()
-        for i in items:
-            if i in self.map:
-                del self.map[i]
-        self.semaphore.release()
+        try:
+            for i in items:
+                if i in self.map:
+                    del self.map[i]
+        finally:
+            self.semaphore.release()
 
 
     def reset(self):
         self.semaphore.acquire()
-        self.map = {}
-        self.semaphore.release()
+        try:
+            self.map = {}
+        finally:
+            self.semaphore.release()
 
 def resetSocket(self,socket,address,port,type):
     """resets a socket with address and zmq Type; if socket is None a new socket will be created"""

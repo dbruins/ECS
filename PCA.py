@@ -72,7 +72,7 @@ class PCA:
                 requestSocket.close()
 
         #init stuff
-        self.detectors = {}
+        self.detectors = MapWrapper()
         self.activeDetectors = MapWrapper()
         #update number
         self.sequence = 0
@@ -386,62 +386,74 @@ class PCA:
     def checkSystemConsistency(self,detList):
         """check wether the Detector List and States are correct"""
         #check detectorList
-        for d in self.detectors.values():
-            if d.id not in detList.asDictionary():
-                self.log("System check: Detector %s should not have been a Part of Partition %s" % (d.id,self.id),True)
-                self.removeDetector(d.id)
+        for detId in self.detectors.keyIterator():
+            if detId not in detList.asDictionary():
+                self.log("System check: Detector %s should not have been a Part of Partition %s" % (detId,self.id),True)
+                self.removeDetector(detId)
         for d in detList:
             if d.id not in self.detectors:
                 self.log("System check: Detector %s was not in Partition %s" % (d.id,self.id),True)
                 self.addDetector(d)
 
         #check DetectorStates
-        for d in self.detectors.values():
-            state = d.getStateFromDetector()
-            if not state:
-                #timeout getting State let the pingThread handele it
-                continue
-            if d.stateMachine.currentState != state:
-                self.log("During System check Detector %s returned an unexpected state: %s" % (d.id,state),True)
-                d.stateMachine.currentState = state
-        print("check done")
+        for detId in self.detectors.keyIterator():
+            if detId in self.detectors:
+                d = self.detectors[detId]
+                state = d.getStateFromDetector()
+                if not state:
+                    #timeout getting State let the pingThread handele it
+                    continue
+                if d.stateMachine.currentState != state:
+                    self.log("During System check Detector %s returned an unexpected state: %s" % (d.id,state),True)
+                    d.stateMachine.currentState = state
 
     def addDetector(self,detector):
         """add Detector to Dictionary and pubish it's state"""
         self.sem.acquire()
-        if isinstance(detector,str):
-            detector = detectorDataObject(json.loads(detector))
-        #create the corresponding class for the specified type
-        types = Detector.DetectorTypes()
-        typeClass = types.getClassForType(detector.type)
-        confSection = types.getConfsectionForType(detector.type)
-        det = typeClass(detector.id,detector.address,detector.portTransition,detector.portCommand,confSection,self.log,self.publishQueue,self.handleDetectorTimeout,self.handleDetectorReconnect,self.putPendingTransition,self.removePendingTransition)
-        self.detectors[det.id] = det
-        if det.active:
-            self.activeDetectors[det.id] = det.id
-        self.publishQueue.put((det.id,det.getMappedState()))
-        #global state doesn't exist during start up
-        if self.stateMachine:
-            start_new_thread(self.transitionDetectorIntoGlobalState,(det.id,))
-        self.sem.release()
+        try:
+            if isinstance(detector,str):
+                detector = detectorDataObject(json.loads(detector))
+            #create the corresponding class for the specified type
+            types = Detector.DetectorTypes()
+            typeClass = types.getClassForType(detector.type)
+            if not typeClass:
+                return False
+            confSection = types.getConfsectionForType(detector.type)
+            det = typeClass(detector.id,detector.address,detector.portTransition,detector.portCommand,confSection,self.log,self.publishQueue,self.handleDetectorTimeout,self.handleDetectorReconnect,self.putPendingTransition,self.removePendingTransition)
+            self.detectors[det.id] = det
+            if det.active:
+                self.activeDetectors[det.id] = det.id
+            self.publishQueue.put((det.id,det.getMappedState()))
+            #global state doesn't exist during start up
+            if self.stateMachine:
+                start_new_thread(self.transitionDetectorIntoGlobalState,(det.id,))
+                self.checkGlobalState()
+        except Exception as e:
+            self.log("Exception while adding Detector %s: %s" %(detector.id,str(e)))
+        finally:
+            self.sem.release()
         return ECSCodes.ok
 
     def removeDetector(self,id):
         """remove Detector from Dictionary"""
         self.sem.acquire()
-        if id not in self.detectors:
-            self.log("Detector with id %s is unknown" % id,True)
+        try:
+            if id not in self.detectors:
+                self.log("Detector with id %s is unknown" % id,True)
+                return ECSCodes.idUnknown
+            det = self.detectors[id]
+            #todo add possibility to cancel transitions?
+            self.publishQueue.put((id,ECSCodes.removed))
+            self.checkGlobalState()
+            del self.detectors[id]
+            del self.activeDetectors[id]
+            self.removePendingTransition(id)
+            #this might take a few seconds dending on ping interval
+            start_new_thread(det.terminate,())
+        except Exception as e:
+            self.log("Exception while removing Detector %s: %s" %(detector.id,str(e)))
+        finally:
             self.sem.release()
-            return ECSCodes.idUnknown
-        det = self.detectors[id]
-        #todo add possibility to cancel transitions?
-        self.publishQueue.put((id,ECSCodes.removed))
-        del self.detectors[id]
-        del self.activeDetectors[id]
-        self.removePendingTransition(id)
-        #this might take a few seconds dending on ping interval
-        start_new_thread(det.terminate,())
-        self.sem.release()
         return ECSCodes.ok
 
     def setDetectorActive(self,id):
@@ -484,7 +496,6 @@ class PCA:
         #if detector is active try to transition him into globalState
         if id in self.activeDetectors:
             self.transitionDetectorIntoGlobalState(id)
-        else:
             self.checkGlobalState()
 
     def transitionDetectorIntoGlobalState(self,id):
@@ -580,14 +591,18 @@ class PCA:
         if not (len(self.detectors)==self.activeDetectors.size()):
             self.log("Warning: Some Detectors are disconnected")
         self.sem.acquire()
-        for id in self.activeDetectors:
-            d = self.detectors[id]
-            t = threading.Thread(name='doff'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.powerOff, None))
-            threadArray.append(t)
-            t.start()
+        try:
+            for id in self.activeDetectors:
+                d = self.detectors[id]
+                t = threading.Thread(name='doff'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.powerOff, None))
+                threadArray.append(t)
+                t.start()
 
-        self.transition("stop")
-        self.sem.release()
+            self.transition("stop")
+        except Exception as e:
+            self.log("Exception while shutdown: %s" %(str(e),))
+        finally:
+            self.sem.release()
         return ECSCodes.ok
 
     def makeReady(self):
@@ -595,12 +610,16 @@ class PCA:
         threadArray = []
         returnQueue = Queue()
         self.sem.acquire()
-        for id in self.activeDetectors:
-            d = self.detectors[id]
-            t = threading.Thread(name='dready'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.getReady, None))
-            threadArray.append(t)
-            t.start()
-        self.sem.release()
+        try:
+            for id in self.activeDetectors:
+                d = self.detectors[id]
+                t = threading.Thread(name='dready'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.getReady, None))
+                threadArray.append(t)
+                t.start()
+        except Exception as e:
+            self.log("Exception while readying: %s" %(str(e),))
+        finally:
+            self.sem.release()
         return ECSCodes.ok
 
     def start(self):
@@ -608,20 +627,22 @@ class PCA:
         if not (len(self.detectors)==self.activeDetectors.size()):
             self.log("Warning: Some Detectors are disconnected")
         self.sem.acquire()
-        if self.stateMachine.currentState != "Ready" and self.stateMachine.currentState != "RunningInError":
-            self.log("start not possible in current state")
+        try:
+            if self.stateMachine.currentState != "Ready" and self.stateMachine.currentState != "RunningInError":
+                self.log("start not possible in current state")
+                return ECSCodes.error
+            threadArray = []
+            returnQueue = Queue()
+            for id in self.activeDetectors:
+                d = self.detectors[id]
+                t = threading.Thread(name='dstart'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.start, None))
+                threadArray.append(t)
+                t.start()
+            self.transition("start")
+        except Exception as e:
+            self.log("Exception while starting: %s" %(str(e),))
+        finally:
             self.sem.release()
-            return ECSCodes.error
-        threadArray = []
-        returnQueue = Queue()
-        for id in self.activeDetectors:
-            d = self.detectors[id]
-            t = threading.Thread(name='dstart'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.start, None))
-            threadArray.append(t)
-            t.start()
-
-        self.transition("start")
-        self.sem.release()
         return ECSCodes.ok
 
     def stop(self):
@@ -631,27 +652,34 @@ class PCA:
         if not (len(self.detectors)==self.activeDetectors.size()):
             self.log("Warning: Some Detectors are disconnected")
         self.sem.acquire()
-        for id in self.activeDetectors:
-            d = self.detectors[id]
-            t = threading.Thread(name='dstop'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.stop, None))
-            threadArray.append(t)
-            t.start()
+        try:
+            for id in self.activeDetectors:
+                d = self.detectors[id]
+                t = threading.Thread(name='dstop'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.stop, None))
+                threadArray.append(t)
+                t.start()
 
-        self.transition("stop")
-        self.sem.release()
+            self.transition("stop")
+        except Exception as e:
+            self.log("Exception while stopping: %s" %(str(e),))
+        finally:
+            self.sem.release()
         return ECSCodes.ok
 
     def abort(self):
         threadArray = []
         returnQueue = Queue()
         self.sem.acquire()
-        for id in self.activeDetectors:
-            d = self.detectors[id]
-            t = threading.Thread(name='dabort'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.abort, None))
-            threadArray.append(t)
-            t.start()
-
-        self.sem.release()
+        try:
+            for id in self.detectors.keyIterator():
+                d = self.detectors[id]
+                t = threading.Thread(name='dabort'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.abort, None))
+                threadArray.append(t)
+                t.start()
+        except Exception as e:
+            self.log("Exception while aborting: %s" %(str(e),))
+        finally:
+            self.sem.release()
         return ECSCodes.ok
 
     def log(self,logmessage,error=False):
@@ -668,7 +696,7 @@ class PCA:
 
     def terminatePCA(self,_signo, _stack_frame):
         self.log("terminating")
-        for id in self.detectors:
+        for id in self.detectors.keyIterator():
             d = self.detectors[id]
             d.terminate()
         self.terminate.set()

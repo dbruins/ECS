@@ -799,10 +799,23 @@ class ECS:
                 return ECSCodes.ok
 
             def createDetector(arg):
-                dataObject = detectorDataObject(json.loads(arg))
-                ret = db.addDetector(dataObject)
-                self.unmappedDetectorController.addDetector(dataObject)
-                return ret
+                dbChanged = False
+                try:
+                    dataObject = detectorDataObject(json.loads(arg))
+                    ret = db.addDetector(dataObject)
+                    if ret == ECSCodes.ok:
+                        dbChanged = True
+                        if self.unmappedDetectorController.checkIfTypeIsKnown(dataObject):
+                            ret = self.unmappedDetectorController.addDetector(dataObject)
+                            return ECSCodes.ok
+                        else:
+                            raise Exception("Detector Type is unknown")
+                    return ret
+                except Exception as e:
+                    if dbChanged:
+                        db.removeDetector(dataObject.id)
+                    return e
+
 
             def getPartitionForDetector(arg):
                 ret = db.getPartitionForDetector(arg)
@@ -908,7 +921,11 @@ class ECS:
             Raise(Exception("Partition %s is not in database") % partition.id)
         db.close()
         try:
+            #for whatever reason this raises a different Exception for ContextTerminated than send or recv
             requestSocket = self.zmqContext.socket(zmq.REQ)
+        except zmq.error.ZMQError:
+            return
+        try:
             requestSocket.connect("tcp://%s:%s"  % (partition.address,partition.portCommand))
             requestSocket.send_multipart([ECSCodes.check,detectors.asJsonString().encode()])
             ret = requestSocket.recv()
@@ -930,6 +947,11 @@ class ECS:
         if partition == ECSCodes.idUnknown:
             partition = self.unmappedDetectorControllerData
         db.close()
+        try:
+            #for whatever reason this raises a different Exception for ContextTerminated than send or recv
+            requestSocket = self.zmqContext.socket(zmq.REQ)
+        except zmq.error.ZMQError:
+            return
         try:
             requestSocket = self.zmqContext.socket(zmq.REQ)
             requestSocket.connect("tcp://%s:%s"  % (detector.address,detector.portCommand ))

@@ -21,6 +21,41 @@
 function createWebSocket(){
     var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/{{pcaId}}/');
 
+    function updateState(id,newState,sequenceNumber){
+      if (newState == "Running" || newState == "Ready")
+        var cssClass = newState
+      else
+        var cssClass = "NotReady"
+      stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>'
+      var buttonHtml = "";
+      {% if "has_control" in pcaPerms %}
+      if (id == "{{view.pcaId}}")
+        buttonHtml = ""
+      else if (newState == "inactive")
+        buttonHtml = '<button id="activeToggle" class="btn btn-primary activeButton" onclick="setactive('+ id +')" > activate  </button>';
+      else
+        buttonHtml = '<button id="activeToggle" class="btn btn-primary activeButton" onclick="setinactive('+ id +')" > deactivate  </button>';
+      {% endif %}
+      var stateObject = $('#dState'+id)
+      //check if state already exists
+      if(stateObject.length){
+          if(parseInt(stateObject.attr("sequencenumber")) < sequenceNumber)
+            stateObject.attr("sequencenumber",sequenceNumber)
+            stateObject.html(stateCircle+newState+buttonHtml);
+      }
+      else{
+          newRow = '<tr class="tableRow"> <td class="col-md-3">'+id+'</td><td id="dState'+id+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+buttonHtml+'</td></tr>'
+          $("#stateTable").append(newRow)
+      }
+    }
+
+    updateSocket.onopen = function(e){
+      console.log("socket open")
+      $(".tableRow").remove()
+      //get stateTables
+      updateSocket.send("{{pcaId}}")
+    }
+
     updateSocket.onclose = function(e){
        setTimeout(function(){
       		console.log("trying to reconnect Websocket");
@@ -37,6 +72,7 @@ function createWebSocket(){
           var update = JSON.parse(message);
           var id = update['id'];
           var newState = update['state'];
+          var sequenceNumber = update['sequence']
           if(newState == "reset"){
               //clear Table
               $(".tableRow").remove()
@@ -46,28 +82,7 @@ function createWebSocket(){
               $('#dRow'+id).remove()
           }
           else{
-            if (newState == "Running" || newState == "Ready")
-              var cssClass = newState
-            else
-              var cssClass = "NotReady"
-            {% if "has_control" in pcaPerms %}
-            buttonHtml = "";
-            if (id == "{{view.pcaId}}")
-              buttonHtml = ""
-            else if (newState == "inactive")
-              buttonHtml = '<button id="activeToggle" class="btn btn-primary activeButton" onclick="setactive('+ update['id'] +')" > activate  </button>';
-            else
-              buttonHtml = '<button id="activeToggle" class="btn btn-primary activeButton" onclick="setinactive('+ update['id'] +')" > deactivate  </button>';
-            {% endif %}
-            stateObject = $('#dState'+id)
-            //check if state already exists
-            if(stateObject.length){
-                stateObject.html('<i class="fas fa-circle '+cssClass+'"></i>'+newState+buttonHtml);
-            }
-            else{
-                newRow = '<tr class="tableRow"> <td class="col-md-3">'+id+'</td><td id="dState'+id+'"><i class="fas fa-circle '+cssClass+'"></i>'+newState+buttonHtml+'</td></tr>'
-                $("#stateTable").append(newRow)
-            }
+            updateState(id,newState,sequenceNumber)
           }
         }
         else if (type == "log"){
@@ -76,19 +91,43 @@ function createWebSocket(){
           var textarea = document.getElementById('log');
           textarea.scrollTop = textarea.scrollHeight;
         }
-
+        else if (type == "table_{{view.pcaId}}"){
+          var stateTable = JSON.parse(message);
+          for (var id in stateTable){
+            var sequenceNumber = stateTable[id][0]
+            var newState = stateTable[id][1]
+            updateState(id,newState,sequenceNumber)
+          }
+        }
+        else if (type == "bufferedLog_{{pcaId}}"){
+          //empty log
+          $('#log').html("")
+          $('#log').append(message+"\n");
+          //allways scroll directly to bottom
+          var textarea = document.getElementById('log');
+          textarea.scrollTop = textarea.scrollHeight;
+        }
     };
 }
 createWebSocket()
+
+returnCodeCases = {
+  200: function(){
+    $('#alertBox').css('visibility', 'hidden');
+  },
+  403: function(){
+    console.log("fail");
+    $('#alertBox').css('visibility', 'visible');
+    $('#alertBox').html("<strong>Warning!</strong> Your permission timed out")
+  },
+};
 
 function setactive(id){
   $.ajax({
       type: "POST",
       url: "{% url 'GUI:setActive' pcaId%}",
       data:{csrfmiddlewaretoken: '{{ csrf_token }}', "detectorId" : id},
-      "success": function(result) {
-          console.log(result);
-      },
+      statusCode: returnCodeCases
   });
 }
 
@@ -97,9 +136,7 @@ function setinactive(id){
       type: "POST",
       url: "{% url 'GUI:setInactive' pcaId%}",
       data:{csrfmiddlewaretoken: '{{ csrf_token }}', "detectorId" : id},
-      "success": function(result) {
-          console.log(result);
-      },
+      statusCode: returnCodeCases
   });
 }
 
@@ -113,6 +150,7 @@ $(document).ready(function() {
             /*"success": function(result) {
                 console.log(result);
             },*/
+            statusCode: returnCodeCases
         });
     });
     $("#start").click(function(e) {
@@ -121,6 +159,7 @@ $(document).ready(function() {
             type: "POST",
             url: "{% url 'GUI:start' pcaId%}",
             data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
+            statusCode: returnCodeCases
         });
     });
     $("#stop").click(function(e) {
@@ -129,6 +168,7 @@ $(document).ready(function() {
             type: "POST",
             url: "{% url 'GUI:stop' pcaId%}",
             data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
+            statusCode: returnCodeCases
         });
     });
     $("#shutdown").click(function(e) {
@@ -137,6 +177,7 @@ $(document).ready(function() {
             type: "POST",
             url: "{% url 'GUI:shutdown' pcaId%}",
             data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
+            statusCode: returnCodeCases
         });
     });
 });
@@ -160,20 +201,16 @@ $(document).ready(function() {
           <i class="fas fa-user-circle fa-fw"></i>
         </a>
         <div class="dropdown-menu dropdown-menu-right" aria-labelledby="userDropdown">
+          <h5 class="dropdown-header">Logged in as {{user}}</h5>
           {% if perms.GUI.can_take_control %}
-            {% if userInControl %}
-              <p>Control already Taken by User : {{view.userInControl}}</p>
+            {% if view.userInControl and view.userInControl != "You" %}
+              <h5 class="dropdown-header">Control already Taken by User : {{view.userInControl}}</h5>
             {% endif %}
             {% if "has_control" in pcaPerms %}
-              <form action="{% url 'GUI:giveup_control' pcaId%}" method="post">
-                {% csrf_token %}
-                <input class="dropdown-item" type="submit" value="give up control">
-              </form>
-            {% else %}
-              <form action="{% url 'GUI:take_control' pcaId%}" method="post">
-                {% csrf_token %}
-                <input class="dropdown-item" type="submit" value="take control">
-              </form>
+              <h5 class="dropdown-header">You are currently controlling the Partition</h5>
+              <a class="dropdown-item" href="{% url 'GUI:giveup_control' pcaId%}">give up control of {{view.pcaObject}}</a>
+            {% elif not view.userInControl %}
+              <a class="dropdown-item" href="{% url 'GUI:take_control' pcaId%}">take control of {{view.pcaObject}}</a>
             {% endif %}
             <div class="dropdown-divider"></div>
           {% endif %}
@@ -242,6 +279,8 @@ $(document).ready(function() {
           </li>
           <li class="breadcrumb-item active">PCA {{view.pcaId}} Monitor</li>
         </ol>
+        <div class="alert alert-danger" id="alertBox" style="visibility: hidden">
+        </div>
         <h1>PCA {{view.pcaId}} Monitor</h1>
         <div>
           <table class="table table-bordered" id="stateTable">
@@ -249,55 +288,28 @@ $(document).ready(function() {
               <th>Detector</th>
               <th>Status</th>
             </tr>
-            {% for state in view.stateMap.items %}
-            <tr id="dRow{{state.0}}" class="tableRow">
-                <td class="col-md-3">
-                  {% if state.0 == view.pcaId%}
-                    Global State
-                  {%else%}
-                    {{state.0}}
-                  {% endif %}
-                </td>
-                <td id="dState{{state.0}}" >
-                  {%if state.1.1 == "Ready"%}
-                    <i class="fas fa-circle Ready"></i>{{state.1.1}}
-                  {%elif state.1.1 == "Running"%}
-                    <i class="fas fa-circle Running"></i>{{state.1.1}}
-                  {%else%}
-                    <i class="fas fa-circle NotReady"></i>{{state.1.1}}
-                  {%endif%}
-                  {% if "has_control" in pcaPerms and state.0 != view.pcaId %}
-                    {%if state.1.1 == "inactive" %}
-                      <button id="activeToggle" class="btn btn-primary activeButton" onclick="setactive({{state.0}})" > activate  </button>
-                    {% else %}
-                      <button id="activeToggle" class="btn btn-primary activeButton" onclick="setinactive({{state.0}})" > deactivate  </button>
-                    {% endif %}
-                  {% endif %}
-                </td>
-            </tr>
-            {% endfor %}
           </table>
         </div>
         {% if "has_control" in pcaPerms %}
-        <div visibility:{{PCAConnection}}>
+        <div>
           <button id="ready" class="btn btn-primary">ready</button>
           <button id="start" class="btn btn-primary">start</button>
           <button id="stop" class="btn btn-primary">stop</button>
           <button id="shutdown" class="btn btn-primary">shutdown</button>
         </div>
         {% endif %}
+        <textarea class="form-control log" rows="10" readonly id="log"></textarea>
       </div>
-      <textarea class="form-control log" rows="10" readonly id="log"></textarea>
   </div>
 
-<!-- Sticky Footer -->
+<!-- Sticky Footer
 <footer class="sticky-footer">
   <div class="container my-auto">
     <div class="copyright text-center my-auto">
       <span>CBM ECS</span>
     </div>
   </div>
-</footer>
+</footer>-->
 
 </div>
 <!-- /.content-wrapper -->
@@ -305,10 +317,10 @@ $(document).ready(function() {
 </div>
 <!-- /#wrapper -->
 
-<!-- Scroll to Top Button-->
+<!-- Scroll to Top Button
 <a class="scroll-to-top rounded" href="#page-top">
 <i class="fas fa-angle-up"></i>
-</a>
+</a>-->
 
 <!-- Logout Modal-->
 {% if user.is_authenticated %}
@@ -361,6 +373,5 @@ $(document).ready(function() {
 <!-- Custom scripts for all pages-->
 <script src="{% static 'GUI/scripts/sb-admin.js' %}"></script>
 
-<textarea readonly id="log"></textarea>
 </body>
 </html>

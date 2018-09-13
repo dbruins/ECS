@@ -5,10 +5,21 @@ import json
 class updateConsumer(WebsocketConsumer):
     def connect(self):
         self.pcaId = self.scope['url_route']['kwargs']['pca_id']
+        user = self.scope["user"]
         self.group_name = self.pcaId
+
+        if not user.is_authenticated:
+            self.close()
+        self.user = user.username
+
         # Join pca/ecs group
         async_to_sync(self.channel_layer.group_add)(
             self.group_name,
+            self.channel_name
+        )
+        #User Specific group
+        async_to_sync(self.channel_layer.group_add)(
+            self.user,
             self.channel_name
         )
 
@@ -19,10 +30,14 @@ class updateConsumer(WebsocketConsumer):
 
     def receive(self, text_data):
         """receive message from websocket"""
-        #currently not used (could possibly be used instead of ajax requests for commands)
-        print (text_data)
-        text_data_json = json.loads(text_data)
-        message = text_data_json["message"]
+        pcaId = text_data
+        async_to_sync(self.channel_layer.send)(
+            "ecs",
+            {
+                'pcaId': pcaId,
+                'user': self.user
+            }
+        )
 
     def update(self,event):
         message = {
@@ -33,6 +48,19 @@ class updateConsumer(WebsocketConsumer):
             message["origin"] = event["origin"]
         self.send(text_data=json.dumps(message))
 
+    def stateTable(self,event):
+        message = {
+            "type": "table_"+event["id"],
+            "message": event["text"]
+        }
+        self.send(text_data=json.dumps(message))
+
+    def bufferedLog(self,event):
+        message = {
+            "type": "bufferedLog_"+event['id'],
+            "message": event["text"]
+        }
+        self.send(text_data=json.dumps(message))
 
     def logUpdate(self,event):
         message = {
