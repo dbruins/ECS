@@ -21,7 +21,8 @@
 function createWebSocket(){
     var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/{{pcaId}}/');
 
-    function updateState(id,newState,sequenceNumber){
+    function updateState(id,newState,sequenceNumber,transition){
+      console.log(id,newState,sequenceNumber,transition)
       if (newState == "Running" || newState == "Ready")
         var cssClass = newState
       else
@@ -36,21 +37,33 @@ function createWebSocket(){
       else
         buttonHtml = '<button id="activeToggle" class="btn btn-primary activeButton" onclick="setinactive('+ id +')" > deactivate  </button>';
       {% endif %}
+      if (id != "{{view.pcaId}}"){
+        transitionName = "Detector is not transitioning"
+      }
+      else {
+        transitionName = ""
+      }
+      nextState = ""
+      if(transition){
+        transitionName = transition["transitionName"];
+        nextState = transition["nextState"];
+      }
       var stateObject = $('#dState'+id)
       //check if state already exists
       if(stateObject.length){
           if(parseInt(stateObject.attr("sequencenumber")) < sequenceNumber)
             stateObject.attr("sequencenumber",sequenceNumber)
             stateObject.html(stateCircle+newState+buttonHtml);
+            $('#detTName'+id).html(transitionName)
+            $('#detNext'+id).html(nextState)
       }
       else{
-          newRow = '<tr class="tableRow"> <td class="col-md-3">'+id+'</td><td id="dState'+id+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+buttonHtml+'</td></tr>'
+          newRow = '<tr id="dRow'+id+'" class="tableRow"> <td>'+id+'</td><td id="dState'+id+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+buttonHtml+'</td><td id="detTName'+id+'">'+transitionName+'</td><td id="detNext'+id+'">'+nextState+'</td></tr>'
           $("#stateTable").append(newRow)
       }
     }
 
     updateSocket.onopen = function(e){
-      console.log("socket open")
       $(".tableRow").remove()
       //get stateTables
       updateSocket.send("{{pcaId}}")
@@ -67,22 +80,24 @@ function createWebSocket(){
         var data = JSON.parse(e.data);
         var message = data['message'];
         var type = data['type'];
-
         if (type == "state"){
           var update = JSON.parse(message);
+          console.log(message)
           var id = update['id'];
-          var newState = update['state'];
-          var sequenceNumber = update['sequence']
-          if(newState == "reset"){
+          var stateObject = update['state'];
+          if(stateObject == "reset"){
               //clear Table
               $(".tableRow").remove()
           }
-          else if (newState == "remove"){
+          else if (stateObject == "remove"){
               //delete Row
               $('#dRow'+id).remove()
           }
           else{
-            updateState(id,newState,sequenceNumber)
+            var newState = stateObject["state"];
+            var transition = JSON.parse(stateObject["transition"]);
+            var sequenceNumber = update['sequence'];
+            updateState(id,newState,sequenceNumber,transition)
           }
         }
         else if (type == "log"){
@@ -94,9 +109,11 @@ function createWebSocket(){
         else if (type == "table_{{view.pcaId}}"){
           var stateTable = JSON.parse(message);
           for (var id in stateTable){
-            var sequenceNumber = stateTable[id][0]
-            var newState = stateTable[id][1]
-            updateState(id,newState,sequenceNumber)
+            var sequenceNumber = stateTable[id][0];
+            var stateObject = stateTable[id][1];
+            var newState = stateObject["state"];
+            var transition = stateObject["transition"];
+            updateState(id,newState,sequenceNumber,transition);
           }
         }
         else if (type == "bufferedLog_{{pcaId}}"){
@@ -140,6 +157,15 @@ function setinactive(id){
   });
 }
 
+function abort(id){
+  $.ajax({
+      type: "POST",
+      url: "{% url 'GUI:abort' pcaId%}",
+      data:{csrfmiddlewaretoken: '{{ csrf_token }}', "detectorId" : id},
+      statusCode: returnCodeCases
+  });
+}
+
 $(document).ready(function() {
     $("#ready").click(function(e) {
         e.preventDefault();
@@ -176,6 +202,15 @@ $(document).ready(function() {
         $.ajax({
             type: "POST",
             url: "{% url 'GUI:shutdown' pcaId%}",
+            data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
+            statusCode: returnCodeCases
+        });
+    });
+    $("#abort").click(function(e) {
+        e.preventDefault();
+        $.ajax({
+            type: "POST",
+            url: "{% url 'GUI:abort' pcaId%}",
             data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
             statusCode: returnCodeCases
         });
@@ -239,7 +274,9 @@ $(document).ready(function() {
         <div class="dropdown-menu" aria-labelledby="pcaDropdown">
           {% for pca in view.partitions %}
             <h6 class="dropdown-header">PCA <a href="{%url 'GUI:pca' pca%}">{{pca}}</a> </h6>
-            <div class="dropdown-divider"></div>
+            {% if not forloop.last %}
+              <div class="dropdown-divider"></div>
+            {%endif%}
           {%endfor%}
         </div>
       </li>
@@ -285,8 +322,10 @@ $(document).ready(function() {
         <div>
           <table class="table table-bordered" id="stateTable">
             <tr>
-              <th>Detector</th>
-              <th>Status</th>
+              <th class="col-md-3">Detector</th>
+              <th class="col-md-3">Status</th>
+              <th class="col-md-3">Transition</th>
+              <th class="col-md-3">Next State</th>
             </tr>
           </table>
         </div>
@@ -296,20 +335,12 @@ $(document).ready(function() {
           <button id="start" class="btn btn-primary">start</button>
           <button id="stop" class="btn btn-primary">stop</button>
           <button id="shutdown" class="btn btn-primary">shutdown</button>
+          <button id="abort" class="btn btn-primary">abort</button>
         </div>
         {% endif %}
         <textarea class="form-control log" rows="10" readonly id="log"></textarea>
       </div>
   </div>
-
-<!-- Sticky Footer
-<footer class="sticky-footer">
-  <div class="container my-auto">
-    <div class="copyright text-center my-auto">
-      <span>CBM ECS</span>
-    </div>
-  </div>
-</footer>-->
 
 </div>
 <!-- /.content-wrapper -->

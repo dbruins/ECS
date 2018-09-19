@@ -78,7 +78,9 @@
             <div class="dropdown-menu" aria-labelledby="pcaDropdown">
               {% for p in view.partitions %}
                 <h6 class="dropdown-header">PCA <a href="{%url 'GUI:pca' p.1.id%}">{{p.1.id}}</a> </h6>
-                <div class="dropdown-divider"></div>
+                {% if not forloop.last %}
+                  <div class="dropdown-divider"></div>
+                {%endif%}
               {%endfor%}
             </div>
           </li>

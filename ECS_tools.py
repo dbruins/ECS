@@ -3,6 +3,8 @@ import copy
 import zmq
 import ECSCodes
 import struct
+from DataObjects import stateObject
+import json
 class MapWrapper:
     """thread safe handling of Map"""
     def __init__(self):
@@ -133,6 +135,8 @@ def send_status(socket,id,sequence,state):
     #python strings need to be encoded into binary strings
     if isinstance(state,str):
         state = state.encode()
+    if isinstance(state,stateObject):
+        state = state.asJsonString().encode()
     socket.send_multipart([id,sequence,state])
 
 def receive_status(socket,pcaid=None):
@@ -143,6 +147,7 @@ def receive_status(socket,pcaid=None):
         errorString = " receiving status"
     try:
         id, sequence, state = socket.recv_multipart()
+        print (id,sequence,state)
     except zmq.Again:
         print ("timeout"+errorString)
         return None
@@ -151,12 +156,12 @@ def receive_status(socket,pcaid=None):
         return None
     if id != ECSCodes.done:
         id = id.decode()
-
-    sequence = intFromBytes(sequence)
-    if state != b"":
-        state = state.decode()
+        state = stateObject(json.loads(state.decode()))
     else:
         state = None
+
+    sequence = intFromBytes(sequence)
+
     return [id,sequence,state]
 
 def getStateSnapshot(stateMap,address,port,timeout=2000,pcaid=None):
@@ -175,7 +180,7 @@ def getStateSnapshot(stateMap,address,port,timeout=2000,pcaid=None):
             return False
         id, sequence, state = ret
         if id != ECSCodes.done:
-            print (id,sequence,state)
+            #print (id,sequence,state)
             if id in stateMap:
                 if stateMap[id][0] < sequence:
                     stateMap[id] = (sequence, state)

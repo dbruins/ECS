@@ -92,3 +92,50 @@ class partitionDataObject(DataObject):
             self.portCurrentState = queryResult[5]
             self.portSingleRequest = queryResult[6]
             self.portCommand = queryResult[7]
+
+class transitionObject(DataObject):
+    def __init__(self,state):
+        if isinstance(state,dict):
+            self.transitionNumber = int(state["transitionNumber"])
+            self.transitionName = state["transitionName"]
+            self.nextState = state["nextState"]
+        else:
+            self.transitionNumber = state[0]
+            self.transitionName = state[1]
+            self.nextState = state[2]
+from json import JSONEncoder
+class stateObject(DataObject):
+
+    def asJsonString(self):
+        if self.transition:
+            return json.dumps(dict({
+                "state" : self.state,
+                "transition" : self.transition.asJsonString(),
+            }))
+        else:
+            return json.dumps(dict({
+                "state" : self.state,
+                "transition" : None,
+            }))
+
+    def __init__(self,data):
+        if isinstance(data,dict):
+            #from json
+            self.state = data["state"]
+            if isinstance(data["transition"],str):
+                self.transition = transitionObject(json.loads(data["transition"]))
+            else:
+                self.transition = data["transition"]
+        elif isinstance(data,str):
+            self.state = data
+            self.transition = None
+        elif isinstance(data,list):
+            if len(data) == 2:
+                #state String + transitionObject
+                self.state = data[0]
+                self.transition = data[1]
+            else:
+                self.state = data[0]
+                self.transition = transitionObject(data[1:])
+        else:
+            raise TypeError("Expected dictionary string or list")

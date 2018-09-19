@@ -6,6 +6,7 @@ import zmq
 from multiprocessing import Queue
 import time
 from _thread import start_new_thread
+from DataObjects import stateObject
 
 class UnmappedDetectorController:
 
@@ -87,7 +88,7 @@ class UnmappedDetectorController:
 
                 det = self.detectors[id]
                 det.stateMachine.currentState = state
-                self.publishQueue.put((det.id,det.getMappedState()))
+                self.publishQueue.put((det.id,det.getStateObject()))
             except zmq.error.ContextTerminated:
                 self.socketDetectorUpdates.close()
                 break
@@ -121,10 +122,10 @@ class UnmappedDetectorController:
 
 
     def handleDetectorTimeout(self,id):
-        self.publishQueue.put((id,"Connection Problem"))
+        self.publishQueue.put((id,stateObject("Connection Problem")))
 
-    def handleDetectorReconnect(self,id,state):
-        self.publishQueue.put((id,state))
+    def handleDetectorReconnect(self,id,stateObj):
+        self.publishQueue.put((id,stateObj))
 
     def dummyFunction(self,a,b=None):
         pass
@@ -145,9 +146,9 @@ class UnmappedDetectorController:
             return False
         confSection = types.getConfsectionForType(detector.type)
         #todo all Detectors are added as active; in case of a crash the PCA needs to remember which Detectors were active; maybe save this information in the ECS database?
-        det = typeClass(detector.id,detector.address,detector.portTransition,detector.portCommand,confSection,self.log,self.publishQueue,self.handleDetectorTimeout,self.handleDetectorReconnect,self.dummyFunction,self.dummyFunction)
+        det = typeClass(detector.id,detector.address,detector.portTransition,detector.portCommand,confSection,self.log,self.handleDetectorTimeout,self.handleDetectorReconnect,self.dummyFunction,self.dummyFunction)
         self.detectors[det.id] = det
-        self.publishQueue.put((det.id,det.getMappedState()))
+        self.publishQueue.put((det.id,det.getStateObject()))
 
         return True
 

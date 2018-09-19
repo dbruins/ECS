@@ -8,16 +8,18 @@ import configparser
 import time
 import ECS_tools
 import threading
+from DataObjects import stateObject
+import json
 
 class Detector:
-    def __init__(self,id,address,portTransition,portCommand,confSection,logfunction,publishQueue,pcaTimeoutFunktion,pcaReconnectFunction,putPendingTransitionFunction,removePendingTransitionFunction,active=True):
+    def __init__(self,id,address,portTransition,portCommand,confSection,logfunction,pcaTimeoutFunktion,pcaReconnectFunction,putPendingTransitionFunction,removePendingTransitionFunction,active=True):
         self.transitionNumber = 0
-        self.inTransition = False
+        self.currentTransitionCommand = ""
+        self.inTransition = threading.Event()
         configParser = configparser.ConfigParser()
         configParser.read("detector.cfg")
         self.id = id
         conf = configParser[confSection]
-        self.publishQueue = publishQueue
         self.logfunction = logfunction
         self.active = threading.Event()
         if active:
@@ -73,13 +75,22 @@ class Detector:
                 if self.connected != True:
                     self.logfunction("Detector %s is connected" % self.id)
                     #todo need to check wether the transitions made during connection Problem were valid
-                    self.stateMachine.currentState = self.getStateFromDetector()
-                    if not self.stateMachine.currentState:
+                    stateObject = self.getStateFromDetector()
+                    if not stateObject:
                         #sometimes when PCA and DC start both at once there is a timeout from getting state(maybe the socket isn't ready idk)
                         continue
-                    #todo there could be a race condition Problem somewhere around here
+                    self.stateMachine.currentState = stateObject.state
+                    #if Detector is still in transition block new transitions
+                    if stateObject.transition:
+                        self.inTransition.clear()
+                        self.transitionNumber = stateObject.transition.transitionNumber
+                        self.currentTransitionCommand = stateObject.transition.transitionName
+                        self.putPending(self.id,self.transitionNumber)
+                        self.logfunction("Detector %s is in Transition %i" % (self.id,self.transitionNumber))
+                    else:
+                        self.inTransition.set()
                     self.connected = True
-                    self.pcaReconnectFunction(self.id,self.getMappedState())
+                    self.pcaReconnectFunction(self.id,self.getStateObject())
             except zmq.Again:
                 if self.connected == True or self.connected == None:
                     self.connected = False
@@ -110,10 +121,12 @@ class Detector:
         """request a transition to a Detector takes an array of commands"""
         self.abort_bool = False
         for command in commandArray:
-            if self.inTransition:
-                print("waiting for previous Transition")
-                while self.inTransition and not self.abort_bool:
-                    pass
+            if not self.connected:
+                self.logfunction("Can't transition because Detector %s is't connected" % self.id)
+                return False
+            if not self.inTransition.isSet():
+                print("%s waiting for previous Transition" % self.id)
+                self.inTransition.wait()
                 if self.abort_bool:
                     return False
 
@@ -122,18 +135,19 @@ class Detector:
             if not self.stateMachine.checkIfPossible(command):
                 self.logfunction("Transition %s is not possible for Detector %s in current state" % (command,self.id))
                 return False
-            self.inTransition = True
-            self.transitionNumber +=1
-            self.putPending(self.id,self.transitionNumber)
             try:
                 socketSender = self.createSendSocket()
-                socketSender.send_multipart([ECS_tools.intToBytes(self.transitionNumber),command.encode()])
+                socketSender.send_multipart([ECS_tools.intToBytes(self.transitionNumber+1),command.encode()])
                 #check if the command has arrived
-                #receive status code or new State
+                #receive status code
                 returnMessage = socketSender.recv()
                 if returnMessage == ECSCodes.busy:
                     self.logfunction("Detector %s is busy" % self.id)
                     return False
+                self.inTransition.clear()
+                self.transitionNumber +=1
+                self.currentTransitionCommand = command
+                self.putPending(self.id,self.transitionNumber)
             except zmq.Again:
                 self.logfunction("timeout from Detector "+str(self.id)+" for sending "+ command,True)
                 return False
@@ -161,6 +175,21 @@ class Detector:
             return "Connection Problem"
         return self.mapper[self.stateMachine.currentState]
 
+    def getStateObject(self):
+        """gets current state + transition for Publishing"""
+        state = self.getMappedState()
+        if not self.connected:
+            return stateObject(state)
+        if not self.inTransition.isSet():
+            transitionNumber = self.transitionNumber
+            command = self.currentTransitionCommand
+            nextState = self.stateMachine.getNextStateForCommand(command)
+            return stateObject([state,transitionNumber,command,nextState])
+        else:
+            return stateObject(state)
+
+
+
     def getStateFromDetector(self):
         """get's the state from the dummy returns False when a Problem occurs. Use on startup or if there has been a crash or a connection Problem"""
         state = False
@@ -170,7 +199,8 @@ class Detector:
             requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
             requestSocket.setsockopt(zmq.LINGER,0)
             requestSocket.send(ECSCodes.pcaAsksForDetectorStatus)
-            state = requestSocket.recv().decode()
+            state = requestSocket.recv()
+            state = stateObject(json.loads(state.decode()))
         except zmq.Again:
             self.logfunction("timeout getting Detector Status for Detector %s" % (self.id) ,True)
         except Exception as e:
@@ -204,9 +234,9 @@ class Detector:
             requestSocket.setsockopt(zmq.LINGER,0)
             requestSocket.send(ECSCodes.abort)
             state = requestSocket.recv().decode()
-            self.removePendingTransition(self.id)
-            self.inTransition = False
             self.abort_bool = True
+            self.inTransition.set()
+            self.removePendingTransition(self.id)
         except zmq.Again:
             self.logfunction("timeout aborting Detector %s" % (self.id) ,True)
             return False

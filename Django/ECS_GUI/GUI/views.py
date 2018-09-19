@@ -26,7 +26,7 @@ projectPath = settings.PCACODESPATH
 sys.path.append(projectPath)
 import ECSCodes
 import ECS_tools
-from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject
+from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject
 
 class ECSHandler:
 
@@ -92,13 +92,14 @@ class ECSHandler:
                 for pca in self.pcaHandlers.items():
                     map[pca[0]] = pca[1].stateMap.map
                 map["unmapped"] = self.unmappedStateTable.map
-                map = json.dumps(map)
+                map =  json.dumps(map, default=lambda o: o.__dict__)
+                #map = json.dumps(map)
                 if len(self.logQueue) > 0:
                     bufferdLog = "\n".join(list(self.logQueue))
             else:
                 #single pca
                 handler = self.pcaHandlers[pcaId]
-                map = json.dumps(handler.stateMap.map)
+                map =  json.dumps(handler.stateMap.map, default=lambda o: o.__dict__)
                 #send buffered log entries
                 if len(handler.logQueue) > 0:
                     bufferdLog = "\n".join(list(handler.logQueue))
@@ -355,7 +356,7 @@ class ECSHandler:
                 #remove code for Web Browser
                 state = "remove"
             else:
-                state = state.decode()
+                state = json.loads(state.decode())
                 print("received update",id, sequence, state)
                 self.unmappedStateTable[id] = (sequence, state)
 
@@ -493,7 +494,7 @@ class PCAHandler:
         finally:
             commandSocket.close()
         if r != ECSCodes.ok:
-            self.log("received error for sending command: " + str(command[0]))
+            self.log("received error for sending command")
             return False
         return True
 
@@ -541,7 +542,7 @@ class PCAHandler:
                 #remove code for Web Browser
                 state = "remove"
             else:
-                state = state.decode()
+                state = json.loads(state.decode())
                 print("received update",id, sequence, state)
                 self.stateMap[id] = (sequence, state)
 
@@ -572,19 +573,21 @@ class PCAHandler:
                 'text': message
             }
         )
-        #ecs page
-        async_to_sync(channel_layer.group_send)(
-            #the group name
-            "ecs",
-            {
-                #calls method update in the consumer which is registered to channel layer
-                'type': type,
-                #argument(s) with which update is called
-                'text': message,
-                #ecs page needs to know where the update came from
-                'origin': self.id
-            }
-        )
+
+        if type != "logUpdate":
+            #ecs page
+            async_to_sync(channel_layer.group_send)(
+                #the group name
+                "ecs",
+                {
+                    #calls method update in the consumer which is registered to channel layer
+                    'type': type,
+                    #argument(s) with which update is called
+                    'text': message,
+                    #ecs page needs to know where the update came from
+                    'origin': self.id
+                }
+            )
     def waitForLogUpdates(self):
         """wait for new log messages from PCA"""
         while True:
@@ -637,7 +640,7 @@ def permission_timeout():
 t = threading.Thread(name="permission_timeout", target=permission_timeout)
 t.start()
 
-from django.views.generic import TemplateView
+from django.views.generic import TemplateView,View
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic.edit import FormView
 from guardian.mixins import PermissionRequiredMixin
@@ -655,12 +658,6 @@ class resetUserTimeoutMixin(object):
 class ecsMixin(LoginRequiredMixin,resetUserTimeoutMixin):
     """combination of Login required and reset timeout """
     pass
-
-def checkIfHasControl(user,pcaId):
-    pcaObject = pcaModel.objects.filter(id=pcaId).get()
-    if not user.has_perm("has_control",pcaObject):
-        return False
-    return True
 
 class pcaForm(forms.Form):
     id = forms.CharField(label="id")
@@ -710,9 +707,7 @@ class pcaView(ecsMixin,TemplateView):
         self.partitions = []
         for pca in ecs.pcaHandlers:
             self.partitions.append(pca)
-        print(self.partitions)
         self.pcaId = self.kwargs['pcaId']
-        #self.stateMap = ecs.getPCAHandler(self.pcaId).stateMap.map
         self.pcaObject = pcaModel.objects.filter(id=self.pcaId).get()
         self.ecsObject = pcaModel.objects.filter(id="ecs").get()
         self.userInControl = None
@@ -725,19 +720,20 @@ class pcaView(ecsMixin,TemplateView):
             self.userInControl = "You"
         return super().dispatch(request, *args, **kwargs)
 
-class create_pca(ecsMixin,PermissionRequiredMixin,FormView):
+class ecsPermissionMixin(PermissionRequiredMixin):
+    return_403 = True
+    permission_required = 'has_control'
+    permission_object = pcaModel.objects.filter(id="ecs").get()
+
+
+class create_pca(ecsMixin,ecsPermissionMixin,FormView):
     #FormView
     template_name = 'GUI/ECS_Create_Partition.html'
     form_class = pcaForm
     success_url = '/'
     errorMessage = None
 
-    #PermissionRequiredMixin
-    return_403 = True
     raise_exception = True
-    permission_required = 'has_control'
-    permission_object = pcaModel.objects.filter(id="ecs").get()
-
     def dispatch(self, request, *args, **kwargs):
         self.partitions = ecs.pcaHandlers.items()
         return super().dispatch(request, *args, **kwargs)
@@ -763,13 +759,9 @@ class create_pca(ecsMixin,PermissionRequiredMixin,FormView):
             self.errorMessage = ret
             return super().form_invalid(form)
 
-class delete_pca(ecsMixin,PermissionRequiredMixin,TemplateView):
+class delete_pca(ecsMixin,ecsPermissionMixin,TemplateView):
     template_name = 'GUI/ECS_Delete_Partition.html'
-    #PermissionRequiredMixin
-    return_403 = True
     raise_exception = True
-    permission_required = 'has_control'
-    permission_object = pcaModel.objects.filter(id="ecs").get()
 
     def dispatch(self, request, *args, **kwargs):
         self.partitions = ecs.pcaHandlers.items()
@@ -819,18 +811,14 @@ def input_edit_pca(request):
 def edit_pca(request):
     pass
 
-class create_detector(ecsMixin,PermissionRequiredMixin,FormView):
+class create_detector(ecsMixin,ecsPermissionMixin,FormView):
     #FormView
     template_name = 'GUI/ECS_Create_Detector.html'
     form_class = detectorForm
     success_url = '/'
     errorMessage = None
 
-    #PermissionRequiredMixin
-    return_403 = True
     raise_exception = True
-    permission_required = 'has_control'
-    permission_object = pcaModel.objects.filter(id="ecs").get()
 
     def form_valid(self, form):
         if not form.is_valid():
@@ -850,14 +838,9 @@ class create_detector(ecsMixin,PermissionRequiredMixin,FormView):
             self.errorMessage = ret
             return super().form_invalid(form)
 
-class moveDetectors(ecsMixin,PermissionRequiredMixin,TemplateView):
+class moveDetectors(ecsMixin,ecsPermissionMixin,TemplateView):
         template_name = 'GUI/ECS_moveDetectors.html'
-
-        #PermissionRequiredMixin
-        return_403 = True
         raise_exception = True
-        permission_required = 'has_control'
-        permission_object = pcaModel.objects.filter(id="ecs").get()
 
         def dispatch(self, request, *args, **kwargs):
             self.unmappedDetectors = ecs.getUnmappedDetectors()
@@ -881,14 +864,9 @@ class moveDetectors(ecsMixin,PermissionRequiredMixin,TemplateView):
                 return self.get(request, *args, **kwargs)
             return HttpResponseRedirect('/')
 
-class deleteDetector(ecsMixin,PermissionRequiredMixin,TemplateView):
+class deleteDetector(ecsMixin,ecsPermissionMixin,TemplateView):
     template_name = 'GUI/ECS_delete_Detectors.html'
-
-    #PermissionRequiredMixin
-    return_403 = True
     raise_exception = True
-    permission_required = 'has_control'
-    permission_object = pcaModel.objects.filter(id="ecs").get()
 
     def dispatch(self, request, *args, **kwargs):
         self.unmappedDetectors = ecs.getUnmappedDetectors()
@@ -911,59 +889,74 @@ class deleteDetector(ecsMixin,PermissionRequiredMixin,TemplateView):
             return self.get(request, *args, **kwargs)
         return HttpResponseRedirect('/')
 
-@login_required
-def setActive(request,pcaId):
-    if not checkIfHasControl(request.user,pcaId):
-        return HttpResponse(status=403)
-    detectorId = request.POST["detectorId"]
-    pca = ecs.getPCAHandler(pcaId)
-    pca.sendCommand(ECSCodes.setActive,detectorId)
-    return HttpResponse(status=200)
+class pcaPermissionMixin(PermissionRequiredMixin):
+    #PermissionRequiredMixin
+    return_403 = True
+    permission_required = 'has_control'
 
-@login_required
-def setInactive(request,pcaId):
-    if not checkIfHasControl(request.user,pcaId):
-        return HttpResponse(status=403)
-    detectorId = request.POST["detectorId"]
-    pca = ecs.getPCAHandler(pcaId)
-    pca.sendCommand(ECSCodes.setInactive,detectorId)
-    return HttpResponse(status=200)
+    def dispatch(self, request, *args, **kwargs):
+        pcaId = self.kwargs['pcaId']
+        self.permission_object = pcaModel.objects.filter(id=kwargs['pcaId']).get()
+        return super().dispatch(request, *args, **kwargs)
 
-@login_required
-def ready(request,pcaId):
-    if not checkIfHasControl(request.user,pcaId):
-        return HttpResponse(status=403)
-    print ("sending ready")
-    pca = ecs.getPCAHandler(pcaId)
-    pca.sendCommand(ECSCodes.getReady)
-    return HttpResponse(status=200)
+class ready(ecsMixin,pcaPermissionMixin,View):
+    raise_exception = True
+    def post(self, request, *args, **kwargs):
+        pcaId = self.kwargs['pcaId']
+        pca = ecs.getPCAHandler(pcaId)
+        pca.sendCommand(ECSCodes.getReady)
+        return HttpResponse(status=200)
 
-@login_required
-def start(request,pcaId):
-    if not checkIfHasControl(request.user,pcaId):
-        return HttpResponse(status=403)
-    print ("sending start")
-    pca = ecs.getPCAHandler(pcaId)
-    pca.sendCommand(ECSCodes.start)
-    return HttpResponse(status=200)
+class start(ecsMixin,pcaPermissionMixin,View):
+    raise_exception = True
+    def post(self, request, *args, **kwargs):
+        pcaId = self.kwargs['pcaId']
+        pca = ecs.getPCAHandler(pcaId)
+        pca.sendCommand(ECSCodes.start)
+        return HttpResponse(status=200)
 
-@login_required
-def shutdown(request,pcaId):
-    if not checkIfHasControl(request.user,pcaId):
-        return HttpResponse(status=403)
-    print ("sending shutdown")
-    pca = ecs.getPCAHandler(pcaId)
-    pca.sendCommand(ECSCodes.shutdown)
-    return HttpResponse(status=200)
+class shutdown(ecsMixin,pcaPermissionMixin,View):
+    raise_exception = True
+    def post(self, request, *args, **kwargs):
+        pcaId = self.kwargs['pcaId']
+        pca = ecs.getPCAHandler(pcaId)
+        pca.sendCommand(ECSCodes.shutdown)
+        return HttpResponse(status=200)
 
-@login_required
-def stop(request,pcaId):
-    if not checkIfHasControl(request.user,pcaId):
-        return HttpResponse(status=403)
-    print ("sending stop")
-    pca = ecs.getPCAHandler(pcaId)
-    pca.sendCommand(ECSCodes.stop)
-    return HttpResponse(status=200)
+class stop(ecsMixin,pcaPermissionMixin,View):
+    raise_exception = True
+    def post(self, request, *args, **kwargs):
+        pcaId = self.kwargs['pcaId']
+        pca = ecs.getPCAHandler(pcaId)
+        pca.sendCommand(ECSCodes.stop)
+        return HttpResponse(status=200)
+
+class abort(ecsMixin,pcaPermissionMixin,View):
+    raise_exception = True
+    def post(self, request, *args, **kwargs):
+        pcaId = self.kwargs['pcaId']
+        #detectorId = request.POST["detectorId"]
+        pca = ecs.getPCAHandler(pcaId)
+        pca.sendCommand(ECSCodes.abort)
+        return HttpResponse(status=200)
+
+class setActive(ecsMixin,pcaPermissionMixin,View):
+    raise_exception = True
+    def post(self, request, *args, **kwargs):
+        pcaId = self.kwargs['pcaId']
+        detectorId = request.POST["detectorId"]
+        pca = ecs.getPCAHandler(pcaId)
+        pca.sendCommand(ECSCodes.setActive,detectorId)
+        return HttpResponse(status=200)
+
+class setInactive(ecsMixin,pcaPermissionMixin,View):
+    raise_exception = True
+    def post(self, request, *args, **kwargs):
+        pcaId = self.kwargs['pcaId']
+        detectorId = request.POST["detectorId"]
+        pca = ecs.getPCAHandler(pcaId)
+        pca.sendCommand(ECSCodes.setInactive,detectorId)
+        return HttpResponse(status=200)
 
 @login_required
 def getDetectorListForPCA(request):
@@ -1014,5 +1007,4 @@ def giveUpControl(request,pcaId):
         redirect = HttpResponseRedirect("/pca/"+pcaId,{'stateMap': pca.stateMap.map, "pcaId" : pcaId, "pcaObject" : pcaObject})
 
     remove_perm('has_control', request.user, pcaObject)
-
     return redirect

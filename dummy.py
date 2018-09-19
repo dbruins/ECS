@@ -10,7 +10,7 @@ import ECSCodes
 import configparser
 from Statemachine import Statemachine
 import json
-from DataObjects import partitionDataObject, detectorDataObject
+from DataObjects import partitionDataObject, detectorDataObject, stateObject, transitionObject
 import ECS_tools
 import subprocess
 import zc.lockfile #pip3 install zc.lockfile
@@ -20,7 +20,7 @@ class DetectorController:
     def __init__(self,id,startState="Shutdown"):
         #create lock
         try:
-            self.lock = zc.lockfile.LockFile('lock'+id, content_template='{pid}')
+            self.lock = zc.lockfile.LockFile('/tmp/lock'+id, content_template='{pid}')
         except zc.lockfile.LockError:
             print("other Process is already Running "+id)
             exit(1)
@@ -52,7 +52,6 @@ class DetectorController:
                     print("The ECS doesn't know who I am :(")
                     sys.exit(1)
                 detectorDataJSON = json.loads(detectorDataJSON.decode())
-                print(detectorDataJSON)
                 detectorData = detectorDataObject(detectorDataJSON)
             except zmq.Again:
                 print("timeout getting detector Data")
@@ -98,6 +97,7 @@ class DetectorController:
 
         self.workThread = threading.Thread(name="worker", target=self.work)
         self.inTransition = False
+        self.currentCommand = ""
 
         _thread.start_new_thread(self.waitForUpdates,())
         ECS_tools.getStateSnapshot(self.stateMap,pcaData.address,pcaData.portCurrentState,timeout=self.receive_timeout)
@@ -159,7 +159,6 @@ class DetectorController:
                 socketSendUpdateToPCA.close()
                 data = self.getPCAData()
                 self.changePCA(data)
-                return
         except zmq.Again:
             print("timeout sending status")
         except zmq.error.ContextTerminated:
@@ -184,7 +183,7 @@ class DetectorController:
             else:
                 id = m[0]
                 sequence = m[1]
-                state = m[2].decode()
+                state = m[2]
             if state == ECSCodes.reset:
                 self.stateMap.reset()
                 print("reset")
@@ -192,6 +191,7 @@ class DetectorController:
             elif state == ECSCodes.removed:
                 del self.stateMap[id]
                 continue
+            state = json.loads(state.decode())
             sequence = ECS_tools.intFromBytes(sequence)
             print("received update",id, sequence, state)
             self.stateMap[id] = (sequence, state)
@@ -222,6 +222,7 @@ class DetectorController:
                 else:
                     self.socketReceiver.send(ECSCodes.ok)
                 self.currentTransitionNumber = ECS_tools.intFromBytes(transitionNumber)
+                self.currentCommand = command
                 self.inTransition = True
                 self.workThread = threading.Thread(name="worker", target=self.work, args=(command,))
                 self.workThread.start()
@@ -249,7 +250,12 @@ class DetectorController:
                     self.commandSocket.send(ECSCodes.ok)
                     continue
                 if command == ECSCodes.pcaAsksForDetectorStatus:
-                    self.commandSocket.send(self.stateMachine.currentState.encode())
+                    if not self.inTransition:
+                        transition = None
+                    else:
+                        transition = transitionObject([self.currentTransitionNumber,self.currentCommand,self.stateMachine.getNextStateForCommand(self.currentCommand)])
+                    state = stateObject([self.stateMachine.currentState,transition])
+                    self.commandSocket.send(state.asJsonString().encode())
                     continue
                 if command == ECSCodes.detectorChangePartition:
                     partition = partitionDataObject(json.loads(arg))

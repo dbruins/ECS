@@ -41,13 +41,12 @@
               stateObject.html(stateCircle+newState);
           }
           else{
-              newRow = '<tr id="dRow'+id+'" class="tableRow'+origin+'"> <td class="col-md-3">'+id+'</td><td id="dState'+id+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+'</td></tr>';
+              newRow = '<tr id="dRow'+id+'" class="tableRow'+origin+'"> <td>'+id+'</td><td id="dState'+id+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+'</td></tr>';
               $("#stateTable"+origin).append(newRow)
           }
         }
 
         updateSocket.onopen = function(e){
-          console.log("socket open")
           $(".tableRow").remove()
           //get stateTables
           updateSocket.send("ecs")
@@ -73,17 +72,19 @@
             if (type == "state"){
               var update = JSON.parse(message);
               var id = update['id'];
-              var newState = update['state'];
-              var sequenceNumber = update['sequence']
-              if(newState == "reset"){
+              var stateObject = update['state'];
+              console.log(stateObject)
+              if(stateObject == "reset"){
                   //clear Table
                   $(".tableRow"+origin).remove()
               }
-              else if (newState == "remove"){
+              else if (stateObject == "remove"){
                   //delete Row
                   $('#dRow'+id).remove()
               }
               else{
+                var newState = stateObject["state"];
+                var sequenceNumber = update['sequence']
                 updateState(id,newState,sequenceNumber,origin)
               }
             }
@@ -99,7 +100,8 @@
                 var stateTable = partitions[pca]
                 for (var id in stateTable){
                   var sequenceNumber = stateTable[id][0]
-                  var newState = stateTable[id][1]
+                  var stateObject = stateTable[id][1];
+                  var newState = stateObject["state"];
                   updateState(id,newState,sequenceNumber,pca)
                 }
               }
@@ -177,7 +179,9 @@
             {% for pca in view.ecsMap.items %}
               {% if pca.0 != "unmapped"%}
                 <h6 class="dropdown-header">PCA <a href="{%url 'GUI:pca' pca.0%}">{{pca.0}}</a> </h6>
-                <div class="dropdown-divider"></div>
+                {% if forloop.revcounter > 2 %}
+                  <div class="dropdown-divider"></div>
+                {%endif%}
               {%endif%}
             {%endfor%}
           </div>
@@ -227,7 +231,7 @@
             {%endif%}
             <table class="table table-bordered" id="stateTable{{pca.0}}">
               <tr>
-                <th>Detector</th>
+                <th class="col-md-3">Detector</th>
                 <th>Status</th>
               </tr>
             </table>

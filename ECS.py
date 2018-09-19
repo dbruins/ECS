@@ -333,7 +333,6 @@ class ECS:
             address = p.address
             port = p.portCurrentState
 
-            #if not self.getStateSnapshot(id,address,port):
             if not ECS_tools.getStateSnapshot(self.stateMap,address,port,timeout=self.receive_timeout,pcaid=id):
                 self.handleDisconnection(id)
             else:
@@ -395,6 +394,7 @@ class ECS:
                 self.disconnectedPCAQueue.put(pca)
             else:
                 self.connectedPartitions[pca.id] = pca.id
+                self.log("Partition %s reconnected" % pca.id)
 
     def handleDisconnection(self,id):
         del self.connectedPartitions[id]
@@ -529,7 +529,6 @@ class ECS:
                     #connect to pca
                     self.partitions[partition.id] = partition
                     self.socketSubscription.connect("tcp://%s:%i" % (partition.address,partition.portPublish))
-                    #if not ECS_tools.getStateSnapshot(self.stateMap,partition.address,partition.portCurrentState,pcaid=partition.id,timeout=self.receive_timeout):
                     #let the reconnector thread handle the connection(in case of no connectivity the client request might take too long)
                     self.handleDisconnection(partition.id)
                     return ECSCodes.ok
@@ -897,12 +896,14 @@ class ECS:
                     self.stateMap.delMany(arg)
                     print("reset %s" % id)
                     continue
-                if state == ECSCodes.removed:
+                elif state == ECSCodes.removed:
                     del self.stateMap[id]
                     continue
-                state = state.decode()
+                elif state == ECSCodes.transitionStart or state == ECSCodes.transitionStop:
+                    continue
+                state = json.loads(state.decode())
             sequence = ECS_tools.intFromBytes(sequence)
-            print("received update",id, sequence, state)
+            #print(state)
             if id in self.stateMap:
                 #only update if the current status sequence is smaller
                 if self.stateMap[id][0] < sequence:

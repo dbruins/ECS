@@ -46,6 +46,7 @@ class updateConsumer(WebsocketConsumer):
         }
         if "origin" in event:
             message["origin"] = event["origin"]
+        print(message)
         self.send(text_data=json.dumps(message))
 
     def stateTable(self,event):
