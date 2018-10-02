@@ -21,44 +21,36 @@
 function createWebSocket(){
     var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/{{pcaId}}/');
 
-    function updateState(id,newState,sequenceNumber,transition){
-      console.log(id,newState,sequenceNumber,transition)
-      if (newState == "Running" || newState == "Ready")
-        var cssClass = newState
-      else
-        var cssClass = "NotReady"
+    function updateState(id,newState,unmappedState,sequenceNumber,tag,comment){
+      cssClass = newState
       stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>'
       var buttonHtml = "";
+      if (tag == ""){
+        tag = "No Configuration Tag"
+      }
       {% if "has_control" in pcaPerms %}
-      if (id == "{{view.pcaId}}")
-        buttonHtml = ""
-      else if (newState == "inactive")
+      if (id == "{{view.pcaId}}"){
+        buttonHtml = "";
+        unmappedState = "";
+        tag = ""
+      }
+      else if (newState == "Inactive")
         buttonHtml = '<button id="activeToggle" class="btn btn-primary activeButton" onclick="setactive('+ id +')" > activate  </button>';
       else
         buttonHtml = '<button id="activeToggle" class="btn btn-primary activeButton" onclick="setinactive('+ id +')" > deactivate  </button>';
       {% endif %}
-      if (id != "{{view.pcaId}}"){
-        transitionName = "Detector is not transitioning"
-      }
-      else {
-        transitionName = ""
-      }
-      nextState = ""
-      if(transition){
-        transitionName = transition["transitionName"];
-        nextState = transition["nextState"];
-      }
       var stateObject = $('#dState'+id)
       //check if state already exists
       if(stateObject.length){
           if(parseInt(stateObject.attr("sequencenumber")) < sequenceNumber)
             stateObject.attr("sequencenumber",sequenceNumber)
             stateObject.html(stateCircle+newState+buttonHtml);
-            $('#detTName'+id).html(transitionName)
-            $('#detNext'+id).html(nextState)
+            $('#detUnmappedState'+id).html(unmappedState)
+            $('#detTagName'+id).html(tag)
+            $('#detComment'+id).html(comment)
       }
       else{
-          newRow = '<tr id="dRow'+id+'" class="tableRow"> <td>'+id+'</td><td id="dState'+id+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+buttonHtml+'</td><td id="detTName'+id+'">'+transitionName+'</td><td id="detNext'+id+'">'+nextState+'</td></tr>'
+          newRow = '<tr id="dRow'+id+'" class="tableRow"> <td>'+id+'</td><td id="dState'+id+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+buttonHtml+'</td><td id ="detUnmappedState'+id+'">'+unmappedState+'</td><td id="detTagName'+id+'">'+tag+'</td><td id="detComment'+id+'">'+comment+'</td></tr>'
           $("#stateTable").append(newRow)
       }
     }
@@ -66,7 +58,33 @@ function createWebSocket(){
     updateSocket.onopen = function(e){
       $(".tableRow").remove()
       //get stateTables
-      updateSocket.send("{{pcaId}}")
+      console.log("connected")
+      $.ajax({
+          type: "GET",
+          url: "{% url 'GUI:currentTableAndLogRequest' pcaId %}",
+          "success": function(result) {
+              var stateTable = result["table"]
+              var log = result["log"]
+              for (var id in stateTable){
+                var sequenceNumber = stateTable[id][0];
+                var stateObject = stateTable[id][1];
+                var newState = stateObject["state"];
+                var unmappedState = stateObject["unmappedState"]
+                var tag = (stateObject["configTag"] == undefined) ? "" : stateObject["configTag"];
+                var comment = (stateObject["comment"] == undefined) ? "" : stateObject["comment"];
+                updateState(id,newState,unmappedState,sequenceNumber,tag,comment);
+              }
+              if (log){
+                //empty log
+                $('#log').html("")
+                $('#log').append(log+"\n");
+                //allways scroll directly to bottom
+                var textarea = document.getElementById('log');
+                textarea.scrollTop = textarea.scrollHeight;
+
+              }
+          },
+      });
     }
 
     updateSocket.onclose = function(e){
@@ -82,7 +100,7 @@ function createWebSocket(){
         var type = data['type'];
         if (type == "state"){
           var update = JSON.parse(message);
-          console.log(message)
+          console.log(update)
           var id = update['id'];
           var stateObject = update['state'];
           if(stateObject == "reset"){
@@ -95,9 +113,11 @@ function createWebSocket(){
           }
           else{
             var newState = stateObject["state"];
-            var transition = JSON.parse(stateObject["transition"]);
-            var sequenceNumber = update['sequence'];
-            updateState(id,newState,sequenceNumber,transition)
+            var sequenceNumber = update['sequenceNumber'];
+            var unmappedState = stateObject["unmappedState"]
+            var tag = (stateObject["configTag"] == undefined) ? "" : stateObject["configTag"];
+            var comment = (stateObject["comment"] == undefined) ? "" : stateObject["comment"];
+            updateState(id,newState,unmappedState,sequenceNumber,tag,comment);
           }
         }
         else if (type == "log"){
@@ -106,23 +126,11 @@ function createWebSocket(){
           var textarea = document.getElementById('log');
           textarea.scrollTop = textarea.scrollHeight;
         }
-        else if (type == "table_{{view.pcaId}}"){
-          var stateTable = JSON.parse(message);
-          for (var id in stateTable){
-            var sequenceNumber = stateTable[id][0];
-            var stateObject = stateTable[id][1];
-            var newState = stateObject["state"];
-            var transition = stateObject["transition"];
-            updateState(id,newState,sequenceNumber,transition);
-          }
-        }
-        else if (type == "bufferedLog_{{pcaId}}"){
-          //empty log
-          $('#log').html("")
-          $('#log').append(message+"\n");
-          //allways scroll directly to bottom
-          var textarea = document.getElementById('log');
-          textarea.scrollTop = textarea.scrollHeight;
+        else if (type == "permissionTimeout"){
+          $('#alertBox').css('visibility', 'visible');
+          $('#alertBox').html("<strong>Warning!</strong> Your permission timed out")
+          $('#controlLink').html("take control of {{view.pcaObject}}")
+          $('#controlLink').attr("href", "{% url 'GUI:take_control' pcaId%}");
         }
     };
 }
@@ -243,9 +251,9 @@ $(document).ready(function() {
             {% endif %}
             {% if "has_control" in pcaPerms %}
               <h5 class="dropdown-header">You are currently controlling the Partition</h5>
-              <a class="dropdown-item" href="{% url 'GUI:giveup_control' pcaId%}">give up control of {{view.pcaObject}}</a>
+              <a id="controlLink" class="dropdown-item" href="{% url 'GUI:giveup_control' pcaId%}">give up control of {{view.pcaObject}}</a>
             {% elif not view.userInControl %}
-              <a class="dropdown-item" href="{% url 'GUI:take_control' pcaId%}">take control of {{view.pcaObject}}</a>
+              <a id="controlLink" class="dropdown-item" href="{% url 'GUI:take_control' pcaId%}">take control of {{view.pcaObject}}</a>
             {% endif %}
             <div class="dropdown-divider"></div>
           {% endif %}
@@ -316,16 +324,16 @@ $(document).ready(function() {
           </li>
           <li class="breadcrumb-item active">PCA {{view.pcaId}} Monitor</li>
         </ol>
-        <div class="alert alert-danger" id="alertBox" style="visibility: hidden">
-        </div>
+        <div class="alert alert-danger" id="alertBox" style="visibility: hidden"></div>
         <h1>PCA {{view.pcaId}} Monitor</h1>
         <div>
           <table class="table table-bordered" id="stateTable">
             <tr>
               <th class="col-md-3">Detector</th>
+              <th class="col-md-3">Status as seen by PCA</th>
               <th class="col-md-3">Status</th>
-              <th class="col-md-3">Transition</th>
-              <th class="col-md-3">Next State</th>
+              <th class="col-md-3">Config Tag</th>
+              <th class="col-md-3">Comment</th>
             </tr>
           </table>
         </div>

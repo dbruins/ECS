@@ -1,4 +1,9 @@
-x=$(shuf -i 1-7 -n 1)
+x=$(shuf -i 1-8 -n 1)
 sleep $x
-echo "done"
-exit 0
+x=$(shuf -i 0-10 -n 1)
+if [ "$x" -gt 9 ]
+then
+  exit 1
+else
+  exit 0
+fi

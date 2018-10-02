@@ -24,6 +24,7 @@ urlpatterns = [
     path('setActive/<str:pcaId>',views.setActive.as_view(), name='setActive' ),
     path('setInactive/<str:pcaId>',views.setInactive.as_view(), name='setInactive' ),
     path('getDetectorListForPca/',views.getDetectorListForPCA,name='getDetectorListForPCA'),
+    path('currentTableAndLogRequest/<str:pcaId>',views.currentTableAndLogRequest,name='currentTableAndLogRequest'),
     path('take_control/<str:pcaId>', views.takeControl, name='take_control'),
     path('giveup_control/<str:pcaId>', views.giveUpControl, name='giveup_control'),
 ]

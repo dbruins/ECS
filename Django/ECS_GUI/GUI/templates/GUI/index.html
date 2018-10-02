@@ -49,7 +49,33 @@
         updateSocket.onopen = function(e){
           $(".tableRow").remove()
           //get stateTables
-          updateSocket.send("ecs")
+          console.log("Connection open")
+          $.ajax({
+              type: "GET",
+              url: "{% url 'GUI:currentTableAndLogRequest' 'ecs' %}",
+              "success": function(result) {
+                  var partitions = result["table"]
+                  var log = result["log"]
+                  for (var pca in partitions){
+                    var stateTable = partitions[pca]
+                    for (var id in stateTable){
+                      var sequenceNumber = stateTable[id][0]
+                      var stateObject = stateTable[id][1];
+                      var newState = stateObject["state"];
+                      updateState(id,newState,sequenceNumber,pca)
+                    }
+                  }
+                  if (log){
+                    //empty log
+                    $('#log').html("")
+                    $('#log').append(log+"\n");
+                    //allways scroll directly to bottom
+                    var textarea = document.getElementById('log');
+                    textarea.scrollTop = textarea.scrollHeight;
+
+                  }
+              },
+          });
         }
 
         updateSocket.onclose = function(e){
@@ -73,7 +99,6 @@
               var update = JSON.parse(message);
               var id = update['id'];
               var stateObject = update['state'];
-              console.log(stateObject)
               if(stateObject == "reset"){
                   //clear Table
                   $(".tableRow"+origin).remove()
@@ -89,32 +114,17 @@
               }
             }
             else if (type == "log"){
-              $('#log').append(message+"\n");
+              $('#log').append(log+"\n");
               //allways scroll directly to bottom
               var textarea = document.getElementById('log');
               textarea.scrollTop = textarea.scrollHeight;
             }
-            else if (type == "table_ecs"){
-              var partitions = JSON.parse(message);
-              for (var pca in partitions){
-                var stateTable = partitions[pca]
-                for (var id in stateTable){
-                  var sequenceNumber = stateTable[id][0]
-                  var stateObject = stateTable[id][1];
-                  var newState = stateObject["state"];
-                  updateState(id,newState,sequenceNumber,pca)
-                }
-              }
+            else if (type == "permissionTimeout"){
+              $('#alertBox').css('visibility', 'visible');
+              $('#alertBox').html("<strong>Warning!</strong> Your permission timed out")
+              $('#controlLink').html("take control of {{view.pcaObject}}")
+              $('#controlLink').attr("href", "{% url 'GUI:take_control' 'ecs'%}");
             }
-            else if (type == "bufferedLog_ecs"){
-              //empty log
-              $('#log').html("")
-              $('#log').append(message+"\n");
-              //allways scroll directly to bottom
-              var textarea = document.getElementById('log');
-              textarea.scrollTop = textarea.scrollHeight;
-            }
-
         };
     }
     createWebSocket()
@@ -147,9 +157,9 @@
               {% endif %}
               {% if "has_control" in ecsPerms %}
                 <h5 class="dropdown-header">You are currently controlling the ECS</h5>
-                <a class="dropdown-item" href="{% url 'GUI:giveup_control' 'ecs'%}">give up control of {{view.ecsObject}}</a>
+                <a id="controlLink" class="dropdown-item" href="{% url 'GUI:giveup_control' 'ecs'%}">give up control of {{view.ecsObject}}</a>
               {% elif not view.userInControl %}
-                <a class="dropdown-item" href="{% url 'GUI:take_control' 'ecs'%}">take control of {{view.ecsObject}}</a>
+                <a id="controlLink" class="dropdown-item" href="{% url 'GUI:take_control' 'ecs'%}">take control of {{view.ecsObject}}</a>
               {% endif %}
               <div class="dropdown-divider"></div>
             {% endif %}
@@ -219,7 +229,7 @@
           <ol class="breadcrumb">
             <li class="breadcrumb-item active">Overview</li>
           </ol>
-
+          <div class="alert alert-danger" id="alertBox" style="visibility: hidden"></div>
           <h1>ECS Status</h1>
 
           <div>

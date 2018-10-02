@@ -3,7 +3,7 @@ import threading
 import copy
 
 import sqlite3
-from DataObjects import DataObjectCollection, DataObject, detectorDataObject, partitionDataObject
+from DataObjects import DataObjectCollection, DataObject, detectorDataObject, partitionDataObject, globalSystemDataObject, mappingDataObject
 class DataBaseWrapper:
     """Handler for the ECS Database"""
     connection = None
@@ -34,7 +34,7 @@ class DataBaseWrapper:
         try:
             res = c.execute("SELECT * FROM Detector WHERE id = ?", val).fetchone()
             if not res:
-                return ECSCodes.idUnknown
+                return codes.idUnknown
             return detectorDataObject(res)
         except Exception as e:
             self.log("error getting detector: %s %s" % (str(id),str(e)),True)
@@ -58,7 +58,7 @@ class DataBaseWrapper:
         try:
             c.execute("INSERT INTO Detector VALUES (?,?,?,?,?)", dataObject.asArray())
             self.connection.commit()
-            return ECSCodes.ok
+            return codes.ok
         except Exception as e:
             self.log("error inserting values into Detector Table: %s" % str(e),True)
             self.connection.rollback()
@@ -72,7 +72,7 @@ class DataBaseWrapper:
         try:
             c.execute("DELETE FROM Detector WHERE id = ?", val)
             self.connection.commit()
-            return ECSCodes.ok
+            return codes.ok
         except Exception as e:
             self.log("error removing values from Detector Table: %s" % str(e),True)
             return e
@@ -84,7 +84,7 @@ class DataBaseWrapper:
         try:
             res = c.execute("SELECT * FROM Partition WHERE id = ?", val).fetchone()
             if not res:
-                return ECSCodes.idUnknown
+                return codes.idUnknown
             return partitionDataObject(res)
         except Exception as e:
             self.log("error getting partition %s: %s" % (str(id),str(e)),True)
@@ -97,7 +97,7 @@ class DataBaseWrapper:
         try:
             res = c.execute("SELECT * FROM Partition WHERE Partition.id IN (SELECT PartitionId FROM (Mapping JOIN Partition ON Mapping.PartitionId = Partition.id) WHERE DetectorId = ?)", val).fetchone()
             if not res:
-                return ECSCodes.idUnknown
+                return codes.idUnknown
             return partitionDataObject(res)
         except Exception as e:
             self.log("error getting partition for Detector %s: %s" % (str(id),str(e)),True)
@@ -133,7 +133,7 @@ class DataBaseWrapper:
         try:
             c.execute("INSERT INTO Partition VALUES (?,?,?,?,?,?,?,?)", data)
             self.connection.commit()
-            return ECSCodes.ok
+            return codes.ok
         except Exception as e:
             self.log("error inserting values into Partition Table: %s" % str(e),True)
             self.connection.rollback()
@@ -148,10 +148,20 @@ class DataBaseWrapper:
             #Free the Detectors
             c.execute("DELETE FROM Mapping WHERE PartitionId = ?", val)
             self.connection.commit()
-            return ECSCodes.ok
+            return codes.ok
         except Exception as e:
             self.connection.rollback()
             self.log("error removing values from Detector Table: %s" % str(e),True)
+            return e
+
+    def getDetectorMapping(self):
+        c = self.connection.cursor()
+        try:
+            c.execute("SELECT * From Mapping")
+            res = c.fetchall()
+            return DataObjectCollection(res, mappingDataObject)
+        except Exception as e:
+            self.log("error getting all detectors for Partition %s: %s" % str(pcaId), str(e),True)
             return e
 
     def mapDetectorToPCA(self,detId,pcaId):
@@ -161,7 +171,7 @@ class DataBaseWrapper:
         try:
             c.execute("INSERT INTO Mapping VALUES (?,?)", vals)
             self.connection.commit()
-            return ECSCodes.ok
+            return codes.ok
         except Exception as e:
             self.connection.rollback()
             self.log("error mapping %s to %s: %s" % (str(detId),str(pcaId),str(e)),True)
@@ -174,7 +184,7 @@ class DataBaseWrapper:
             c.execute("DELETE FROM Mapping WHERE DetectorId = ?", (detId))
             c.execute("INSERT INTO Mapping VALUES (?,?)", vals)
             self.connection.commit()
-            return ECSCodes.ok
+            return codes.ok
         except Exception as e:
             self.connection.rollback()
             self.log("error remapping %s from %s to %s: %s" % (str(detId),str(oldPcaID),str(newPcaId),str(e)),True)
@@ -187,7 +197,7 @@ class DataBaseWrapper:
         try:
             c.execute("DELETE FROM Mapping WHERE DetectorId = ?", val)
             self.connection.commit()
-            return ECSCodes.ok
+            return codes.ok
         except Exception as e:
             self.connection.rollback()
             self.log("error unmapping %s: %s " % (str(detId),str(e)),True)
@@ -214,11 +224,39 @@ class DataBaseWrapper:
             self.log("error getting Ports for Address %s: %s " % (address,str(e)),True)
             return e
 
+    def getDCSInfo(self):
+        """Get DCS Information"""
+        c = self.connection.cursor()
+        try:
+            res = c.execute("SELECT * From GlobalSystems Where id='DCS'").fetchone()
+            if not res:
+                return codes.idUnknown
+            return globalSystemDataObject(res)
+        except Exception as e:
+            self.log("error getting DCS Info: %s" % str(e),True)
+            return e
+
+    def getGlobalSystem(self,id):
+        """get global System for Id"""
+        c = self.connection.cursor()
+        val = (id,)
+        try:
+            res = c.execute("SELECT * From GlobalSystems Where id=?",val).fetchone()
+            print(res)
+            if not res:
+                return codes.idUnknown
+            return globalSystemDataObject(res)
+        except Exception as e:
+            self.log("error getting DCS Info: %s" % str(e),True)
+            return e
+
+
 import zmq
 import logging
 import threading
 import configparser
-import ECSCodes
+from ECSCodes import ECSCodes
+codes = ECSCodes()
 import struct
 import json
 from multiprocessing import Queue
@@ -371,7 +409,7 @@ class ECS:
                 try:
                     socket = self.zmqContext.socket(zmq.REQ)
                     socket.connect("tcp://%s:%s" % (pca.address,pca.portCommand))
-                    socket.send(ECSCodes.ping)
+                    socket.send(codes.ping)
                     r = socket.recv()
                 except zmq.Again:
                     self.handleDisconnection(id)
@@ -519,7 +557,7 @@ class ECS:
                 message = json.loads(arg)
                 partition = partitionDataObject(json.loads(message["partition"]))
                 ret = db.addPartition(partition)
-                if ret == ECSCodes.ok:
+                if ret == codes.ok:
                     #start PCA if Not Running
                     pid = self.checkIfRunning(partition)
                     if not pid:
@@ -531,7 +569,7 @@ class ECS:
                     self.socketSubscription.connect("tcp://%s:%i" % (partition.address,partition.portPublish))
                     #let the reconnector thread handle the connection(in case of no connectivity the client request might take too long)
                     self.handleDisconnection(partition.id)
-                    return ECSCodes.ok
+                    return codes.ok
                 else:
                     return ret
 
@@ -544,10 +582,10 @@ class ECS:
                     else:
                         forceDelete = False
                     partition = db.getPartition(pcaId)
-                    if isinstance(partition,Exception) or partition == ECSCodes.idUnknown:
+                    if isinstance(partition,Exception) or partition == codes.idUnknown:
                         return partition
                     detectors = db.getDetectorsForPartition(pcaId)
-                    if isinstance(detectors,Exception) or detectors == ECSCodes.idUnknown:
+                    if isinstance(detectors,Exception) or detectors == codes.idUnknown:
                         return detectors
                     #check if there are Detectors still assigned to the Partition
                     if len(detectors.asDictionary()) > 0:
@@ -562,7 +600,7 @@ class ECS:
                     del self.connectedPartitions[partition.id]
                     del self.disconnectedDetectors[partition.id]
 
-                    return ECSCodes.ok
+                    return codes.ok
                 except Exception as e:
                     self.log("Error Deleting Partition: %s" % str(e))
                     return e
@@ -589,14 +627,14 @@ class ECS:
                 skipAdd = False
 
                 oldPartition = db.getPartitionForDetector(detectorId)
-                if oldPartition == ECSCodes.idUnknown:
+                if oldPartition == codes.idUnknown:
                     unused = True
                 else:
                     if oldPartition.id not in self.connectedPartitions:
                         if forceMove:
                             skipUnmap = True
                         else:
-                            return ECSCodes.connectionProblemOldPartition
+                            return codes.connectionProblemOldPartition
                 #detector will be unmapped
                 if partitionId == "unmapped":
                     newPartition = False
@@ -605,7 +643,7 @@ class ECS:
                         if forceMove:
                             skipAdd = True
                         else:
-                            return ECSCodes.connectionProblemNewPartition
+                            return codes.connectionProblemNewPartition
                     newPartition = self.partitions[partitionId]
 
                 detector = db.getDetector(detectorId)
@@ -614,13 +652,13 @@ class ECS:
                 try:
                     #change Database
                     if unused:
-                        if db.mapDetectorToPCA(detectorId,newPartition.id) != ECSCodes.ok:
+                        if db.mapDetectorToPCA(detectorId,newPartition.id) != codes.ok:
                             raise Exception("Error during changing Database")
                     elif not newPartition:
-                        if db.unmapDetectorFromPCA(detectorId) != ECSCodes.ok:
+                        if db.unmapDetectorFromPCA(detectorId) != codes.ok:
                             raise Exception("Error during changing Database")
                     else:
-                        if db.remapDetector(detectorId,newPartition.id,oldPartition.id) != ECSCodes.ok:
+                        if db.remapDetector(detectorId,newPartition.id,oldPartition.id) != codes.ok:
                             raise Exception("Error during changing Database")
                     print("db done")
                     dbChanged = True
@@ -631,9 +669,9 @@ class ECS:
                             try:
                                 requestSocket = self.zmqContext.socket(zmq.REQ)
                                 requestSocket.connect("tcp://%s:%s"  % (oldPartition.address,oldPartition.portCommand))
-                                requestSocket.send_multipart([ECSCodes.removeDetector,detectorId.encode()])
+                                requestSocket.send_multipart([codes.removeDetector,detectorId.encode()])
                                 ret = requestSocket.recv()
-                                if ret != ECSCodes.ok:
+                                if ret != codes.ok:
                                     self.log("%s returned error for removing Detector" % (oldPartition.id),True)
                                     raise Exception("%s returned error for removing Detector" % (oldPartition.id))
                             except zmq.Again:
@@ -656,9 +694,9 @@ class ECS:
                                 #add to new Partition
                                 requestSocket = self.zmqContext.socket(zmq.REQ)
                                 requestSocket.connect("tcp://%s:%s"  % (newPartition.address,newPartition.portCommand))
-                                requestSocket.send_multipart([ECSCodes.addDetector,detector.asJsonString().encode()])
+                                requestSocket.send_multipart([codes.addDetector,detector.asJsonString().encode()])
                                 ret = requestSocket.recv()
-                                if ret != ECSCodes.ok:
+                                if ret != codes.ok:
                                     self.log("%s returned error for adding Detector" % (newPartition.id),True)
                                     raise Exception("%s returned error for adding Detector" % (newPartition.id))
                             except zmq.Again:
@@ -678,12 +716,12 @@ class ECS:
                     requestSocket = self.zmqContext.socket(zmq.REQ)
                     requestSocket.connect("tcp://%s:%s"  % (detector.address,detector.portCommand))
                     if newPartition:
-                        requestSocket.send_multipart([ECSCodes.detectorChangePartition,newPartition.asJsonString().encode()])
+                        requestSocket.send_multipart([codes.detectorChangePartition,newPartition.asJsonString().encode()])
                     else:
-                        requestSocket.send_multipart([ECSCodes.detectorChangePartition,self.unmappedDetectorControllerData.asJsonString().encode()])
+                        requestSocket.send_multipart([codes.detectorChangePartition,self.unmappedDetectorControllerData.asJsonString().encode()])
                     try:
                         ret = requestSocket.recv()
-                        if ret != ECSCodes.ok:
+                        if ret != codes.ok:
                             self.log("%s returned error for changing PCA" % (detector.id),True)
                             raise Exception("%s returned error for changing PCA" % (detector.id,))
                     except zmq.Again:
@@ -695,20 +733,20 @@ class ECS:
                         raise Exception("error changing Detector %s PCA: %s " % (detector.id),str(e))
                     finally:
                         requestSocket.close()
-                    return ECSCodes.ok
+                    return codes.ok
                 except Exception as e:
                     self.log("error during remapping:%s ;starting rollback for remapping Detector" % str(e),True)
                     #rollback
                     try:
                         if dbChanged:
                             if unused:
-                                if db.unmapDetectorFromPCA(detectorId) != ECSCodes.ok:
+                                if db.unmapDetectorFromPCA(detectorId) != codes.ok:
                                     raise Exception("Error during changing Database")
                             elif not newPartition:
-                                if db.mapDetectorToPCA(detectorId,oldPartition.id) != ECSCodes.ok:
+                                if db.mapDetectorToPCA(detectorId,oldPartition.id) != codes.ok:
                                     raise Exception("Error during changing Database")
                             else:
-                                if db.remapDetector(detectorId,oldPartition.id,newPartition.id) != ECSCodes.ok:
+                                if db.remapDetector(detectorId,oldPartition.id,newPartition.id) != codes.ok:
                                     raise Exception("Error during changing Database")
 
 
@@ -716,7 +754,7 @@ class ECS:
                             if not unused:
                                 requestSocket = self.zmqContext.socket(zmq.REQ)
                                 requestSocket.connect("tcp://%s:%s"  % (oldPartition.address,oldPartition.portCommand))
-                                requestSocket.send_multipart([ECSCodes.addDetector,detector.asJsonString().encode()])
+                                requestSocket.send_multipart([codes.addDetector,detector.asJsonString().encode()])
                                 try:
                                     ret = requestSocket.recv()
                                     requestSocket.close()
@@ -728,7 +766,7 @@ class ECS:
                                     self.log("error adding Detector to %s: %s " % (oldPartition.id,str(e)),True)
                                     requestSocket.close()
                                     raise Exception("Error during adding :%s" % str(e) )
-                                if ret != ECSCodes.ok:
+                                if ret != codes.ok:
                                     self.log("%s returned error for adding Detector" % (oldPartition.id),True)
                                     requestSocket.close()
                                     raise Exception("pca returned error code during adding Detector")
@@ -741,7 +779,7 @@ class ECS:
                                 try:
                                     requestSocket = self.zmqContext.socket(zmq.REQ)
                                     requestSocket.connect("tcp://%s:%s"  % (newPartition.address,newPartition.portCommand))
-                                    requestSocket.send_multipart([ECSCodes.removeDetector,detectorId.encode()])
+                                    requestSocket.send_multipart([codes.removeDetector,detectorId.encode()])
                                     ret = requestSocket.recv()
                                 except zmq.Again:
                                     self.log("timeout removing Detector from %s" % (newPartition.id),True)
@@ -753,7 +791,7 @@ class ECS:
                                     raise Exception("error removing Detector from %s: %s " % (newPartition.id,str(e)))
                                 finally:
                                     requestSocket.close()
-                                if ret != ECSCodes.ok:
+                                if ret != codes.ok:
                                     self.log("%s returned error for removing Detector" % (newPartition.id),True)
                                     raise Exception("%s returned error for removing Detector" % (oldPartition.id))
                             else:
@@ -776,13 +814,13 @@ class ECS:
                     forceDelete = False
 
                 detector = db.getDetector(detId)
-                if isinstance(detector,Exception) or detector == ECSCodes.idUnknown:
+                if isinstance(detector,Exception) or detector == codes.idUnknown:
                     return detector
 
                 if not forceDelete:
                     #add to UnmappedDetectorController
                     if not self.unmappedDetectorController.isDetectorConnected(detector.id):
-                        return ECSCodes.connectionProblemDetector
+                        return codes.connectionProblemDetector
                     if not self.unmappedDetectorController.abortDetector(detector.id):
                         self.log("Detector %s could not be shutdown" % (detector.id))
                         return Exception("Detector %s could not be shutdown" % (detector.id))
@@ -793,20 +831,20 @@ class ECS:
                 self.unmappedDetectorController.removeDetector(detector.id)
                 #delete from Database
                 ret = db.removeDetector(detector.id)
-                if ret != ECSCodes.ok:
+                if ret != codes.ok:
                     return ret
-                return ECSCodes.ok
+                return codes.ok
 
             def createDetector(arg):
                 dbChanged = False
                 try:
                     dataObject = detectorDataObject(json.loads(arg))
                     ret = db.addDetector(dataObject)
-                    if ret == ECSCodes.ok:
+                    if ret == codes.ok:
                         dbChanged = True
                         if self.unmappedDetectorController.checkIfTypeIsKnown(dataObject):
                             ret = self.unmappedDetectorController.addDetector(dataObject)
-                            return ECSCodes.ok
+                            return codes.ok
                         else:
                             raise Exception("Detector Type is unknown")
                     return ret
@@ -818,7 +856,7 @@ class ECS:
 
             def getPartitionForDetector(arg):
                 ret = db.getPartitionForDetector(arg)
-                if ret == ECSCodes.idUnknown:
+                if ret == codes.idUnknown:
                     return self.unmappedDetectorControllerData
                 else:
                     return ret
@@ -826,25 +864,27 @@ class ECS:
             def switcher(code,arg=None):
                 #functions for codes
                 dbFunctionDictionary = {
-                    ECSCodes.pcaAsksForConfig: db.getPartition,
-                    ECSCodes.detectorAsksForPCA: getPartitionForDetector,
-                    ECSCodes.getDetectorForId: db.getDetector,
-                    ECSCodes.pcaAsksForDetectorList: db.getDetectorsForPartition,
-                    ECSCodes.getPartitionForId: db.getPartition,
-                    ECSCodes.getAllPCAs: db.getAllPartitions,
-                    ECSCodes.getUnmappedDetectors: db.getAllUnmappedDetetectos,
-                    ECSCodes.createPartition: createPCA,
-                    ECSCodes.deletePartition: deletePCA,
-                    ECSCodes.createDetector: createDetector,
-                    ECSCodes.deleteDetector: deleteDetector,
-                    ECSCodes.detectorChangePartition: remapDetector,
+                    codes.pcaAsksForConfig: db.getPartition,
+                    codes.detectorAsksForPCA: getPartitionForDetector,
+                    codes.getDetectorForId: db.getDetector,
+                    codes.pcaAsksForDetectorList: db.getDetectorsForPartition,
+                    codes.getPartitionForId: db.getPartition,
+                    codes.getAllPCAs: db.getAllPartitions,
+                    codes.getUnmappedDetectors: db.getAllUnmappedDetetectos,
+                    codes.createPartition: createPCA,
+                    codes.deletePartition: deletePCA,
+                    codes.createDetector: createDetector,
+                    codes.deleteDetector: deleteDetector,
+                    codes.detectorChangePartition: remapDetector,
+                    codes.GlobalSystemAsksForInfo: db.getGlobalSystem,
+                    codes.getDetectorMapping: db.getDetectorMapping,
                 }
                 #returns function for Code or None if the received code is unknown
                 f = dbFunctionDictionary.get(code,None)
                 try:
                     if not f:
                         self.log("received unknown command",True)
-                        self.replySocket.send(ECSCodes.unknownCommand)
+                        self.replySocket.send(codes.unknownCommand)
                         return
                     if arg:
                         ret = f(arg)
@@ -887,7 +927,7 @@ class ECS:
             else:
                 id, sequence, state = m
                 id = id.decode()
-                if state == ECSCodes.reset:
+                if state == codes.reset:
                     #delete PCA and Detectors associated with PCA From Map
                     db = DataBaseWrapper(self.log)
                     dets = db.getDetectorsForPartition(id).asDictionary()
@@ -896,10 +936,8 @@ class ECS:
                     self.stateMap.delMany(arg)
                     print("reset %s" % id)
                     continue
-                elif state == ECSCodes.removed:
+                elif state == codes.removed:
                     del self.stateMap[id]
-                    continue
-                elif state == ECSCodes.transitionStart or state == ECSCodes.transitionStop:
                     continue
                 state = json.loads(state.decode())
             sequence = ECS_tools.intFromBytes(sequence)
@@ -917,7 +955,7 @@ class ECS:
         if isinstance(detectors,Exception):
             db.close()
             raise detectors
-        if detectors == ECSCodes.idUnknown:
+        if detectors == codes.idUnknown:
             db.close()
             Raise(Exception("Partition %s is not in database") % partition.id)
         db.close()
@@ -928,7 +966,7 @@ class ECS:
             return
         try:
             requestSocket.connect("tcp://%s:%s"  % (partition.address,partition.portCommand))
-            requestSocket.send_multipart([ECSCodes.check,detectors.asJsonString().encode()])
+            requestSocket.send_multipart([codes.check,detectors.asJsonString().encode()])
             ret = requestSocket.recv()
         except zmq.Again:
             self.handleDisconnection(partition.id)
@@ -945,7 +983,7 @@ class ECS:
         if isinstance(partition,Exception):
             db.close()
             raise detectors
-        if partition == ECSCodes.idUnknown:
+        if partition == codes.idUnknown:
             partition = self.unmappedDetectorControllerData
         db.close()
         try:
@@ -956,7 +994,7 @@ class ECS:
         try:
             requestSocket = self.zmqContext.socket(zmq.REQ)
             requestSocket.connect("tcp://%s:%s"  % (detector.address,detector.portCommand ))
-            requestSocket.send_multipart([ECSCodes.check,partition.asJsonString().encode()])
+            requestSocket.send_multipart([codes.check,partition.asJsonString().encode()])
             ret = requestSocket.recv()
             if detector.id in self.disconnectedDetectors:
                 del self.disconnectedDetectors[detector.id]

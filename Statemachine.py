@@ -1,24 +1,22 @@
 import csv
-graphfile = "graph.csv"
 import threading
 
 
 class Statemachine:
-    #currentState -> [command->newstate]
-    graph = dict({})
-
-    currentState = None
-
     def __init__(self,csvGraph,initState):
+        #currentState -> [command->newstate]
+        self.graph = dict({})
+
         self.currentState = initState
         #read Graph from csv file ---- | state | transition | next State |
         with open(csvGraph, 'r') as file:
             reader = csv.reader(file, delimiter=',')
             for row in reader:
-                if row[0] in self.graph:
-                    self.graph[row[0]][row[1]] = row[2]
-                else:
-                    self.graph[row[0]] = dict({row[1]:row[2]})
+                if len(row) == 3:
+                    if row[0] in self.graph:
+                        self.graph[row[0]][row[1]] = row[2]
+                    else:
+                        self.graph[row[0]] = dict({row[1]:row[2]})
 
     def transition(self,command):
         lock = threading.Lock()
@@ -44,14 +42,3 @@ class Statemachine:
             return False
         else:
             return self.graph[self.currentState][command]
-
-
-if __name__ == "__main__":
-    test = Statemachine(graphfile,"Shutdown")
-    test.transition("poweron")
-    test.transition("poweroff")
-    test.transition("configure")
-    test.transition("poweron")
-    test.transition("configure")
-    test.transition("start")
-    test.transition("stop")

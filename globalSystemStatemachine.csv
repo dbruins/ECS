@@ -1,0 +1,7 @@
+Unconfigured,configure,Configuring
+Configuring,success,Active
+Configuring,abort,Unconfigured
+Configuring,error,Unconfigured
+Active,configure,Configuring
+Active,abort,Unconfigured
+Active,error,Unconfigured

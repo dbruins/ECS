@@ -1,0 +1,11 @@
+Unconfigured,configure,Configuring
+Configuring,success,Active
+Configuring,abort,Unconfigured
+Configuring,error,Unconfigured
+Active,configure,Configuring
+Active,abort,Unconfigured
+Active,error,Unconfigured
+Active,start,Recording
+Recording,abort,Unconfigured
+Recording,error,Unconfigured
+Recording,stop,Active

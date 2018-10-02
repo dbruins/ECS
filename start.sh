@@ -2,7 +2,7 @@
 #start dummys
 for i in `seq 1 $1`
 do
- python3 dummy.py $i 1> /dev/null&
+ python3 DetectorController.py $i 1> /dev/null&
  arr[$i]=$!
 done
 

@@ -1,7 +1,8 @@
 import threading
 import copy
 import zmq
-import ECSCodes
+from ECSCodes import ECSCodes
+codes = ECSCodes()
 import struct
 from DataObjects import stateObject
 import json
@@ -147,14 +148,13 @@ def receive_status(socket,pcaid=None):
         errorString = " receiving status"
     try:
         id, sequence, state = socket.recv_multipart()
-        print (id,sequence,state)
     except zmq.Again:
         print ("timeout"+errorString)
         return None
     except Exception as e:
         print ("error"+errorString)
         return None
-    if id != ECSCodes.done:
+    if id != codes.done:
         id = id.decode()
         state = stateObject(json.loads(state.decode()))
     else:
@@ -171,7 +171,7 @@ def getStateSnapshot(stateMap,address,port,timeout=2000,pcaid=None):
     socketGetCurrentStateTable.setsockopt(zmq.RCVTIMEO, timeout)
     socketGetCurrentStateTable.setsockopt(zmq.LINGER,0)
     socketGetCurrentStateTable.connect("tcp://%s:%s" % (address,port))
-    socketGetCurrentStateTable.send(ECSCodes.hello)
+    socketGetCurrentStateTable.send(codes.hello)
     while True:
         ret = receive_status(socketGetCurrentStateTable,pcaid)
         #receive_status returns None if something went wrong
@@ -179,14 +179,14 @@ def getStateSnapshot(stateMap,address,port,timeout=2000,pcaid=None):
             socketGetCurrentStateTable.close()
             return False
         id, sequence, state = ret
-        if id != ECSCodes.done:
+        if id != codes.done:
             #print (id,sequence,state)
             if id in stateMap:
                 if stateMap[id][0] < sequence:
                     stateMap[id] = (sequence, state)
             else:
                 stateMap[id] = (sequence, state)
-        #id should be ECSCodes.done in final message
+        #id should be codes.done in final message
         else:
             print ("done")
             socketGetCurrentStateTable.close()

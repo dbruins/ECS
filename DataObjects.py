@@ -52,6 +52,9 @@ class DataObject:
     def asJsonString(self):
         return json.dumps(self.__dict__)
 
+    def asJson(self):
+        return self.__dict__
+
     def __str__(self):
         return str(self.__dict__)
 
@@ -93,49 +96,49 @@ class partitionDataObject(DataObject):
             self.portSingleRequest = queryResult[6]
             self.portCommand = queryResult[7]
 
-class transitionObject(DataObject):
-    def __init__(self,state):
-        if isinstance(state,dict):
-            self.transitionNumber = int(state["transitionNumber"])
-            self.transitionName = state["transitionName"]
-            self.nextState = state["nextState"]
+class mappingDataObject(DataObject):
+    def __init__(self,queryResult):
+        if isinstance(queryResult,dict):
+            self.detectorId = queryResult["detectorId"]
+            self.partitionId = queryResult["partitionId"]
         else:
-            self.transitionNumber = state[0]
-            self.transitionName = state[1]
-            self.nextState = state[2]
-from json import JSONEncoder
-class stateObject(DataObject):
+            self.detectorId = queryResult[0]
+            self.partitionId = queryResult[1]
 
-    def asJsonString(self):
-        if self.transition:
-            return json.dumps(dict({
-                "state" : self.state,
-                "transition" : self.transition.asJsonString(),
-            }))
+class globalSystemDataObject(DataObject):
+    def __init__(self,queryResult):
+        if isinstance(queryResult,dict):
+            self.id = queryResult["id"]
+            self.address = queryResult["address"]
+            self.portCommand = queryResult["portCommand"]
         else:
-            return json.dumps(dict({
-                "state" : self.state,
-                "transition" : None,
-            }))
+            self.id = queryResult[0]
+            self.address = queryResult[1]
+            self.portCommand = queryResult[2]
+
+
+class stateObject(DataObject):
+    def asJsonString(self):
+        return json.dumps(self.asJson())
+
+    def asJson(self):
+        return self.__dict__
 
     def __init__(self,data):
         if isinstance(data,dict):
             #from json
             self.state = data["state"]
-            if isinstance(data["transition"],str):
-                self.transition = transitionObject(json.loads(data["transition"]))
-            else:
-                self.transition = data["transition"]
+            if len(data) > 1:
+                self.unmappedState = data["unmappedState"]
+                self.configTag = data["configTag"]
+                self.comment = data["comment"]
+        elif isinstance(data,list):
+            self.state = data[0]
+            self.unmappedState = data[1]
+            if len(data) > 2:
+                self.configTag = data[2]
+                self.comment = data[3]
         elif isinstance(data,str):
             self.state = data
-            self.transition = None
-        elif isinstance(data,list):
-            if len(data) == 2:
-                #state String + transitionObject
-                self.state = data[0]
-                self.transition = data[1]
-            else:
-                self.state = data[0]
-                self.transition = transitionObject(data[1:])
         else:
-            raise TypeError("Expected dictionary string or list")
+            raise TypeError("Expected dictionary or list")

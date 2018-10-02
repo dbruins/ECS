@@ -1,4 +1,7 @@
-Running,Running
-Ready,Ready
-Uncofigured,NotReady
-Shutdown,NotReady
+Active,Active
+Configuring_Step1,Configuring
+Configuring_Step2,Configuring
+Unconfigured,Unconfigured
+
+Configuring,Configuring
+Recording,Recording

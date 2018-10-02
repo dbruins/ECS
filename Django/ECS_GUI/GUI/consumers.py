@@ -1,4 +1,5 @@
 from channels.generic.websocket import WebsocketConsumer
+from channels.exceptions import StopConsumer
 from asgiref.sync import async_to_sync
 import json
 
@@ -26,7 +27,7 @@ class updateConsumer(WebsocketConsumer):
         self.accept()
 
     def disconnect(self, close_code):
-        pass
+        raise StopConsumer()
 
     def receive(self, text_data):
         """receive message from websocket"""
@@ -46,21 +47,6 @@ class updateConsumer(WebsocketConsumer):
         }
         if "origin" in event:
             message["origin"] = event["origin"]
-        print(message)
-        self.send(text_data=json.dumps(message))
-
-    def stateTable(self,event):
-        message = {
-            "type": "table_"+event["id"],
-            "message": event["text"]
-        }
-        self.send(text_data=json.dumps(message))
-
-    def bufferedLog(self,event):
-        message = {
-            "type": "bufferedLog_"+event['id'],
-            "message": event["text"]
-        }
         self.send(text_data=json.dumps(message))
 
     def logUpdate(self,event):
@@ -70,4 +56,10 @@ class updateConsumer(WebsocketConsumer):
         }
         if "origin" in event:
             message["origin"] = event["origin"]
+        self.send(text_data=json.dumps(message))
+
+    def permissionTimeout(self,event):
+        message = {
+            "type": "permissionTimeout",
+        }
         self.send(text_data=json.dumps(message))

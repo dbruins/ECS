@@ -142,8 +142,8 @@ ECS_LOG_PORT = 5001
 ECS_PUBLISHPORT = 5002
 ECS_GET_STATETABLE_PORT = 5003
 
-PCACODESPATH = "/home/daniel/Dokumente/Masterarbeit/Statemachine"
-PCACONFIGPATH = "/home/daniel/Dokumente/Masterarbeit/Statemachine/init.cfg"
+PCACODESPATH = "/home/daniel/Dokumente/Masterarbeit/ECS"
+PCACONFIGPATH = "/home/daniel/Dokumente/Masterarbeit/ECS/init.cfg"
 
 ASGI_APPLICATION = 'ECS_GUI.routing.application'
 CHANNEL_LAYERS = {

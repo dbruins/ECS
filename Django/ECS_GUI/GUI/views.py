@@ -24,7 +24,8 @@ import sys
 #ECS Codes and DataObjects should be in the same Path later
 projectPath = settings.PCACODESPATH
 sys.path.append(projectPath)
-import ECSCodes
+from ECSCodes import ECSCodes
+codes = ECSCodes()
 import ECS_tools
 from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject
 
@@ -47,8 +48,8 @@ class ECSHandler:
 
         #get all partitions
         while self.pcaCollection == None:
-            ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.getAllPCAs])
-            if ret == ECSCodes.timeout:
+            ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[codes.getAllPCAs])
+            if ret == codes.timeout:
                 self.log("timeout getting PCA List")
             else:
                 pJSON = ret.decode()
@@ -76,56 +77,6 @@ class ECSHandler:
         t = threading.Thread(name="logUpdaterECS", target=self.waitForUnmappedDetectorUpdate)
         t.start()
 
-        t = threading.Thread(name="webClientRequest", target=self.webClientStateTableRequest)
-        t.start()
-
-    def webClientStateTableRequest(self):
-        while True:
-            channel_layer = get_channel_layer()
-            #pca page
-            message = async_to_sync(channel_layer.receive)("ecs")
-            pcaId = message["pcaId"]
-            bufferdLog = False
-            if pcaId == "ecs":
-                #all pcas for ECS Overview
-                map = {}
-                for pca in self.pcaHandlers.items():
-                    map[pca[0]] = pca[1].stateMap.map
-                map["unmapped"] = self.unmappedStateTable.map
-                map =  json.dumps(map, default=lambda o: o.__dict__)
-                #map = json.dumps(map)
-                if len(self.logQueue) > 0:
-                    bufferdLog = "\n".join(list(self.logQueue))
-            else:
-                #single pca
-                handler = self.pcaHandlers[pcaId]
-                map =  json.dumps(handler.stateMap.map, default=lambda o: o.__dict__)
-                #send buffered log entries
-                if len(handler.logQueue) > 0:
-                    bufferdLog = "\n".join(list(handler.logQueue))
-            async_to_sync(channel_layer.group_send)(
-                #group name
-                message["user"],
-                {
-                    #method called in consumer
-                    'type': 'stateTable',
-                    'id' : pcaId,
-                    'text': map,
-                }
-            )
-            if bufferdLog:
-                async_to_sync(channel_layer.group_send)(
-                    #group name
-                    message["user"],
-                    {
-                        #method called in consumer
-                        'type': 'bufferedLog',
-                        'id' : pcaId,
-                        'text': bufferdLog,
-                    }
-                )
-
-
     def request(self,address,port,message):
         """sends a request from a REQ to REP socket; sends with send_multipart so message has to be a list; returns encoded returnmessage or timeout code when recv times out"""
         requestSocket = self.context.socket(zmq.REQ)
@@ -140,7 +91,7 @@ class ECSHandler:
             return ret
         except zmq.Again:
             requestSocket.close()
-            return ECSCodes.timeout
+            return codes.timeout
         finally:
             requestSocket.close()
 
@@ -151,11 +102,11 @@ class ECSHandler:
             return None
 
     def getPartition(self,id):
-        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.getPartitionForId, id.encode()])
-        if ret == ECSCodes.timeout:
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[codes.getPartitionForId, id.encode()])
+        if ret == codes.timeout:
             self.log("timeout getting Partition")
             return False
-        if ret == ECSCodes.timeout:
+        if ret == codes.timeout:
             self.log("partition id is unknown")
             return False
         partition = partitionDataObject(json.loads(ret.decode()))
@@ -166,8 +117,8 @@ class ECSHandler:
         arg["partitionId"] = partitionId
         if forceDelete:
             arg["forceDelete"] = True
-        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.deletePartition, json.dumps(arg).encode()])
-        if ret == ECSCodes.ok:
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[codes.deletePartition, json.dumps(arg).encode()])
+        if ret == codes.ok:
             #connect to new PCA
             handler = self.pcaHandlers[partitionId]
             #terminate Handlers
@@ -177,13 +128,13 @@ class ECSHandler:
             #delete Model for permissions
             pcaModel.objects.filter(id=partitionId).delete()
             return True
-        if ret == ECSCodes.timeout:
+        if ret == codes.timeout:
             self.log("timeout deleting partition")
             return "timeout deleting partition"
-        if ret == ECSCodes.idUnknown:
+        if ret == codes.idUnknown:
             self.log("Partition Id is unknown")
             return "Partition Id is unknown"
-        if ret == ECSCodes.error:
+        if ret == codes.error:
             self.log("ECS returned error code deleting partition")
             return "ECS returned error code deleting partition"
         else:
@@ -198,18 +149,18 @@ class ECSHandler:
     def createPartition(self,partitionObject):
         message = {}
         message["partition"] = partitionObject.asJsonString()
-        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.createPartition, json.dumps(message).encode()])
-        if ret == ECSCodes.ok:
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[codes.createPartition, json.dumps(message).encode()])
+        if ret == codes.ok:
             #connect to new PCA
             self.pcaHandlers[partitionObject.id] = PCAHandler(partitionObject,self.log)
             self.log("partition %s created" % partitionObject.id)
             #add Model for permissions
             pcaModel.objects.create(id=partitionObject.id,permissionTimestamp=timezone.now())
             return True
-        if ret == ECSCodes.timeout:
+        if ret == codes.timeout:
             self.log("timeout creating partition")
             return "timeout creating partition"
-        if ret == ECSCodes.error:
+        if ret == codes.error:
             self.log("ecs returned error code for creating Partition")
             return "ecs returned error code"
         else:
@@ -222,14 +173,14 @@ class ECSHandler:
                 return "unknown Error"
 
     def createDetector(self,detectorObject):
-        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.createDetector, detectorObject.asJsonString().encode()])
-        if ret == ECSCodes.ok:
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[codes.createDetector, detectorObject.asJsonString().encode()])
+        if ret == codes.ok:
             self.log("Detector %s created" % detectorObject.id)
             return True
-        if ret == ECSCodes.error:
+        if ret == codes.error:
             self.log("ecs returned error code for creating Detector")
             return "ecs returned error code"
-        if ret == ECSCodes.timeout:
+        if ret == codes.timeout:
             self.log("timeout creating Detector")
             return "timeout creating Detector"
         else:
@@ -245,17 +196,17 @@ class ECSHandler:
         arg["detectorId"] = detectorId
         if forceDelete:
             arg["forceDelete"] = True
-        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.deleteDetector, json.dumps(arg).encode()])
-        if ret == ECSCodes.ok:
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[codes.deleteDetector, json.dumps(arg).encode()])
+        if ret == codes.ok:
             self.log("Detector %s deleted" % detectorId)
             return True
-        if ret == ECSCodes.timeout:
+        if ret == codes.timeout:
             self.log("timeout deleting Detector")
             return "timeout deleting Detector"
-        if ret == ECSCodes.error:
+        if ret == codes.error:
             self.log("ECS returned error code deleting Detector")
             return "ECS returned error code deleting Detector"
-        if ret == ECSCodes.connectionProblemDetector:
+        if ret == codes.connectionProblemDetector:
             self.log("Detector %s could not be reached" % detectorId)
             return "Detector %s could not be reached" % detectorId
         else:
@@ -269,8 +220,8 @@ class ECSHandler:
 
     def getUnmappedDetectors(self):
         """request currently unmapped Detector List from ECS databse"""
-        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.getUnmappedDetectors])
-        if ret == ECSCodes.timeout:
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[codes.getUnmappedDetectors])
+        if ret == codes.timeout:
             self.log("timeout getting Unmapped Detectors")
             return False
         else:
@@ -283,11 +234,11 @@ class ECSHandler:
         jsonArg = {}
         for d in detectorList:
             jsonArg[d] = pcaid
-        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.mapDetectorsToPCA, json.dumps(jsonArg).encode()])
-        if ret == ECSCodes.ok:
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[codes.mapDetectorsToPCA, json.dumps(jsonArg).encode()])
+        if ret == codes.ok:
             self.log("Detectors mapped")
             return True
-        if ret == ECSCodes.timeout:
+        if ret == codes.timeout:
             self.log("timeout mapping Detectors")
         else:
             self.log("error mapping Detectors")
@@ -295,13 +246,13 @@ class ECSHandler:
 
     def getDetectorListForPartition(self,pcaid):
         """get Detector List from Database for a pcaId"""
-        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.pcaAsksForDetectorList, pcaid.encode()])
-        if ret == ECSCodes.error:
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[codes.pcaAsksForDetectorList, pcaid.encode()])
+        if ret == codes.error:
             self.log("error getting Detectors for pca %s" % pcaid)
-            return ECSCodes.error
-        if ret == ECSCodes.timeout:
+            return codes.error
+        if ret == codes.timeout:
             self.log("timeout getting Detectors for pca %s" % pcaid)
-            return ECSCodes.error
+            return codes.error
         detList = DataObjectCollection(json.loads(ret),detectorDataObject)
         return detList
 
@@ -312,19 +263,19 @@ class ECSHandler:
         arg["partitionId"] = toPCAId
         if forceMove:
             arg["forceMove"] = True
-        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[ECSCodes.detectorChangePartition, json.dumps(arg).encode()])
-        if ret == ECSCodes.ok:
+        ret = self.request(settings.ECS_ADDRESS,settings.ECS_REQUEST_PORT,[codes.detectorChangePartition, json.dumps(arg).encode()])
+        if ret == codes.ok:
             return True
-        if ret == ECSCodes.timeout:
+        if ret == codes.timeout:
             self.log("timeout moving Detector %s to pca %s" % (detectorId,toPCAId))
             return "request timeout"
-        if ret == ECSCodes.error:
+        if ret == codes.error:
             self.log("error moving Detector %s to pca %s" % (detectorId,toPCAId))
             return "ecs returned error code"
-        if ret == ECSCodes.connectionProblemOldPartition:
+        if ret == codes.connectionProblemOldPartition:
             self.log("error moving Detector %s to pca %s" % (detectorId,toPCAId))
             return "Old Partition is not connected"
-        if ret == ECSCodes.connectionProblemNewPartition:
+        if ret == codes.connectionProblemNewPartition:
             self.log("error moving Detector %s to pca %s" % (detectorId,toPCAId))
             return "New Partition is not connected"
         try:
@@ -347,18 +298,17 @@ class ECSHandler:
             id = id.decode()
             sequence = ECS_tools.intFromBytes(sequence)
 
-            if state == ECSCodes.reset:
+            if state == codes.reset:
                 self.unmappedStateTable.reset()
                 #reset code for Web Browser
                 state = "reset"
-            elif state == ECSCodes.removed:
+            elif state == codes.removed:
                 del self.unmappedStateTable[id]
                 #remove code for Web Browser
                 state = "remove"
             else:
                 state = json.loads(state.decode())
-                print("received update",id, sequence, state)
-                self.unmappedStateTable[id] = (sequence, state)
+                self.unmappedStateTable[id] = (sequence, stateObject(state))
 
             #send update to WebUI(s)
             jsonWebUpdate = {"id" : id,
@@ -460,7 +410,7 @@ class PCAHandler:
                 socket.connect(self.commandSocketAddress)
                 socket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
                 socket.setsockopt(zmq.LINGER,0)
-                socket.send(ECSCodes.ping)
+                socket.send(codes.ping)
                 r = socket.recv()
             except zmq.error.ContextTerminated:
                 break
@@ -493,7 +443,7 @@ class PCAHandler:
             return False
         finally:
             commandSocket.close()
-        if r != ECSCodes.ok:
+        if r != codes.ok:
             self.log("received error for sending command")
             return False
         return True
@@ -513,7 +463,7 @@ class PCAHandler:
         socket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
         socket.setsockopt(zmq.LINGER,0)
 
-        socket.send_multipart([ECSCodes.setActive,detectorId.encode()])
+        socket.send_multipart([codes.setActive,detectorId.encode()])
 
         socket.close()
 
@@ -533,23 +483,22 @@ class PCAHandler:
             id = id.decode()
             sequence = ECS_tools.intFromBytes(sequence)
 
-            if state == ECSCodes.reset:
+            if state == codes.reset:
                 self.stateMap.reset()
                 #reset code for Web Browser
                 state = "reset"
-            elif state == ECSCodes.removed:
+            elif state == codes.removed:
                 del self.stateMap[id]
                 #remove code for Web Browser
                 state = "remove"
             else:
                 state = json.loads(state.decode())
-                print("received update",id, sequence, state)
-                self.stateMap[id] = (sequence, state)
+                self.stateMap[id] = (sequence, stateObject(state))
 
             #send update to WebUI(s)
             jsonWebUpdate = {"id" : id,
                              "state" : state,
-                             "sequence" : sequence
+                             "sequenceNumber" : sequence
                             }
             jsonWebUpdate = json.dumps(jsonWebUpdate)
             self.sendUpdateToWebsockets("update",jsonWebUpdate)
@@ -637,6 +586,16 @@ def permission_timeout():
                     if timedelta.total_seconds() > settings.PERMISSION_TIMEOUT:
                         print(str(timedelta.total_seconds()) +" timeout user: "+str(user) )
                         remove_perm('has_control', user, pcaObject)
+                        channel_layer = get_channel_layer()
+                        #inform over websocket
+                        async_to_sync(channel_layer.group_send)(
+                            #the group name
+                            str(user),
+                            {
+                                #calls method update in the consumer which is registered to channel layer
+                                'type': "permissionTimeout",
+                            }
+                        )
 t = threading.Thread(name="permission_timeout", target=permission_timeout)
 t.start()
 
@@ -904,7 +863,7 @@ class ready(ecsMixin,pcaPermissionMixin,View):
     def post(self, request, *args, **kwargs):
         pcaId = self.kwargs['pcaId']
         pca = ecs.getPCAHandler(pcaId)
-        pca.sendCommand(ECSCodes.getReady)
+        pca.sendCommand(codes.getReady)
         return HttpResponse(status=200)
 
 class start(ecsMixin,pcaPermissionMixin,View):
@@ -912,7 +871,7 @@ class start(ecsMixin,pcaPermissionMixin,View):
     def post(self, request, *args, **kwargs):
         pcaId = self.kwargs['pcaId']
         pca = ecs.getPCAHandler(pcaId)
-        pca.sendCommand(ECSCodes.start)
+        pca.sendCommand(codes.start)
         return HttpResponse(status=200)
 
 class shutdown(ecsMixin,pcaPermissionMixin,View):
@@ -920,7 +879,7 @@ class shutdown(ecsMixin,pcaPermissionMixin,View):
     def post(self, request, *args, **kwargs):
         pcaId = self.kwargs['pcaId']
         pca = ecs.getPCAHandler(pcaId)
-        pca.sendCommand(ECSCodes.shutdown)
+        pca.sendCommand(codes.shutdown)
         return HttpResponse(status=200)
 
 class stop(ecsMixin,pcaPermissionMixin,View):
@@ -928,7 +887,7 @@ class stop(ecsMixin,pcaPermissionMixin,View):
     def post(self, request, *args, **kwargs):
         pcaId = self.kwargs['pcaId']
         pca = ecs.getPCAHandler(pcaId)
-        pca.sendCommand(ECSCodes.stop)
+        pca.sendCommand(codes.stop)
         return HttpResponse(status=200)
 
 class abort(ecsMixin,pcaPermissionMixin,View):
@@ -937,7 +896,7 @@ class abort(ecsMixin,pcaPermissionMixin,View):
         pcaId = self.kwargs['pcaId']
         #detectorId = request.POST["detectorId"]
         pca = ecs.getPCAHandler(pcaId)
-        pca.sendCommand(ECSCodes.abort)
+        pca.sendCommand(codes.abort)
         return HttpResponse(status=200)
 
 class setActive(ecsMixin,pcaPermissionMixin,View):
@@ -946,7 +905,7 @@ class setActive(ecsMixin,pcaPermissionMixin,View):
         pcaId = self.kwargs['pcaId']
         detectorId = request.POST["detectorId"]
         pca = ecs.getPCAHandler(pcaId)
-        pca.sendCommand(ECSCodes.setActive,detectorId)
+        pca.sendCommand(codes.setActive,detectorId)
         return HttpResponse(status=200)
 
 class setInactive(ecsMixin,pcaPermissionMixin,View):
@@ -955,7 +914,7 @@ class setInactive(ecsMixin,pcaPermissionMixin,View):
         pcaId = self.kwargs['pcaId']
         detectorId = request.POST["detectorId"]
         pca = ecs.getPCAHandler(pcaId)
-        pca.sendCommand(ECSCodes.setInactive,detectorId)
+        pca.sendCommand(codes.setInactive,detectorId)
         return HttpResponse(status=200)
 
 @login_required
@@ -963,7 +922,7 @@ def getDetectorListForPCA(request):
     """Ask ECS for DetectorList from Database"""
     pcaId = request.POST['pcaId']
     detList = ecs.getDetectorListForPartition(pcaId)
-    if detList == ECSCodes.error:
+    if detList == codes.error:
         return HttpResponse(status=404)
     else:
         return JsonResponse(detList.asDictionary())
@@ -972,10 +931,40 @@ def getDetectorListForPCA(request):
 def getUnmappedDetectors(request):
     """Ask ECS for DetectorList from Database"""
     detList = ecs.ecs.getUnmappedDetectors()
-    if detList == ECSCodes.error:
+    if detList == codes.error:
         return HttpResponse(status=404)
     else:
         return JsonResponse(detList.asDictionary())
+
+@login_required
+def currentTableAndLogRequest(request,pcaId):
+    """get Log Data and current Statetable on Websocket connect"""
+    bufferdLog = False
+    #convert stateObjects to Json
+    f = lambda x:(x[0],x[1].asJson())
+    if pcaId == "ecs":
+        #all pcas for ECS Overview
+        map = {}
+        for pca in ecs.pcaHandlers.items():
+            map[pca[0]] = dict((k,f(v)) for k,v in pca[1].stateMap.map.items())
+        map["unmapped"] = dict((k,f(v)) for k,v in ecs.unmappedStateTable.map.items())
+        #map =  json.dumps(map, default=lambda o: o.__dict__)
+        #map = json.dumps(map)
+        if len(ecs.logQueue) > 0:
+            bufferdLog = "\n".join(list(ecs.logQueue))
+    else:
+        #single pca
+        handler = ecs.pcaHandlers[pcaId]
+        map = dict((k,f(v)) for k,v in handler.stateMap.map.items())#json.dumps(handler.stateMap.map, default=lambda o: o.__dict__)
+        #send buffered log entries
+        if len(handler.logQueue) > 0:
+            bufferdLog = "\n".join(list(handler.logQueue))
+
+    response = {
+        "table" : map,
+        "log" : bufferdLog,
+    }
+    return JsonResponse(response)
 
 @permission_required('GUI.can_take_control')
 @login_required

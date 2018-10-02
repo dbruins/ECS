@@ -1,5 +1,6 @@
-import Detector
-import ECSCodes
+import PartitionComponents
+from ECSCodes import ECSCodes
+codes = ECSCodes()
 import ECS_tools
 import threading
 import zmq
@@ -39,7 +40,7 @@ class UnmappedDetectorController:
         #Subscribers need some time to subscribe (todo there has to be a better way)
         time.sleep(1)
         #tell subscribers to reset their state Table
-        self.publishQueue.put((self.id,ECSCodes.reset))
+        self.publishQueue.put((self.id,codes.reset))
 
         threadArray = []
         for d in detectorData:
@@ -62,7 +63,7 @@ class UnmappedDetectorController:
                 self.socketPublish.close()
                 break
             self.sequence = self.sequence + 1
-            if state == ECSCodes.removed:
+            if state == codes.removed:
                 del self.statusMap[id]
             elif id != self.id:
                 self.statusMap[id] = (self.sequence,state)
@@ -82,9 +83,9 @@ class UnmappedDetectorController:
 
                 if id not in self.detectors:
                     self.log("received message with unknown id: %s" % id,True)
-                    self.socketDetectorUpdates.send(ECSCodes.idUnknown)
+                    self.socketDetectorUpdates.send(codes.idUnknown)
                     continue
-                self.socketDetectorUpdates.send(ECSCodes.ok)
+                self.socketDetectorUpdates.send(codes.ok)
 
                 det = self.detectors[id]
                 det.stateMachine.currentState = state
@@ -102,7 +103,7 @@ class UnmappedDetectorController:
 
                 origin = messsage[0]
                 request = messsage[1]
-                if request != ECSCodes.hello:
+                if request != codes.hello:
                     self.log("wrong request in socketServeCurrentStatus \n",True)
                     continue
 
@@ -115,7 +116,7 @@ class UnmappedDetectorController:
                     ECS_tools.send_status(self.socketServeCurrentStatus,key,value[0],value[1])
                 # Final message
                 self.socketServeCurrentStatus.send(origin, zmq.SNDMORE)
-                ECS_tools.send_status(self.socketServeCurrentStatus,ECSCodes.done,self.sequence,b'')
+                ECS_tools.send_status(self.socketServeCurrentStatus,codes.done,self.sequence,b'')
             except zmq.error.ContextTerminated:
                 self.socketServeCurrentStatus.close()
                 break
@@ -131,7 +132,7 @@ class UnmappedDetectorController:
         pass
 
     def checkIfTypeIsKnown(self,detector):
-        types = Detector.DetectorTypes()
+        types = PartitionComponents.DetectorTypes()
         typeClass = types.getClassForType(detector.type)
         if not typeClass:
             return False
@@ -140,7 +141,7 @@ class UnmappedDetectorController:
     def addDetector(self,detector):
         """add Detector to Dictionary and pubish it's state"""
         #create the corresponding class for the specified type
-        types = Detector.DetectorTypes()
+        types = PartitionComponents.DetectorTypes()
         typeClass = types.getClassForType(detector.type)
         if not typeClass:
             return False
@@ -158,7 +159,7 @@ class UnmappedDetectorController:
             self.log("Detector with id %s is unknown" % id,True)
             return False
         det = self.detectors[id]
-        self.publishQueue.put((id,ECSCodes.removed))
+        self.publishQueue.put((id,codes.removed))
         del self.detectors[id]
         #this might take a few seconds dending on ping interval
         start_new_thread(det.terminate,())

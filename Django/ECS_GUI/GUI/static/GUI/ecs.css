@@ -1,15 +1,14 @@
-
-.NotReady{
+.NotReady, .Unconfigured, .Connection{
   color: #F00000;
   margin-right: 1em;
 }
 
-.Ready{
+.Ready, .Configuring{
   color: #F0F200;
   margin-right: 1em;
 }
 
-.Running{
+.Running, .Active{
   color: #5CB85C;
   margin-right: 1em;
 }
