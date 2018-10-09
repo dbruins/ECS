@@ -287,6 +287,7 @@ class PCA:
                     dbFunctionDictionary = {
                         codes.getReady: self.configure,
                         codes.start: self.startRecording,
+                        codes.stop: self.stopRecording,
                         codes.setActive: self.setDetectorActive,
                         codes.setInactive: self.setDetectorInactive,
                         codes.removeDetector: self.removeDetector,
@@ -564,17 +565,21 @@ class PCA:
         """
     def checkGlobalState(self,id):
         #globalStateChange
-        self.configureStateForGlobalSystem = {
-            PCAStates.Configuring_TFC : "TFC",
-            PCAStates.Configuring_QA : "QA",
-            PCAStates.Configuring_FLES_and_DCS : "FLES",
-            PCAStates.Configuring_FLES_and_DCS : "DCS"
+        self.globalSystemsForConfigureState = {
+            PCAStates.Configuring_TFC : ("TFC",),
+            PCAStates.Configuring_QA : ("QA",),
+            PCAStates.Configuring_FLES_and_DCS : ("FLES","DCS"),
         }
         if id == self.id:
-            if self.stateMachine.currentState in self.configureStateForGlobalSystem:
-                gs = self.globalSystems[self.configureStateForGlobalSystem[self.stateMachine.currentState]]
-                print(gs.getMappedState())
-                if gs.getMappedState() == MappedStates.Active:
+            #check if system is already configured
+            if self.stateMachine.currentState in self.globalSystemsForConfigureState:
+                ready = True
+                for gs in self.globalSystemsForConfigureState[self.stateMachine.currentState]:
+                    gs = self.globalSystems[gs]
+                    print(gs.getMappedState())
+                    if gs.getMappedState() != MappedStates.Active:
+                        ready = False
+                if ready:
                     self.transition(PCATransitions.success)
                     if self.autoConfigure:
                         self.configure()
@@ -618,19 +623,20 @@ class PCA:
                     self.transition(PCATransitions.fail)
                 elif self.stateMachine.checkIfPossible(PCATransitions.error_Detector):
                     self.transition(PCATransitions.error_Detector)
-            elif det.getMappedState() == MappedStates.Configuring and self.stateMachine.currentState != PCAStates.Configuring_Detectors:
-                det.abort()
         elif id in {"FLES","DCS"}:
             if self.stateMachine.currentState == PCAStates.Configuring_FLES_and_DCS:
                 if self.FLES.getMappedState() == MappedStates.Active and self.DCS.getMappedState() == MappedStates.Active:
                     self.transition(PCATransitions.success)
                     if self.autoConfigure:
                         self.configure()
-                elif self.FLES.getMappedState() == MappedStates.Unconfigured or self.DCS.getMappedState() == MappedStates.Unconfigured:
-                    self.transition(PCATransitions.fail)
+                elif (id == "FLES" and self.FLES.getMappedState() == MappedStates.Unconfigured) or (id == "DCS" and self.DCS.getMappedState() == MappedStates.Unconfigured):
+                        self.transition(PCATransitions.fail)
             elif self.FLES.getMappedState() == MappedStates.Unconfigured or self.FLES.getMappedState() == FLESStates.ConnectionProblem or self.DCS.getMappedState() == MappedStates.Unconfigured or self.DCS.getMappedState() == DCSStates.ConnectionProblem:
                 if self.stateMachine.checkIfPossible(PCATransitions.error_FLES_OR_DCS):
                     self.transition(PCATransitions.error_FLES_OR_DCS)
+            if id == "FLES":
+                if self.FLES.stateMachine.currentState == FLESStates.Recording and self.stateMachine.currentState != PCAStates.Recording:
+                    self.FLES.stopRecording()
         elif id == "QA":
             if self.stateMachine.currentState == PCAStates.Configuring_QA:
                 if self.QA.getMappedState() == MappedStates.Active:
@@ -642,6 +648,9 @@ class PCA:
             elif self.QA.getMappedState() == MappedStates.Unconfigured or self.QA.getMappedState() == QAStates.ConnectionProblem:
                 if self.stateMachine.checkIfPossible(PCATransitions.error_QA):
                     self.transition(PCATransitions.error_QA)
+            elif self.QA.stateMachine.currentState == QAStates.Recording and self.stateMachine.currentState != PCAStates.Recording:
+                self.QA.stopRecording()
+
 
     def transition(self,command):
         """try to transition the own Statemachine"""
@@ -662,14 +671,18 @@ class PCA:
     def startRecording(self):
         if not self.stateMachine.checkIfPossible(PCATransitions.start_recording):
             return codes.error
-        if self.stateMachine.currentState == PCAStates.QA_Configured:
-            a = self.QA.startRecording()
-            b= self.FLES.startRecording()
-            print(a,b)
-            if a and b:
-                self.transition(PCATransitions.start_recording)
-                return codes.ok
+        self.transition(PCATransitions.start_recording)
+        self.QA.startRecording()
+        self.FLES.startRecording()
+        return codes.ok
+
+    def stopRecording(self):
+        if not self.stateMachine.checkIfPossible(PCATransitions.stop_recording):
             return codes.error
+        self.transition(PCATransitions.stop_recording)
+        self.QA.stopRecording()
+        self.FLES.stopRecording()
+        return codes.ok
 
     def makeDCSandFLESReady(self):
         if not self.DCS.getReady():

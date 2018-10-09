@@ -205,15 +205,6 @@ $(document).ready(function() {
             statusCode: returnCodeCases
         });
     });
-    $("#shutdown").click(function(e) {
-        e.preventDefault();
-        $.ajax({
-            type: "POST",
-            url: "{% url 'GUI:shutdown' pcaId%}",
-            data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
-            statusCode: returnCodeCases
-        });
-    });
     $("#abort").click(function(e) {
         e.preventDefault();
         $.ajax({
@@ -342,7 +333,6 @@ $(document).ready(function() {
           <button id="ready" class="btn btn-primary">ready</button>
           <button id="start" class="btn btn-primary">start</button>
           <button id="stop" class="btn btn-primary">stop</button>
-          <button id="shutdown" class="btn btn-primary">shutdown</button>
           <button id="abort" class="btn btn-primary">abort</button>
         </div>
         {% endif %}

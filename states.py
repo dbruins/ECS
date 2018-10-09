@@ -20,6 +20,7 @@ class PCATransitions:
     error_FLES_OR_DCS = "error_FLES_OR_DCS"
     error_QA = "error_QA"
     start_recording = "start_recording"
+    stop_recording = "stop_recording"
 
 class MappedStates:
     Active = "Active"

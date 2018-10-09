@@ -20,7 +20,6 @@ urlpatterns = [
     path('start/<str:pcaId>', views.start.as_view(), name='start'),
     path('stop/<str:pcaId>', views.stop.as_view(), name='stop'),
     path('abort/<str:pcaId>', views.abort.as_view(), name='abort'),
-    path('shutdown/<str:pcaId>', views.shutdown.as_view(), name='shutdown'),
     path('setActive/<str:pcaId>',views.setActive.as_view(), name='setActive' ),
     path('setInactive/<str:pcaId>',views.setInactive.as_view(), name='setInactive' ),
     path('getDetectorListForPca/',views.getDetectorListForPCA,name='getDetectorListForPCA'),

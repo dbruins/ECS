@@ -50,6 +50,7 @@ class ECSCodes:
 
     getReady = b'\x17'
     start = b'\x18'
+    stop = b'\x19'
     abort = b'\x37'
 
     setActive = b'\x20'

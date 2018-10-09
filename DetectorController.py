@@ -202,7 +202,6 @@ class DetectorController:
             self.stateMap[id] = (sequence, state)
 
     def waitForTransition(self):
-        print("wrong function")
         pass
 
     def waitForCommands(self):

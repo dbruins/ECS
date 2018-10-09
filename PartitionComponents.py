@@ -317,7 +317,7 @@ class DCS(GlobalSystemComponent):
         self.pcaReconnectFunction(self.name)
 
     def getReady(self):
-        if not (self.stateMachine.currentState == DCSStates.Unconfigured):
+        if not (self.stateMachine.currentState == DCSStates.Unconfigured) and self.connected:
             self.logfunction("nothing to be done for %s" % self.name)
             return True
         return self.transitionRequest(DCSTransitions.configure,"testTag")
@@ -339,7 +339,7 @@ class TFC(GlobalSystemComponent):
         self.pcaReconnectFunction(self.name)
 
     def getReady(self):
-        if not (self.stateMachine.currentState == TFCStates.Unconfigured):
+        if not (self.stateMachine.currentState == TFCStates.Unconfigured) and self.connected:
             self.logfunction("nothing to be done for %s" % self.name)
             return True
         return self.transitionRequest(TFCTransitions.configure,"testTag")
@@ -364,11 +364,14 @@ class QA(GlobalSystemComponent):
         if self.stateMachine.currentState == QAStates.Active:
             return self.transitionRequest(QATransitions.start,"testTag")
         return False
+
     def stopRecording(self):
-        pass
+        if self.stateMachine.currentState == QAStates.Recording:
+            return self.transitionRequest(QATransitions.stop,"testTag")
+        return False
 
     def getReady(self):
-        if not (self.stateMachine.currentState == QAStates.Unconfigured):
+        if not (self.stateMachine.currentState == QAStates.Unconfigured) and self.connected:
             self.logfunction("nothing to be done for %s" % self.name)
             return True
         return self.transitionRequest(QATransitions.configure,"testTag")
@@ -393,11 +396,14 @@ class FLES(GlobalSystemComponent):
         if self.stateMachine.currentState == FLESStates.Active:
             return self.transitionRequest(FLESTransitions.start,"testTag")
         return False
+
     def stopRecording(self):
-        pass
+        if self.stateMachine.currentState == FLESStates.Recording:
+            return self.transitionRequest(FLESTransitions.stop,"testTag")
+        return False
 
     def getReady(self):
-        if not (self.stateMachine.currentState == FLESStates.Unconfigured):
+        if not (self.stateMachine.currentState == FLESStates.Unconfigured) and self.connected:
             self.logfunction("nothing to be done for %s" % self.name)
             return True
         return self.transitionRequest(FLESTransitions.configure,"testTag")

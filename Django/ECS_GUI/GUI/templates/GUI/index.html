@@ -27,22 +27,25 @@
     function createWebSocket(){
         var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/ecs/');
 
-        function updateState(id,newState,sequenceNumber,origin){
-          if (newState == "Running" || newState == "Ready")
-            var cssClass = newState
-          else
-            var cssClass = "NotReady"
+        function updateState(id,newState,unmappedState,sequenceNumber,tag,comment,origin){
+          cssClass = newState
           stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>'
-          stateObject = $('#dState'+id)
+          if (tag == ""){
+            tag = "No Configuration Tag"
+          }
+          var stateObject = $('#dState'+id+origin)
           //check if state already exists
           if(stateObject.length){
-            if(parseInt(stateObject.attr("sequencenumber")) < sequenceNumber)
-              stateObject.attr("sequencenumber",sequenceNumber)
-              stateObject.html(stateCircle+newState);
+              if(parseInt(stateObject.attr("sequencenumber")) < sequenceNumber)
+                stateObject.attr("sequencenumber",sequenceNumber)
+                stateObject.html(stateCircle+newState);
+                $('#detUnmappedState'+id+origin).html(unmappedState)
+                $('#detTagName'+id+origin).html(tag)
+                $('#detComment'+id+origin).html(comment)
           }
           else{
-              newRow = '<tr id="dRow'+id+'" class="tableRow'+origin+'"> <td>'+id+'</td><td id="dState'+id+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+'</td></tr>';
-              $("#stateTable"+origin).append(newRow)
+            newRow = '<tr id="dRow'+id+'" class="tableRow'+origin+'"> <td>'+id+'</td><td id="dState'+id+origin+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+'</td><td id ="detUnmappedState'+id+origin+'">'+unmappedState+'</td><td id="detTagName'+id+origin+'">'+tag+'</td><td id="detComment'+id+origin+'">'+comment+'</td></tr>';
+            $("#stateTable"+origin).append(newRow)
           }
         }
 
@@ -59,10 +62,13 @@
                   for (var pca in partitions){
                     var stateTable = partitions[pca]
                     for (var id in stateTable){
-                      var sequenceNumber = stateTable[id][0]
+                      var sequenceNumber = stateTable[id][0];
                       var stateObject = stateTable[id][1];
                       var newState = stateObject["state"];
-                      updateState(id,newState,sequenceNumber,pca)
+                      var unmappedState = stateObject["unmappedState"]
+                      var tag = (stateObject["configTag"] == undefined) ? "" : stateObject["configTag"];
+                      var comment = (stateObject["comment"] == undefined) ? "" : stateObject["comment"];
+                      updateState(id,newState,unmappedState,sequenceNumber,tag,comment,pca);
                     }
                   }
                   if (log){
@@ -109,8 +115,11 @@
               }
               else{
                 var newState = stateObject["state"];
-                var sequenceNumber = update['sequence']
-                updateState(id,newState,sequenceNumber,origin)
+                var sequenceNumber = update['sequenceNumber'];
+                var unmappedState = stateObject["unmappedState"]
+                var tag = (stateObject["configTag"] == undefined) ? "" : stateObject["configTag"];
+                var comment = (stateObject["comment"] == undefined) ? "" : stateObject["comment"];
+                updateState(id,newState,unmappedState,sequenceNumber,tag,comment,origin);
               }
             }
             else if (type == "log"){
@@ -234,17 +243,20 @@
 
           <div>
             {% for pca in view.ecsMap.items %}
-            {% if pca.0 != "unmapped"%}
-            <h2>PCA <a href="{%url 'GUI:pca' pca.0%}">{{pca.0}}</a> </h2>
-            {%else%}
-            <h2>Unused Detectors</h2>
-            {%endif%}
-            <table class="table table-bordered" id="stateTable{{pca.0}}">
-              <tr>
-                <th class="col-md-3">Detector</th>
-                <th>Status</th>
-              </tr>
-            </table>
+              {% if pca.0 != "unmapped"%}
+              <h2>PCA <a href="{%url 'GUI:pca' pca.0%}">{{pca.0}}</a> </h2>
+              {%else%}
+              <h2>Unused Detectors</h2>
+              {%endif%}
+              <table class="table table-bordered" id="stateTable{{pca.0}}">
+                <tr>
+                  <th class="col-md-3">Detector</th>
+                  <th class="col-md-3">Status as seen by PCA</th>
+                  <th class="col-md-2">Status</th>
+                  <th class="col-md-2">Config Tag</th>
+                  <th class="col-md-3">Comment</th>
+                </tr>
+              </table>
             {% endfor %}
           </div>
           <textarea class="form-control log" rows="10" readonly id="log"></textarea>

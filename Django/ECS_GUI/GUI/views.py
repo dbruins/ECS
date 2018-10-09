@@ -396,30 +396,33 @@ class PCAHandler:
         t = threading.Thread(name="heartbeat", target=self.pingHandler)
         t.start()
 
+    def createCommandSocket(self):
+        socket = self.context.socket(zmq.REQ)
+        socket.connect(self.commandSocketAddress)
+        socket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+        socket.setsockopt(zmq.LINGER,0)
+        return socket
+
     def pingHandler(self):
         """send heartbeat/ping"""
+        socket = self.createCommandSocket()
         while True:
             nextPing = time.time() + self.pingInterval
             try:
-                #for whatever reason this raises a different Exception for ContextTerminated than send or recv
-                socket = self.context.socket(zmq.REQ)
-            except zmq.error.ZMQError:
-                pingSocket.close()
-                break
-            try:
-                socket.connect(self.commandSocketAddress)
-                socket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-                socket.setsockopt(zmq.LINGER,0)
                 socket.send(codes.ping)
                 r = socket.recv()
             except zmq.error.ContextTerminated:
                 break
             except zmq.Again:
                 self.handleDisconnection()
+                #reset Socket
+                socket.close()
+                socket = self.createCommandSocket()
             except Exception as e:
                 self.log("Exception while sending Ping: %s" % str(e))
-            finally:
                 socket.close()
+                socket = self.createCommandSocket()
+            finally:
                 nextPing = time.time() + self.pingInterval
             if time.time() > nextPing:
                 nextPing = time.time() + self.pingInterval
@@ -431,10 +434,7 @@ class PCAHandler:
         command = [command]
         if arg:
             command.append(arg.encode())
-        commandSocket = self.context.socket(zmq.REQ)
-        commandSocket.connect(self.commandSocketAddress)
-        commandSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-        commandSocket.setsockopt(zmq.LINGER,0)
+        commandSocket = self.createCommandSocket()
         commandSocket.send_multipart(command)
         try:
             r = commandSocket.recv()
@@ -456,16 +456,6 @@ class PCAHandler:
         if r:
             self.log("PCA %s connected" % self.id)
             self.PCAConnection = True
-
-    def setActive(self,detectorId):
-        socket = self.context.socket(zmq.REQ)
-        socket.connect(self.commandSocketAddress)
-        socket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-        socket.setsockopt(zmq.LINGER,0)
-
-        socket.send_multipart([codes.setActive,detectorId.encode()])
-
-        socket.close()
 
     def waitForUpdates(self):
         while True:
@@ -872,14 +862,6 @@ class start(ecsMixin,pcaPermissionMixin,View):
         pcaId = self.kwargs['pcaId']
         pca = ecs.getPCAHandler(pcaId)
         pca.sendCommand(codes.start)
-        return HttpResponse(status=200)
-
-class shutdown(ecsMixin,pcaPermissionMixin,View):
-    raise_exception = True
-    def post(self, request, *args, **kwargs):
-        pcaId = self.kwargs['pcaId']
-        pca = ecs.getPCAHandler(pcaId)
-        pca.sendCommand(codes.shutdown)
         return HttpResponse(status=200)
 
 class stop(ecsMixin,pcaPermissionMixin,View):

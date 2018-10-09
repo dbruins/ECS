@@ -400,6 +400,14 @@ class QAClient(GlobalSystemClient):
                     else:
                         self.commandSocket.send(codes.error)
                     continue
+                if command == "stop":
+                    if pcaId and pcaId in self.PCAs:
+                        self.commandSocket.send(codes.ok)
+                        self.transition(pcaId,"stop",tag)
+                        self.sendUpdate(pcaId)
+                    else:
+                        self.commandSocket.send(codes.error)
+                    continue
                 self.commandSocket.send(codes.unknownCommand)
             except zmq.error.ContextTerminated:
                 self.commandSocket.close()
@@ -516,6 +524,14 @@ class FLESClient(GlobalSystemClient):
                     if pcaId and pcaId in self.PCAs:
                         self.commandSocket.send(codes.ok)
                         self.transition(pcaId,"start",tag)
+                        self.sendUpdate(pcaId)
+                    else:
+                        self.commandSocket.send(codes.error)
+                    continue
+                if command == "stop":
+                    if pcaId and pcaId in self.PCAs:
+                        self.commandSocket.send(codes.ok)
+                        self.transition(pcaId,"stop",tag)
                         self.sendUpdate(pcaId)
                     else:
                         self.commandSocket.send(codes.error)
