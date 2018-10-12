@@ -47,12 +47,6 @@ class PartitionComponent:
 
     def ping(self):
         while True:
-            if isinstance(self,Detector) and not self.active.isSet():
-                #hold pings while inactive
-                self.active.wait()
-                if self.zmqContext.closed:
-                    pingSocket.close()
-                    break
             try:
                 #for whatever reason this raises a different Exception for ContextTerminated than send or recv
                 pingSocket = self.zmqContext.socket(zmq.REQ)
@@ -94,12 +88,9 @@ class PartitionComponent:
 
 class Detector(PartitionComponent):
 
-    def __init__(self,id,address,portTransition,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction,active=True):
+    def __init__(self,id,address,portTransition,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
         self.id = id
         self.transitionAddress = ("tcp://%s:%s" % (address ,portTransition))
-        self.active = threading.Event()
-        if active:
-            self.active.set()
         self.name = "Detector %s" % id
         super().__init__(address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction)
 
@@ -113,31 +104,21 @@ class Detector(PartitionComponent):
         return self.id
 
     def getState(self):
-        if not self.active.isSet():
-            return DetectorStates.Inactive
         if not self.connected:
             return DetectorStates.ConnectionProblem
         return self.stateMachine.currentState
 
     def getMappedState(self):
-        if not self.active.isSet():
-            return DetectorStates.Inactive
         if not self.connected:
             return DetectorStates.ConnectionProblem
         return self.mapper[self.stateMachine.currentState]
 
     def getStateObject(self):
         """gets current state + transition for Publishing"""
-        if not self.connected or not self.active.isSet():
+        if not self.connected:
             return stateObject(self.getMappedState())
         else:
             return self.currentStateObject
-
-    def setActive(self):
-        self.active.set()
-
-    def setInactive(self):
-        self.active.clear()
 
     def createSendSocket(self):
         """init or reset the send Socket"""
@@ -147,13 +128,11 @@ class Detector(PartitionComponent):
         socketSender.setsockopt(zmq.LINGER,0)
         return socketSender
 
-    def transitionRequest(self,command,configTag):
+    def transitionRequest(self,command,configTag=None):
         """request a transition from a Detector"""
         self.abort_bool = False
         if not self.connected:
             self.logfunction("Can't transition because Detector %s isn't connected" % self.id)
-            return False
-        if not self.active.isSet() or not self.stateMachine.currentState:
             return False
         if not self.stateMachine.checkIfPossible(command):
             self.logfunction("Transition %s is not possible for Detector %s in current state" % (command,self.id))
@@ -206,20 +185,19 @@ class Detector(PartitionComponent):
 
     def terminate(self):
         """ stops the ping thread"""
-        self.setActive()
         self.zmqContext.term()
         self.logfunction("Detector "+str(self.id)+" was terminated",True)
 
 class DetectorA(Detector):
 
-    def getReady(self):
-        if not (self.stateMachine.currentState == DetectorStates.Unconfigured):
+    def getReady(self,configTag):
+        if self.getMappedState() not in {DetectorStates.Unconfigured, DetectorStates.ConnectionProblem}:
             self.logfunction("nothing to be done for Detector %s" % self.id)
             return True
-        return self.transitionRequest(DetectorTransitions.configure,"testTag")
+        return self.transitionRequest(DetectorTransitions.configure,configTag)
 
     def abort(self):
-        return self.transitionRequest(DetectorTransitions.abort,None)
+        return self.transitionRequest(DetectorTransitions.abort)
 
 class GlobalSystemComponent(PartitionComponent):
     def __init__(self,pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
@@ -243,7 +221,7 @@ class GlobalSystemComponent(PartitionComponent):
         else:
             return self.currentStateObject
 
-    def transitionRequest(self,command,configTag):
+    def transitionRequest(self,command,configTag=None):
         self.abort_bool = False
         if not self.connected:
             self.logfunction("Can't transition because %s isn't connected" % self.name)
@@ -316,14 +294,14 @@ class DCS(GlobalSystemComponent):
         print("DCS disconnect")
         self.pcaReconnectFunction(self.name)
 
-    def getReady(self):
+    def getReady(self,configTag):
         if not (self.stateMachine.currentState == DCSStates.Unconfigured) and self.connected:
             self.logfunction("nothing to be done for %s" % self.name)
             return True
-        return self.transitionRequest(DCSTransitions.configure,"testTag")
+        return self.transitionRequest(DCSTransitions.configure,configTag)
 
     def abort(self):
-        return self.transitionRequest(DCSTransitions.abort,None)
+        return self.transitionRequest(DCSTransitions.abort)
 
 class TFC(GlobalSystemComponent):
     def __init__(self,pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
@@ -338,14 +316,14 @@ class TFC(GlobalSystemComponent):
         print("TFC disconnect")
         self.pcaReconnectFunction(self.name)
 
-    def getReady(self):
+    def getReady(self,configTag):
         if not (self.stateMachine.currentState == TFCStates.Unconfigured) and self.connected:
             self.logfunction("nothing to be done for %s" % self.name)
             return True
-        return self.transitionRequest(TFCTransitions.configure,"testTag")
+        return self.transitionRequest(TFCTransitions.configure,configTag)
 
     def abort(self):
-        return self.transitionRequest(TFCTransitions.abort,None)
+        return self.transitionRequest(TFCTransitions.abort)
 
 class QA(GlobalSystemComponent):
     def __init__(self,pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
@@ -362,22 +340,22 @@ class QA(GlobalSystemComponent):
 
     def startRecording(self):
         if self.stateMachine.currentState == QAStates.Active:
-            return self.transitionRequest(QATransitions.start,"testTag")
+            return self.transitionRequest(QATransitions.start)
         return False
 
     def stopRecording(self):
         if self.stateMachine.currentState == QAStates.Recording:
-            return self.transitionRequest(QATransitions.stop,"testTag")
+            return self.transitionRequest(QATransitions.stop)
         return False
 
-    def getReady(self):
+    def getReady(self,configTag):
         if not (self.stateMachine.currentState == QAStates.Unconfigured) and self.connected:
             self.logfunction("nothing to be done for %s" % self.name)
             return True
-        return self.transitionRequest(QATransitions.configure,"testTag")
+        return self.transitionRequest(QATransitions.configure,configTag)
 
     def abort(self):
-        return self.transitionRequest(QATransitions.abort,None)
+        return self.transitionRequest(QATransitions.abort)
 
 class FLES(GlobalSystemComponent):
     def __init__(self,pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
@@ -394,22 +372,22 @@ class FLES(GlobalSystemComponent):
 
     def startRecording(self):
         if self.stateMachine.currentState == FLESStates.Active:
-            return self.transitionRequest(FLESTransitions.start,"testTag")
+            return self.transitionRequest(FLESTransitions.start)
         return False
 
     def stopRecording(self):
         if self.stateMachine.currentState == FLESStates.Recording:
-            return self.transitionRequest(FLESTransitions.stop,"testTag")
+            return self.transitionRequest(FLESTransitions.stop)
         return False
 
-    def getReady(self):
+    def getReady(self,configTag):
         if not (self.stateMachine.currentState == FLESStates.Unconfigured) and self.connected:
             self.logfunction("nothing to be done for %s" % self.name)
             return True
-        return self.transitionRequest(FLESTransitions.configure,"testTag")
+        return self.transitionRequest(FLESTransitions.configure,configTag)
 
     def abort(self):
-        return self.transitionRequest(FLESTransitions.abort,None)
+        return self.transitionRequest(FLESTransitions.abort)
 
 
 class DetectorB(Detector):

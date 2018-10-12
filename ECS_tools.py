@@ -188,7 +188,6 @@ def getStateSnapshot(stateMap,address,port,timeout=2000,pcaid=None):
                 stateMap[id] = (sequence, state)
         #id should be codes.done in final message
         else:
-            print ("done")
             socketGetCurrentStateTable.close()
             return True
 

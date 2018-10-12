@@ -131,7 +131,7 @@ STATICFILES_DIRS = [
 #ping intervall in seconds
 PINGINTERVAL = 2
 #timeout for messages to PCA in ms
-TIMEOUT = 7000
+TIMEOUT = 2000
 #timeout for Pings to PCA in ms
 PINGTIMEOUT = 2000
 
@@ -142,8 +142,16 @@ ECS_LOG_PORT = 5001
 ECS_PUBLISHPORT = 5002
 ECS_GET_STATETABLE_PORT = 5003
 
-PCACODESPATH = "/home/daniel/Dokumente/Masterarbeit/ECS"
-PCACONFIGPATH = "/home/daniel/Dokumente/Masterarbeit/ECS/init.cfg"
+#unmapped Detectors
+UNUSED_DETECTORS_PUBLISH_PORT = 5002
+UNUSED_DETECTORS_CURRENT_STATE_PORT = 5003
+UNUSED_DETECTORS_UPDATES_PORT = 5004
+
+PCA_CODE_PATH = "/home/daniel/Dokumente/Masterarbeit/ECS"
+PCA_CONFIG_PATH = "/home/daniel/Dokumente/Masterarbeit/ECS/init.cfg"
+PCA_CODEFILE_NAME = "PCA.py"
+CHECK_IF_RUNNING_SCRIPT = "checkIfRunning.py"
+LOG_PATH_ECS = "./logECS"
 
 ASGI_APPLICATION = 'ECS_GUI.routing.application'
 CHANNEL_LAYERS = {

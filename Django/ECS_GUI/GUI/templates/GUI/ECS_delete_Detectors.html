@@ -129,8 +129,7 @@
               </div>
             <form action="{% url 'GUI:delete_detectors' %}" method="post">
               {% csrf_token %}
-              <a>there had been errors while shutting down some Detectors. Delete anyway?</a><br/>
-              <a>there had been errors while moving some Detectors. Move anyway?</a><br/>
+              <a>there had been errors while aborting some Detectors. Delete anyway?</a><br/>
               {% for d in view.failedDetectors %}
                 <div class="form-check">
                   <input type="checkbox" class="form-check-input" name="selectedDetectors" value="{{d.0}}" id="check{{d.0}}">

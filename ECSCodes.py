@@ -16,6 +16,11 @@ class ECSCodes:
     done = b'\x30'
     addDetector = b'\x33'
     removeDetector = b'\x32'
+    addPartition = b'\x50'
+    deletePartition = b'\x51'
+    remapDetector = b'\x52'
+    lock = b'\x53'
+    unlock = b'\x54'
     check = b'\x38'
     deleteDetector = b'\x39'
     deletePartition = b'\x43'
@@ -52,9 +57,7 @@ class ECSCodes:
     start = b'\x18'
     stop = b'\x19'
     abort = b'\x37'
-
-    setActive = b'\x20'
-    setInactive = b'\x21'
+    toggleAutoConfigure = b'\x21'
 
     def stringForCode(self,code):
         if code in self.stringForStatusCode:

@@ -10,6 +10,7 @@ import configparser
 from Statemachine import Statemachine
 import json
 from DataObjects import partitionDataObject, detectorDataObject, stateObject
+from states import DetectorStates, DetectorTransitions
 import ECS_tools
 import subprocess
 import zc.lockfile
@@ -198,7 +199,7 @@ class DetectorController:
                 continue
             state = json.loads(state.decode())
             sequence = ECS_tools.intFromBytes(sequence)
-            print("received update",id, sequence, state)
+            #print("received update",id, sequence, state)
             self.stateMap[id] = (sequence, state)
 
     def waitForTransition(self):
@@ -260,6 +261,7 @@ class DetectorA(DetectorController):
         while True:
             try:
                 ret = self.socketReceiver.recv_multipart()
+                print(ret)
                 if len(ret)  == 2:
                     command,tag = ret
                     command = command.decode()
@@ -267,7 +269,7 @@ class DetectorA(DetectorController):
                 else:
                     command = ret[0].decode()
                     tag=None
-                if self.stateMachine.currentState not in {"Active","Unconfigured"} and command != "abort":
+                if self.stateMachine.currentState not in {DetectorStates.Active,DetectorStates.Unconfigured} and command != DetectorTransitions.abort:
                     self.socketReceiver.send(codes.busy)
                     print("busy")
                     continue
@@ -278,13 +280,13 @@ class DetectorA(DetectorController):
                 else:
                     self.socketReceiver.send(codes.ok)
                 self.abort = False
-                if command == "configure":
-                    self.transition("configure",tag)
+                if command == DetectorTransitions.configure:
+                    self.transition(DetectorTransitions.configure,tag)
                     self.inTransition = True
                     self.sendUpdate()
                     workThread = threading.Thread(name="worker", target=self.getReady, args=(tag,))
                     workThread.start()
-                if command == "abort":
+                if command == DetectorTransitions.abort:
                     self.abortFunction()
             except zmq.error.ContextTerminated:
                 self.socketReceiver.close()
@@ -294,16 +296,16 @@ class DetectorA(DetectorController):
         for i in range(0,2):
             ret = self.executeScript("detectorScript.sh")
             if ret:
-                self.transition("success",tag)
+                self.transition(DetectorTransitions.success,tag)
                 self.sendUpdate()
             else:
                 if self.abort:
                     self.abort = False
-                    self.transition("abort")
+                    self.transition(DetectorTransitions.abort)
                     self.inTransition = False
                     self.sendUpdate("transition aborted")
                     break
-                self.transition("error")
+                self.transition(DetectorTransitions.error)
                 self.sendUpdate("transition failed")
                 self.inTransition = False
                 break
@@ -325,7 +327,7 @@ class DetectorA(DetectorController):
             if self.scriptProcess:
                 self.scriptProcess.terminate()
         else:
-            self.transition("abort")
+            self.transition(DetectorTransitions.abort)
             self.sendUpdate()
 
 

@@ -24,33 +24,27 @@ function createWebSocket(){
     function updateState(id,newState,unmappedState,sequenceNumber,tag,comment){
       cssClass = newState
       stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>'
-      var buttonHtml = "";
       if (tag == ""){
         tag = "No Configuration Tag"
       }
       {% if "has_control" in pcaPerms %}
       if (id == "{{view.pcaId}}"){
-        buttonHtml = "";
         unmappedState = "";
         tag = ""
       }
-      else if (newState == "Inactive")
-        buttonHtml = '<button id="activeToggle" class="btn btn-primary activeButton" onclick="setactive('+ id +')" > activate  </button>';
-      else
-        buttonHtml = '<button id="activeToggle" class="btn btn-primary activeButton" onclick="setinactive('+ id +')" > deactivate  </button>';
       {% endif %}
       var stateObject = $('#dState'+id)
       //check if state already exists
       if(stateObject.length){
           if(parseInt(stateObject.attr("sequencenumber")) < sequenceNumber)
             stateObject.attr("sequencenumber",sequenceNumber)
-            stateObject.html(stateCircle+newState+buttonHtml);
+            stateObject.html(stateCircle+newState);
             $('#detUnmappedState'+id).html(unmappedState)
             $('#detTagName'+id).html(tag)
             $('#detComment'+id).html(comment)
       }
       else{
-          newRow = '<tr id="dRow'+id+'" class="tableRow"> <td>'+id+'</td><td id="dState'+id+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+buttonHtml+'</td><td id ="detUnmappedState'+id+'">'+unmappedState+'</td><td id="detTagName'+id+'">'+tag+'</td><td id="detComment'+id+'">'+comment+'</td></tr>'
+          newRow = '<tr id="dRow'+id+'" class="tableRow"> <td>'+id+'</td><td id="dState'+id+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+'</td><td id ="detUnmappedState'+id+'">'+unmappedState+'</td><td id="detTagName'+id+'">'+tag+'</td><td id="detComment'+id+'">'+comment+'</td></tr>'
           $("#stateTable").append(newRow)
       }
     }
@@ -100,7 +94,6 @@ function createWebSocket(){
         var type = data['type'];
         if (type == "state"){
           var update = JSON.parse(message);
-          console.log(update)
           var id = update['id'];
           var stateObject = update['state'];
           if(stateObject == "reset"){
@@ -141,29 +134,10 @@ returnCodeCases = {
     $('#alertBox').css('visibility', 'hidden');
   },
   403: function(){
-    console.log("fail");
     $('#alertBox').css('visibility', 'visible');
     $('#alertBox').html("<strong>Warning!</strong> Your permission timed out")
   },
 };
-
-function setactive(id){
-  $.ajax({
-      type: "POST",
-      url: "{% url 'GUI:setActive' pcaId%}",
-      data:{csrfmiddlewaretoken: '{{ csrf_token }}', "detectorId" : id},
-      statusCode: returnCodeCases
-  });
-}
-
-function setinactive(id){
-  $.ajax({
-      type: "POST",
-      url: "{% url 'GUI:setInactive' pcaId%}",
-      data:{csrfmiddlewaretoken: '{{ csrf_token }}', "detectorId" : id},
-      statusCode: returnCodeCases
-  });
-}
 
 function abort(id){
   $.ajax({
@@ -177,15 +151,21 @@ function abort(id){
 $(document).ready(function() {
     $("#ready").click(function(e) {
         e.preventDefault();
-        $.ajax({
-            type: "POST",
-            url: "{% url 'GUI:ready' pcaId%}",
-            data:{csrfmiddlewaretoken: '{{ csrf_token }}'},
-            /*"success": function(result) {
-                console.log(result);
-            },*/
-            statusCode: returnCodeCases
-        });
+        form = $("#configure_form")[0]
+        if (form.checkValidity()){
+          $.ajax({
+              type: "POST",
+              url: "{% url 'GUI:ready' pcaId%}",
+              data:{csrfmiddlewaretoken: '{{ csrf_token }}', autoConfigure: $("#autoConfigureCheckBox").prop("checked"), configTag: $("#configureTag_input").val()},
+              /*"success": function(result) {
+                  console.log(result);
+              },*/
+              statusCode: returnCodeCases
+          });
+        }
+        else{
+          form.classList.add('was-validated');
+        }
     });
     $("#start").click(function(e) {
         e.preventDefault();
@@ -320,17 +300,34 @@ $(document).ready(function() {
         <div>
           <table class="table table-bordered" id="stateTable">
             <tr>
-              <th class="col-md-3">Detector</th>
-              <th class="col-md-3">Status as seen by PCA</th>
-              <th class="col-md-3">Status</th>
+              <th class="col-md-2">Detector</th>
+              <th class="col-md-2">Status as seen by PCA</th>
+              <th class="col-md-2">Status</th>
               <th class="col-md-3">Config Tag</th>
               <th class="col-md-3">Comment</th>
             </tr>
           </table>
         </div>
         {% if "has_control" in pcaPerms %}
+          <div class="form-row">
+            <form id="configure_form">
+              <div class="form-group col-md3">
+                <input  id="configureTag_input" class="form-control" type="text" placeholder="configure Tag" required>
+                <div class="invalid-feedback">
+                  Please enter a Configuration Tag
+                </div>
+              </div>
+            </form>
+            <div class="form-group col-md6">
+              <button id="ready" class="btn btn-primary">configure</button>
+              <div class="form-check">
+                <input type="checkbox" class="form-check-input" id="autoConfigureCheckBox">
+                <label class="form-check-label" for="autoConfigureCheckBox">auto configure</label>
+              </div>
+            </div>
+          </div>
+
         <div>
-          <button id="ready" class="btn btn-primary">ready</button>
           <button id="start" class="btn btn-primary">start</button>
           <button id="stop" class="btn btn-primary">stop</button>
           <button id="abort" class="btn btn-primary">abort</button>

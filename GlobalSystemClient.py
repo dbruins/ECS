@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 from DataObjects import DataObjectCollection, globalSystemDataObject, mappingDataObject, partitionDataObject
+from states import DCSStates,DCSTransitions, FLESStates, FLESTransitions, QAStates, QATransitions, TFCStates, TFCTransitions
 import subprocess
 import zc.lockfile
 import time
@@ -70,13 +71,14 @@ class GlobalSystemClient:
         configDet = configparser.ConfigParser()
         configDet.read("detector.cfg")
         configDet = configDet[type]
+        self.StateMachineFile = configDet["stateFile"]
         self.StateMachineForPca = {}
         self.PCAs = {}
         self.isPCAinTransition = {}
         self.pcaConfigTag = {}
         for p in partitions:
             self.PCAs[p.id] = p
-            self.StateMachineForPca[p.id] = Statemachine(configDet["stateFile"],"Unconfigured")
+            self.StateMachineForPca[p.id] = Statemachine(self.StateMachineFile,"Unconfigured")
             self.isPCAinTransition[p.id] = False
 
         self.commandSocket = self.context.socket(zmq.REP)
@@ -86,6 +88,7 @@ class GlobalSystemClient:
         self.sendUpdateToAll()
 
         _thread.start_new_thread(self.waitForCommands,())
+
     def sendUpdate(self,pcaId,comment=None):
         partition = self.PCAs[pcaId]
         data = {
@@ -113,6 +116,53 @@ class GlobalSystemClient:
             print("error sending status: %s" % str(e))
         finally:
             socketSendUpdateToPCA.close()
+
+    def addPartition(self,partitionData):
+        self.PCAs[partitionData.id] = partitionData
+        self.StateMachineForPca[partitionData.id] = Statemachine(self.StateMachineFile,"Unconfigured")
+        self.isPCAinTransition[partitionData.id] = False
+
+    def deletePartition(self,pcaId):
+        del self.PCAs[pcaId]
+        del self.StateMachineForPca[pcaId]
+        del self.isPCAinTransition[pcaId]
+        if pcaId in self.pcaConfigTag:
+            del self.pcaConfigTag[pcaId]
+
+    def handleCommonCommands(self,message):
+        """handles command common for all Global Systems; returns False if command is unknown"""
+        command = message[0]
+        if command == codes.ping:
+            self.commandSocket.send(codes.ok)
+            return True
+        elif command == codes.pcaAsksForDetectorStatus:
+            pcaId = message[1].decode()
+            if pcaId and pcaId in self.PCAs:
+                if pcaId in self.pcaConfigTag:
+                    self.commandSocket.send_multipart([self.StateMachineForPca[pcaId].currentState.encode(),self.pcaConfigTag[pcaId].encode()])
+                else:
+                    self.commandSocket.send_multipart([self.StateMachineForPca[pcaId].currentState.encode()])
+            return True
+        elif command == codes.addPartition:
+            data = partitionDataObject(json.loads(message[1].decode()))
+            self.addPartition(data)
+            self.commandSocket.send(codes.ok)
+            return True
+        elif command == codes.deletePartition:
+            pcaId = message[1].decode()
+            self.deletePartition(pcaId)
+            self.commandSocket.send(codes.ok)
+            return True
+        elif command == codes.remapDetector:
+            detectorId = message[1].decode()
+            if message[2] == codes.removed:
+                del self.detectorMapping[detectorId]
+            else:
+                pcaId = message[2].decode()
+                self.detectorMapping[detectorId] = pcaId
+            self.commandSocket.send(codes.ok)
+            return True
+        return False
 
     def sendUpdateToAll(self,comment=None):
         for pca in self.PCAs:
@@ -154,43 +204,33 @@ class DCSClient(GlobalSystemClient):
     def waitForCommands(self):
         while True:
             try:
-                command = self.commandSocket.recv_multipart()
+                message = self.commandSocket.recv_multipart()
+                if self.handleCommonCommands(message):
+                    continue
                 pcaId = None
                 tag = None
-                if len(command) > 1:
-                    pcaId = command[1].decode()
-                if len(command) > 2:
-                    tag = command[2].decode()
-                command = command[0]
-                if command == codes.ping:
-                    self.commandSocket.send(codes.ok)
-                    continue
-                if command == codes.pcaAsksForDetectorStatus:
-                    if pcaId and pcaId in self.PCAs:
-                        if pcaId in self.pcaConfigTag:
-                            self.commandSocket.send_multipart([self.StateMachineForPca[pcaId].currentState.encode(),self.pcaConfigTag[pcaId].encode()])
-                        else:
-                            self.commandSocket.send_multipart([self.StateMachineForPca[pcaId].currentState.encode()])
-                    continue
-                command=command.decode()
-                print(command)
-                if command == "configure":
-                    if self.StateMachineForPca[pcaId].currentState not in {"Active","Unconfigured"}:
+                if len(message) > 1:
+                    pcaId = message[1].decode()
+                if len(message) > 2:
+                    tag = message[2].decode()
+                command = message[0].decode()
+                if command == DCSTransitions.configure:
+                    if self.StateMachineForPca[pcaId].currentState not in {DCSStates.Active,DCSStates.Unconfigured}:
                         self.commandSocket.send(codes.busy)
                         continue
-                    elif not self.StateMachineForPca[pcaId].checkIfPossible("configure") or not tag or not pcaId:
+                    elif not self.StateMachineForPca[pcaId].checkIfPossible(DCSTransitions.configure) or not tag or not pcaId:
                         self.commandSocket.send(codes.error)
                         print("error")
                         continue
                     else:
                         self.commandSocket.send(codes.ok)
-                        self.transition(pcaId,"configure",tag)
+                        self.transition(pcaId,DCSTransitions.configure,tag)
                         self.isPCAinTransition[pcaId] = True
                         self.sendUpdate(pcaId)
                         workThread = threading.Thread(name="worker", target=self.configure, args=(pcaId,tag))
                         workThread.start()
                         continue
-                if command == "abort":
+                if command == DCSTransitions.abort:
                     if pcaId and pcaId in self.PCAs:
                         self.abortFunction(pcaId)
                         self.commandSocket.send(codes.ok)
@@ -204,19 +244,18 @@ class DCSClient(GlobalSystemClient):
 
     def configure(self,pcaId,tag):
         ret = self.executeScript("detectorScript.sh")
-        print(ret)
         if ret:
             if self.abort:
                 self.abort = False
-                self.transition(pcaId,"abort")
+                self.transition(pcaId,DCSTransitions.abort)
                 self.isPCAinTransition[pcaId] = False
                 self.sendUpdate(pcaId,"transition aborted")
                 return
-            self.transition(pcaId,"success",tag)
+            self.transition(pcaId,DCSTransitions.success,tag)
             self.isPCAinTransition[pcaId] = False
             self.sendUpdate(pcaId)
         else:
-            self.transition(pcaId,"error")
+            self.transition(pcaId,DCSTransitions.error)
             self.sendUpdate(pcaId,"transition failed")
             self.isPCAinTransition[pcaId] = False
 
@@ -226,7 +265,7 @@ class DCSClient(GlobalSystemClient):
             self.abort = True
             self.scriptProcess.terminate()
         else:
-            self.transition(pcaId,"abort")
+            self.transition(pcaId,DCSTransitions.abort)
             self.sendUpdate(pcaId)
 
     def waitForDCSMessages(self,message):
@@ -245,7 +284,6 @@ class DCSClient(GlobalSystemClient):
         try:
             socketSendUpdateToPCA = self.context.socket(zmq.REQ)
             socketSendUpdateToPCA.connect("tcp://%s:%s" % (partition.address,partition.portUpdates))
-            print(data)
             socketSendUpdateToPCA.send(data)
             r = socketSendUpdateToPCA.recv()
             if r == codes.idUnknown:
@@ -267,43 +305,33 @@ class TFCClient(GlobalSystemClient):
     def waitForCommands(self):
         while True:
             try:
-                command = self.commandSocket.recv_multipart()
+                message = self.commandSocket.recv_multipart()
+                if self.handleCommonCommands(message):
+                    continue
                 pcaId = None
                 tag = None
-                if len(command) > 1:
-                    pcaId = command[1].decode()
-                if len(command) > 2:
-                    tag = command[2].decode()
-                command = command[0]
-                if command == codes.ping:
-                    self.commandSocket.send(codes.ok)
-                    continue
-                if command == codes.pcaAsksForDetectorStatus:
-                    if pcaId and pcaId in self.PCAs:
-                        if pcaId in self.pcaConfigTag:
-                            self.commandSocket.send_multipart([self.StateMachineForPca[pcaId].currentState.encode(),self.pcaConfigTag[pcaId].encode()])
-                        else:
-                            self.commandSocket.send_multipart([self.StateMachineForPca[pcaId].currentState.encode()])
-                    continue
-                command=command.decode()
-                print(command)
-                if command == "configure":
-                    if self.StateMachineForPca[pcaId].currentState not in {"Active","Unconfigured"}:
+                if len(message) > 1:
+                    pcaId = message[1].decode()
+                if len(message) > 2:
+                    tag = message[2].decode()
+                command = message[0].decode()
+                if command == TFCTransitions.configure:
+                    if self.StateMachineForPca[pcaId].currentState not in {TFCStates.Active,TFCStates.Unconfigured}:
                         self.commandSocket.send(codes.busy)
                         continue
-                    elif not self.StateMachineForPca[pcaId].checkIfPossible("configure") or not tag or not pcaId:
+                    elif not self.StateMachineForPca[pcaId].checkIfPossible(TFCTransitions.configure) or not tag or not pcaId:
                         self.commandSocket.send(codes.error)
                         print("error")
                         continue
                     else:
                         self.commandSocket.send(codes.ok)
-                        self.transition(pcaId,"configure",tag)
+                        self.transition(pcaId,TFCTransitions.configure,tag)
                         self.isPCAinTransition[pcaId] = True
                         self.sendUpdate(pcaId)
                         workThread = threading.Thread(name="worker", target=self.configure, args=(pcaId,tag))
                         workThread.start()
                         continue
-                if command == "abort":
+                if command == TFCTransitions.abort:
                     if pcaId and pcaId in self.PCAs:
                         self.abortFunction(pcaId)
                         self.commandSocket.send(codes.ok)
@@ -320,15 +348,15 @@ class TFCClient(GlobalSystemClient):
         if ret:
             if self.abort:
                 self.abort = False
-                self.transition(pcaId,"abort")
+                self.transition(pcaId,TFCTransitions.abort)
                 self.isPCAinTransition[pcaId] = False
                 self.sendUpdate(pcaId,"transition aborted")
                 return
-            self.transition(pcaId,"success",tag)
+            self.transition(pcaId,TFCTransitions.success,tag)
             self.isPCAinTransition[pcaId] = False
             self.sendUpdate(pcaId)
         else:
-            self.transition(pcaId,"error")
+            self.transition(pcaId,TFCTransitions.error)
             self.sendUpdate(pcaId,"transition failed")
             self.isPCAinTransition[pcaId] = False
 
@@ -349,61 +377,51 @@ class QAClient(GlobalSystemClient):
     def waitForCommands(self):
         while True:
             try:
-                command = self.commandSocket.recv_multipart()
+                message = self.commandSocket.recv_multipart()
+                if self.handleCommonCommands(message):
+                    continue
                 pcaId = None
                 tag = None
-                if len(command) > 1:
-                    pcaId = command[1].decode()
-                if len(command) > 2:
-                    tag = command[2].decode()
-                command = command[0]
-                if command == codes.ping:
-                    self.commandSocket.send(codes.ok)
-                    continue
-                if command == codes.pcaAsksForDetectorStatus:
-                    if pcaId and pcaId in self.PCAs:
-                        if pcaId in self.pcaConfigTag:
-                            self.commandSocket.send_multipart([self.StateMachineForPca[pcaId].currentState.encode(),self.pcaConfigTag[pcaId].encode()])
-                        else:
-                            self.commandSocket.send_multipart([self.StateMachineForPca[pcaId].currentState.encode()])
-                    continue
-                command=command.decode()
-                print(command)
-                if command == "configure":
-                    if self.StateMachineForPca[pcaId].currentState not in {"Active","Unconfigured"}:
+                if len(message) > 1:
+                    pcaId = message[1].decode()
+                if len(message) > 2:
+                    tag = message[2].decode()
+                command = message[0].decode()
+                if command == QATransitions.configure:
+                    if self.StateMachineForPca[pcaId].currentState not in {QAStates.Active,QAStates.Unconfigured}:
                         self.commandSocket.send(codes.busy)
                         continue
-                    elif not self.StateMachineForPca[pcaId].checkIfPossible("configure") or not tag or not pcaId:
+                    elif not self.StateMachineForPca[pcaId].checkIfPossible(QATransitions.configure) or not tag or not pcaId:
                         self.commandSocket.send(codes.error)
                         print("error")
                         continue
                     else:
                         self.commandSocket.send(codes.ok)
-                        self.transition(pcaId,"configure",tag)
+                        self.transition(pcaId,QATransitions.configure,tag)
                         self.isPCAinTransition[pcaId] = True
                         self.sendUpdate(pcaId)
                         workThread = threading.Thread(name="worker", target=self.configure, args=(pcaId,tag))
                         workThread.start()
                         continue
-                if command == "abort":
+                if command == QATransitions.abort:
                     if pcaId and pcaId in self.PCAs:
                         self.abortFunction(pcaId)
                         self.commandSocket.send(codes.ok)
                     else:
                         self.commandSocket.send(codes.error)
                     continue
-                if command == "start":
+                if command == QATransitions.start:
                     if pcaId and pcaId in self.PCAs:
                         self.commandSocket.send(codes.ok)
-                        self.transition(pcaId,"start",tag)
+                        self.transition(pcaId,QATransitions.start,self.pcaConfigTag[pcaId])
                         self.sendUpdate(pcaId)
                     else:
                         self.commandSocket.send(codes.error)
                     continue
-                if command == "stop":
+                if command == QATransitions.stop:
                     if pcaId and pcaId in self.PCAs:
                         self.commandSocket.send(codes.ok)
-                        self.transition(pcaId,"stop",tag)
+                        self.transition(pcaId,QATransitions.stop,self.pcaConfigTag[pcaId])
                         self.sendUpdate(pcaId)
                     else:
                         self.commandSocket.send(codes.error)
@@ -418,15 +436,15 @@ class QAClient(GlobalSystemClient):
         if ret:
             if self.abort:
                 self.abort = False
-                self.transition(pcaId,"abort")
+                self.transition(pcaId,QATransitions.abort)
                 self.isPCAinTransition[pcaId] = False
                 self.sendUpdate(pcaId,"transition aborted")
                 return
-            self.transition(pcaId,"success",tag)
+            self.transition(pcaId,QATransitions.success,tag)
             self.isPCAinTransition[pcaId] = False
             self.sendUpdate(pcaId)
         else:
-            self.transition(pcaId,"error")
+            self.transition(pcaId,QATransitions.error)
             self.sendUpdate(pcaId,"transition failed")
             self.isPCAinTransition[pcaId] = False
 
@@ -436,7 +454,7 @@ class QAClient(GlobalSystemClient):
             self.abort = True
             self.scriptProcess.terminate()
         else:
-            self.transition(pcaId,"abort")
+            self.transition(pcaId,QATransitions.abort)
             self.sendUpdate(pcaId)
 
     def waitForQAMessages(self,message):
@@ -455,7 +473,6 @@ class QAClient(GlobalSystemClient):
         try:
             socketSendUpdateToPCA = self.context.socket(zmq.REQ)
             socketSendUpdateToPCA.connect("tcp://%s:%s" % (partition.address,partition.portUpdates))
-            print(data)
             socketSendUpdateToPCA.send(data)
             r = socketSendUpdateToPCA.recv()
             if r == codes.idUnknown:
@@ -477,61 +494,51 @@ class FLESClient(GlobalSystemClient):
     def waitForCommands(self):
         while True:
             try:
-                command = self.commandSocket.recv_multipart()
+                message = self.commandSocket.recv_multipart()
+                if self.handleCommonCommands(message):
+                    continue
                 pcaId = None
                 tag = None
-                if len(command) > 1:
-                    pcaId = command[1].decode()
-                if len(command) > 2:
-                    tag = command[2].decode()
-                command = command[0]
-                if command == codes.ping:
-                    self.commandSocket.send(codes.ok)
-                    continue
-                if command == codes.pcaAsksForDetectorStatus:
-                    if pcaId and pcaId in self.PCAs:
-                        if pcaId in self.pcaConfigTag:
-                            self.commandSocket.send_multipart([self.StateMachineForPca[pcaId].currentState.encode(),self.pcaConfigTag[pcaId].encode()])
-                        else:
-                            self.commandSocket.send_multipart([self.StateMachineForPca[pcaId].currentState.encode()])
-                    continue
-                command=command.decode()
-                print(command)
-                if command == "configure":
-                    if self.StateMachineForPca[pcaId].currentState not in {"Active","Unconfigured"}:
+                if len(message) > 1:
+                    pcaId = message[1].decode()
+                if len(message) > 2:
+                    tag = message[2].decode()
+                command = message[0].decode()
+                if command == FLESTransitions.configure:
+                    if self.StateMachineForPca[pcaId].currentState not in {FLESStates.Active,FLESStates.Unconfigured}:
                         self.commandSocket.send(codes.busy)
                         continue
-                    elif not self.StateMachineForPca[pcaId].checkIfPossible("configure") or not tag or not pcaId:
+                    elif not self.StateMachineForPca[pcaId].checkIfPossible(FLESTransitions.configure) or not tag or not pcaId:
                         self.commandSocket.send(codes.error)
                         print("error")
                         continue
                     else:
                         self.commandSocket.send(codes.ok)
-                        self.transition(pcaId,"configure",tag)
+                        self.transition(pcaId,FLESTransitions.configure,tag)
                         self.isPCAinTransition[pcaId] = True
                         self.sendUpdate(pcaId)
                         workThread = threading.Thread(name="worker", target=self.configure, args=(pcaId,tag))
                         workThread.start()
                         continue
-                if command == "abort":
+                if command == FLESTransitions.abort:
                     if pcaId and pcaId in self.PCAs:
                         self.abortFunction(pcaId)
                         self.commandSocket.send(codes.ok)
                     else:
                         self.commandSocket.send(codes.error)
                     continue
-                if command == "start":
+                if command == FLESTransitions.start:
                     if pcaId and pcaId in self.PCAs:
                         self.commandSocket.send(codes.ok)
-                        self.transition(pcaId,"start",tag)
+                        self.transition(pcaId,FLESTransitions.start,self.pcaConfigTag[pcaId])
                         self.sendUpdate(pcaId)
                     else:
                         self.commandSocket.send(codes.error)
                     continue
-                if command == "stop":
+                if command == FLESTransitions.stop:
                     if pcaId and pcaId in self.PCAs:
                         self.commandSocket.send(codes.ok)
-                        self.transition(pcaId,"stop",tag)
+                        self.transition(pcaId,FLESTransitions.stop,self.pcaConfigTag[pcaId])
                         self.sendUpdate(pcaId)
                     else:
                         self.commandSocket.send(codes.error)
@@ -546,15 +553,15 @@ class FLESClient(GlobalSystemClient):
         if ret:
             if self.abort:
                 self.abort = False
-                self.transition(pcaId,"abort")
+                self.transition(pcaId,FLESTransitions.abort)
                 self.isPCAinTransition[pcaId] = False
                 self.sendUpdate(pcaId,"transition aborted")
                 return
-            self.transition(pcaId,"success",tag)
+            self.transition(pcaId,FLESTransitions.success,tag)
             self.isPCAinTransition[pcaId] = False
             self.sendUpdate(pcaId)
         else:
-            self.transition(pcaId,"error")
+            self.transition(pcaId,FLESTransitions.error)
             self.sendUpdate(pcaId,"transition failed")
             self.isPCAinTransition[pcaId] = False
 
@@ -564,7 +571,7 @@ class FLESClient(GlobalSystemClient):
             self.abort = True
             self.scriptProcess.terminate()
         else:
-            self.transition(pcaId,"abort")
+            self.transition(pcaId,FLESTransitions.abort)
             self.sendUpdate(pcaId)
 
 
