@@ -49,7 +49,6 @@ class GlobalSystemClient:
                 requestSocket.send_multipart([codes.GlobalSystemAsksForInfo,type.encode()])
                 globalSystemInfo = requestSocket.recv()
                 globalSystemInfo = globalSystemDataObject(json.loads(globalSystemInfo.decode()))
-                print(globalSystemInfo)
 
                 requestSocket.send_multipart([codes.getDetectorMapping])
                 mapping = requestSocket.recv()
@@ -154,11 +153,15 @@ class GlobalSystemClient:
             self.commandSocket.send(codes.ok)
             return True
         elif command == codes.remapDetector:
-            detectorId = message[1].decode()
-            if message[2] == codes.removed:
+            detectorId = message[2].decode()
+            if message[1] == codes.removed:
+                self.abortFunction(self.detectorMapping[detectorId])
                 del self.detectorMapping[detectorId]
             else:
-                pcaId = message[2].decode()
+                pcaId = message[1].decode()
+                self.abortFunction(pcaId)
+                if detectorId in self.detectorMapping:
+                    self.abortFunction(self.detectorMapping[detectorId])
                 self.detectorMapping[detectorId] = pcaId
             self.commandSocket.send(codes.ok)
             return True
@@ -181,7 +184,7 @@ class GlobalSystemClient:
                 del self.pcaConfigTag[pcaId]
 
     def executeScript(self,scriptname):
-        self.scriptProcess = subprocess.Popen(["exec sh "+scriptname], shell=True)
+        self.scriptProcess = subprocess.Popen(["exec ./"+scriptname], shell=True)
         ret = self.scriptProcess.wait()
         if self.abort:
             return
@@ -366,7 +369,7 @@ class TFCClient(GlobalSystemClient):
             self.abort = True
             self.scriptProcess.terminate()
         else:
-            self.transition(pcaId,"abort")
+            self.transition(pcaId,TFCTransitions.abort)
             self.sendUpdate(pcaId)
 
 class QAClient(GlobalSystemClient):
@@ -579,44 +582,32 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("please enter a SystemType (TFC,DCS,QA,FLES,all)")
         sys.exit(1)
-    if "TFC" in sys.argv:
-        test = TFCClient()
-        x = input()
-    elif "DCS" in sys.argv:
-        test = DCSClient()
-        while True:
-            try:
-                x = input()
-                message = x.split()
-                test.waitForDCSMessages(message)
-            except KeyboardInterrupt:
-                test.terminate()
-                break
-            except EOFError:
-                time.sleep(500000)
-                continue
-    elif "QA" in sys.argv:
-        test = QAClient()
-        while True:
-            try:
-                x = input()
-                message = x.split()
-                test.waitForQAMessages(message)
-            except KeyboardInterrupt:
-                test.terminate()
-                break
-            except EOFError:
-                time.sleep(500000)
-                continue
-    elif "FLES" in sys.argv:
-        test = FLESClient()
-        x = input()
     elif "all" in sys.argv:
         TFCClient()
         DCSClient()
         QAClient()
         FLESClient()
         x = input()
-    else:
-        print("type unknown")
-        sys.exit(1)
+        sys.exit(0)
+    dcs = None
+    if "TFC" in sys.argv:
+        test = TFCClient()
+    if "DCS" in sys.argv:
+        dcs = DCSClient()
+    if "QA" in sys.argv:
+        test = QAClient()
+    if "FLES" in sys.argv:
+        test = FLESClient()
+    if dcs:
+        while True:
+            try:
+                x = input()
+                message = x.split()
+                dcs.waitForDCSMessages(message)
+            except KeyboardInterrupt:
+                dcs.terminate()
+                break
+            except EOFError:
+                time.sleep(500000)
+                continue
+    x = input()

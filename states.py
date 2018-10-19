@@ -1,18 +1,26 @@
 class PCAStates:
     Idle = "Idle"
     Configuring_TFC = "Configuring_TFC"
-    TFC_Configured = "TFC_Configured"
+    TFC_Active = "TFC_Active"
     Configuring_Detectors = "Configuring_Detectors"
-    Detectors_Configured = "Detectors_Configured"
+    Detectors_Active = "Detectors_Active"
     Configuring_FLES_and_DCS = "Configuring_FLES_and_DCS"
-    FLES_and_DCS_Configured = "FLES_and_DCS_Configured"
+    FLES_and_DCS_Active = "FLES_and_DCS_Active"
     Configuring_QA = "Configuring_QA"
-    QA_Configured = "QA_Configured"
+    QA_Active = "QA_Active"
     Recording = "Recording"
+
+    configuringStates = {Configuring_TFC,Configuring_Detectors,Configuring_FLES_and_DCS,Configuring_QA}
+
+    def isConfiguringState(self,state):
+        return state in self.configuringStates
+
+    def isActiveState(self,state):
+        return state in self.configuringStates.union([self.Recording])
 
 class PCATransitions:
     success = "success"
-    fail = "fail"
+    failure = "failure"
     abort = "abort"
     configure = "configure"
     error_TFC = "error_TFC"

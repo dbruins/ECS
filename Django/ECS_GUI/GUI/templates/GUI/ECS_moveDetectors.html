@@ -1,314 +1,157 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "GUI/base.html" %}
 
-  <head>
+{% block title %}
+ECS Move Detectors
+{% endblock %}
 
-    <meta charset="utf-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <meta name="description" content="">
-    <meta name="author" content="">
-    <meta http-equiv=”Pragma” content=”no-cache”>
-    <meta http-equiv=”Expires” content=”-1″>
-    <meta http-equiv=”CACHE-CONTROL” content=”NO-CACHE”>
+{% block script %}
+{%if not view.failedDetectors%}
+<script>
+  unmappedDetectorsHTML = ""
+  {% for d in view.unmappedDetectors %}
+  //unmappedDetectorsHTML += "<a>Detector "+{{d.id}}+" </a><input type='checkbox' name='selectedDetectors' value='"+{{d.id}}+"'><br/>";
+    unmappedDetectorsHTML += '<div class="form-check"><input class="form-check-input" type="checkbox" name="selectedDetectors" value="{{d.id}}" id="check{{d.id}}">'
+    unmappedDetectorsHTML += '<label class="form-check-label" for="check{{d.id}}">Detector {{d.id}}</label></div>'
+  {% endfor %}
 
-    <title>ECS Move Detector</title>
-
-    {% load static %}
-    <!-- Bootstrap core CSS-->
-    <link rel="stylesheet" type="text/css" href="{% static 'GUI/vendor/bootstrap/css/bootstrap.min.css' %}">
-    <!-- Page level plugin CSS-->
-    <link rel="stylesheet" type="text/css" href="{% static 'GUI/vendor/fontawesome-free/css/all.min.css' %}">
-    <!-- Custom styles for this template-->
-    <link href="{% static 'GUI/sb-admin.css' %}" rel="stylesheet">
-    <link href="{% static 'GUI/ecs.css' %}" rel="stylesheet">
-
-  {%if not view.failedDetectors%}
-  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
-  <script>
-    unmappedDetectorsHTML = ""
-    {% for d in view.unmappedDetectors %}
-    //unmappedDetectorsHTML += "<a>Detector "+{{d.id}}+" </a><input type='checkbox' name='selectedDetectors' value='"+{{d.id}}+"'><br/>";
-      unmappedDetectorsHTML += '<div class="form-check"><input class="form-check-input" type="checkbox" name="selectedDetectors" value="{{d.id}}" id="check{{d.id}}">'
-      unmappedDetectorsHTML += '<label class="form-check-label" for="check{{d.id}}">Detector {{d.id}}</label></div>'
-    {% endfor %}
-
-    function changeDetectorList(pcaId){
-      //set the DetectorList for the currently selected Partition
-      $("#detectors").empty()
-      if (pcaId == "unmapped"){
-        detDiv = document.getElementById("detectors");
-        detDiv.innerHTML = unmappedDetectorsHTML
-        return
-      }
-      $.ajax({
-          type: "POST",
-          url: "{% url 'GUI:getDetectorListForPCA'%}",
-          data:{csrfmiddlewaretoken: '{{ csrf_token }}','pcaId' : pcaId},
-          "success": function(result) {
-              idArr = Object.keys(result);
-              detDiv = document.getElementById("detectors");
-              for (i in idArr){
-                 str = '<div class="form-check"><input class="form-check-input" type="checkbox" name="selectedDetectors" value="'+idArr[i]+'" id="check'+idArr[i]+'">'
-                 str += '<label class="form-check-label" for="check'+idArr[i]+'">Detector '+idArr[i]+'</label></div>'
-                 //str = "<a>Detector "+idArr[i]+" </a><input type='checkbox' name='selectedDetectors' value='"+idArr[i]+"'><br/>";
-                 detDiv.innerHTML += str;
-              }
-          },
-      });
+  function changeDetectorList(pcaId){
+    //set the DetectorList for the currently selected Partition
+    $("#detectors").empty()
+    if (pcaId == "unmapped"){
+      detDiv = document.getElementById("detectors");
+      detDiv.innerHTML = unmappedDetectorsHTML
+      return
     }
-    var oldFrom = ""
-    var oldTo = ""
-
-    function check(dropdown){
-      $("#message").html("")
-      //Switch selected Values in Dropdowns if they are identical
-      {% with view.partitions|length as l %}
-          {% if l > 1 %}
-          id = dropdown.id
-          if (id == "toPartition"){
-            otherId="fromPartition"
-            old = oldTo
-            oldTo = $("#"+id).val()
-            changeDetectors = true
-          }
-          else{
-            otherId="toPartition"
-            old = oldFrom
-            oldFrom = $("#"+id).val()
-            changeDetectors = false
-          }
-          if (dropdown.value == $("#"+otherId).val()){
-              //switch places
-              console.log(dropdown.value)
-              console.log(old)
-              $("#"+otherId).val(old)
-              if (otherId == "toPartition"){
-                  oldTo = old
-              }
-              else {
-                  oldFrom = old
-              }
-              if(changeDetectors)
-                  changeDetectorList($("#"+otherId).val())
-          }
-          {%else%}
-            $("#message").html("there is only one Partition");
-          {% endif %}
-      {% endwith %}
-      return true
-    }
-    $(document).ready(function() {
-      //set to-Dropdown to second entry
-      $("#toPartition").val($("#toPartition option")[1].value)
-      oldFrom = $("#fromPartition").val()
-      oldTo = $("#toPartition").val()
-      check(document.getElementById("toPartition"))
-      changeDetectorList($("#fromPartition").val())
+    $.ajax({
+        type: "POST",
+        url: "{% url 'GUI:getDetectorListForPCA'%}",
+        data:{csrfmiddlewaretoken: '{{ csrf_token }}','pcaId' : pcaId},
+        "success": function(result) {
+            idArr = Object.keys(result);
+            detDiv = document.getElementById("detectors");
+            for (i in idArr){
+               str = '<div class="form-check"><input class="form-check-input" type="checkbox" name="selectedDetectors" value="'+idArr[i]+'" id="check'+idArr[i]+'">'
+               str += '<label class="form-check-label" for="check'+idArr[i]+'">Detector '+idArr[i]+'</label></div>'
+               //str = "<a>Detector "+idArr[i]+" </a><input type='checkbox' name='selectedDetectors' value='"+idArr[i]+"'><br/>";
+               detDiv.innerHTML += str;
+            }
+        },
     });
-  </script>
-  {%endif%}
-  {%block control%}
-  {% load guardian_tags %}
-  {% get_obj_perms request.user for view.permission_object as "ecsPerms" %}
-  <body id="page-top">
-    <nav class="navbar navbar-expand navbar-dark bg-dark static-top">
+  }
+  var oldFrom = ""
+  var oldTo = ""
 
-      <a class="navbar-brand mr-1" href="{% url 'GUI:index'%}">Start ECS</a>
+  function check(dropdown){
+    $("#message").html("")
+    //Switch selected Values in Dropdowns if they are identical
+    {% with view.partitions|length as l %}
+        {% if l > 1 %}
+        id = dropdown.id
+        if (id == "toPartition"){
+          otherId="fromPartition"
+          old = oldTo
+          oldTo = $("#"+id).val()
+          changeDetectors = true
+        }
+        else{
+          otherId="toPartition"
+          old = oldFrom
+          oldFrom = $("#"+id).val()
+          changeDetectors = false
+        }
+        if (dropdown.value == $("#"+otherId).val()){
+            //switch places
+            console.log(dropdown.value)
+            console.log(old)
+            $("#"+otherId).val(old)
+            if (otherId == "toPartition"){
+                oldTo = old
+            }
+            else {
+                oldFrom = old
+            }
+            if(changeDetectors)
+                changeDetectorList($("#"+otherId).val())
+        }
+        {%else%}
+          $("#message").html("there is only one Partition");
+        {% endif %}
+    {% endwith %}
+    return true
+  }
+  $(document).ready(function() {
+    //set to-Dropdown to second entry
+    $("#toPartition").val($("#toPartition option")[1].value)
+    oldFrom = $("#fromPartition").val()
+    oldTo = $("#toPartition").val()
+    check(document.getElementById("toPartition"))
+    changeDetectorList($("#fromPartition").val())
+  });
+</script>
+{%endif%}
+{% endblock script%}
 
-      <button class="btn btn-link btn-sm text-white order-1 order-sm-0" id="sidebarToggle" href="#">
-        <i class="fas fa-bars"></i>
-      </button>
+{% block sideAndTopBar %}
+  {{block.super}}
+{% endblock %}
 
-      <ul class="navbar-nav ml-auto mr-0 mr-md-3 my-2 my-md-0">
-        <li class="nav-item dropdown no-arrow">
-          <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-            <i class="fas fa-user-circle fa-fw"></i>
-          </a>
-          <div class="dropdown-menu dropdown-menu-right" aria-labelledby="userDropdown">
-            <h5 class="dropdown-header">Logged in as {{user}}</h5>
-            {% if perms.GUI.can_take_control %}
-              {% if view.userInControl and view.userInControl != "You" %}
-                <h5 class="dropdown-header">Control already Taken by User : {{view.userInControl}}</h5>
-              {% endif %}
-              {% if "has_control" in ecsPerms %}
-                <h5 class="dropdown-header">You are currently controlling the ECS</h5>
-                <a class="dropdown-item" href="{% url 'GUI:giveup_control' 'ecs'%}">give up control of {{view.permission_object}}</a>
-              {% elif not view.userInControl %}
-                <a class="dropdown-item" href="{% url 'GUI:take_control' 'ecs'%}">take control of {{view.permission_object}}</a>
-              {% endif %}
-              <div class="dropdown-divider"></div>
-            {% endif %}
-            <a class="dropdown-item" href="#" data-toggle="modal" data-target="#logoutModal">Logout</a>
-          </div>
-        </li>
-      </ul>
+{% block breadcrumb %}
+  <li class="breadcrumb-item">
+    <a href="{% url 'GUI:index' %}">Overview</a>
+  </li>
+  <li class="breadcrumb-item active">Move Detectors</li>
+{% endblock %}
 
-    </nav>
-
-    <div id="wrapper">
-
-      <!-- Sidebar -->
-      <ul class="sidebar navbar-nav">
-        <li class="nav-item active">
-          <a class="nav-link" href="{% url 'GUI:index' %}">
-            <i class="fas fa-fw fa-tachometer-alt"></i>
-            <span>Overview</span>
-          </a>
-        </li>
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" id="pcaDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-            <i class="fas fa-fw fa-desktop"></i>
-            <span>PCAs</span>
-          </a>
-          <div class="dropdown-menu" aria-labelledby="pcaDropdown">
-            {% for p in view.partitions %}
-              <h6 class="dropdown-header">PCA <a href="{%url 'GUI:pca' p.1.id%}">{{p.1.id}}</a> </h6>
-              {% if not forloop.last %}
-                <div class="dropdown-divider"></div>
-              {%endif%}
-            {%endfor%}
-          </div>
-        </li>
-        {% if "has_control" in ecsPerms %}
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" id="detectorActDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-            <i class="fas fa-fw fa-desktop"></i>
-            <span>Detector Activities</span>
-          </a>
-          <div class="dropdown-menu" aria-labelledby="detectorActDropdown">
-            <a class="dropdown-item" href="{% url 'GUI:create_detector' %}">Create Detector</a>
-            <a class="dropdown-item" href="{% url 'GUI:delete_detectors' %}">Delete Detector</a>
-            <a class="dropdown-item" href="{% url 'GUI:move_detectors' %}">Move Detector</a>
-          </div>
-        </li>
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" id="partitionActDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-            <i class="fas fa-fw fa-desktop"></i>
-            <span>Partition Activities</span>
-          </a>
-          <div class="dropdown-menu" aria-labelledby="partitionActDropdown">
-            <a class="dropdown-item" href="{% url 'GUI:create_pca' %}">Create Partition</a>
-            <a class="dropdown-item" href="{% url 'GUI:delete_pca' %}">Delete Partition</a>
-          </div>
-        </li>
-        {%endif%}
-      </ul>
-
-      <div id="content-wrapper">
-
-        <div class="container-fluid">
-
-          <!-- Breadcrumbs-->
-          <ol class="breadcrumb">
-            <li class="breadcrumb-item">
-              <a href="{% url 'GUI:index' %}">Overview</a>
-            </li>
-            <li class="breadcrumb-item active">Move Detector</li>
-          </ol>
-          {%if view.failedDetectors%}
-            <div class="alert alert-danger" id="alertBox">
-              <strong>error messages</strong><br/>
-              {% for d in view.failedDetectors.items %}
-                <a>{{d.0}}: {{d.1}}</a><br/>
-              {% endfor %}
-            </div>
-            <form action="{% url 'GUI:move_detectors' %}" method="post">
-              {% csrf_token %}
-              <a>there had been errors while moving some Detectors. Move anyway?</a><br/>
-              {% for d in view.failedDetectors %}
-              <div class="form-check">
-                <input type="checkbox" class="form-check-input" name="selectedDetectors" value="{{d.0}}" id="check{{d.0}}">
-                <label class="form-check-label" for="check{{d.0}}">
-                  Detector {{d.0}}
-                </label>
-              </div>
-              {% endfor %}
-              <input type="hidden" name="toPartition" value="{{view.toPcaId}}">
-              <input type="hidden" name="forceMove" value="True">
-              <input class="btn btn-primary" type="submit" value="move anyway">
-              <a class="btn btn-primary" href="{% url 'GUI:move_detectors' %}">Cancel</a>
-            </form>
-          {%else%}
-            <form action="{% url 'GUI:move_detectors' %}" method="post">
-              {% csrf_token %}
-              <div class="form-group">
-                <label for="fromPartition">From Partition</label>
-                <select class="form-control col-sm-2" id="fromPartition" name="fromPartition" onchange="check(this);changeDetectorList(this.value)">
-                  <option value="unmapped">unused Detectors</option>
-                  {% for p in view.partitions %}
-                    <option value="{{p.1.id}}">{{p.1.id}}</option>
-                  {% endfor %}
-                </select>
-              </div>
-              <div class="form-group" id ="detectors">
-              </div>
-              <br/>
-              <div class="form-group">
-                <label for="toPartition">To Partition</label>
-                <select class="form-control col-sm-2" id="toPartition" name="toPartition" onchange="check(this)">
-                  <option value="unmapped">unused Detectors</option>
-                  {% for p in view.partitions %}
-                    <option value="{{p.1.id}}">{{p.1.id}}</option>
-                  {% endfor %}
-                </select>
-              </div>
-              <br/>
-              <input class="btn btn-primary" type="submit" value="move">
-            </form>
-          {%endif%}
-      </div>
+{% block content %}
+  {%if view.failedDetectors%}
+    <div class="alert alert-danger" id="alertBox">
+      <strong>error messages</strong><br/>
+      {% for d in view.failedDetectors.items %}
+        <a>{{d.0}}: {{d.1}}</a><br/>
+      {% endfor %}
     </div>
-  </div>
-  <!-- Logout Modal-->
-  {% if user.is_authenticated %}
-    <div class="modal fade" id="logoutModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true">
-      <div class="modal-dialog" role="document">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h5 class="modal-title" id="exampleModalLabel">{{ user.get_username }}, ready to Leave?</h5>
-            <button class="close" type="button" data-dismiss="modal" aria-label="Close">
-              <span aria-hidden="true">×</span>
-            </button>
-          </div>
-          <div class="modal-body">Select "Logout" below if you are ready to end your current session.</div>
-          <div class="modal-footer">
-            <button class="btn btn-secondary" type="button" data-dismiss="modal">Cancel</button>
-            <a class="btn btn-primary" href="{% url 'GUI:logout'%}?next={{request.path}}">Logout</a>
-          </div>
-        </div>
+    <form action="{% url 'GUI:move_detectors' %}" method="post">
+      {% csrf_token %}
+      <a>there had been errors while moving some Detectors. Move anyway?</a><br/>
+      {% for d in view.failedDetectors %}
+      <div class="form-check">
+        <input type="checkbox" class="form-check-input" name="selectedDetectors" value="{{d.0}}" id="check{{d.0}}">
+        <label class="form-check-label" for="check{{d.0}}">
+          Detector {{d.0}}
+        </label>
       </div>
-    </div>
+      {% endfor %}
+      <input type="hidden" name="toPartition" value="{{view.toPcaId}}">
+      <input type="hidden" name="forceMove" value="True">
+      <input class="btn btn-primary" type="submit" value="move anyway">
+      <a class="btn btn-primary" href="{% url 'GUI:move_detectors' %}">Cancel</a>
+    </form>
   {% else %}
-    <div class="modal fade" id="logoutModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true">
-      <div class="modal-dialog" role="document">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h5 class="modal-title" id="exampleModalLabel">Login?</h5>
-            <button class="close" type="button" data-dismiss="modal" aria-label="Close">
-              <span aria-hidden="true">×</span>
-            </button>
-          </div>
-          <div class="modal-body">Select "Login" below if you are ready to login.</div>
-          <div class="modal-footer">
-            <button class="btn btn-secondary" type="button" data-dismiss="modal">Cancel</button>
-            <a class="btn btn-primary" href="{% url 'GUI:login'%}?next={{request.path}}">Login</a>
-          </div>
-        </div>
+    <form action="{% url 'GUI:move_detectors' %}" method="post">
+      {% csrf_token %}
+      <div class="form-group">
+        <label for="fromPartition">From Partition</label>
+        <select class="form-control col-sm-2" id="fromPartition" name="fromPartition" onchange="check(this);changeDetectorList(this.value)">
+          <option value="unmapped">unused Detectors</option>
+          {% for p in view.partitions %}
+            <option value="{{p.1.id}}">{{p.1.id}}</option>
+          {% endfor %}
+        </select>
       </div>
-    </div>
+      <div class="form-group" id ="detectors">
+      </div>
+      <br/>
+      <div class="form-group">
+        <label for="toPartition">To Partition</label>
+        <select class="form-control col-sm-2" id="toPartition" name="toPartition" onchange="check(this)">
+          <option value="unmapped">unused Detectors</option>
+          {% for p in view.partitions %}
+            <option value="{{p.1.id}}">{{p.1.id}}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <br/>
+      <input class="btn btn-primary" type="submit" value="move">
+    </form>
   {% endif %}
-  {%endblock%}
-
-
-  <!-- Bootstrap core JavaScript-->
-  <script src="{% static 'GUI/vendor/jquery/jquery.min.js' %}"></script>
-  <script src="{% static 'GUI/vendor/bootstrap/js/bootstrap.bundle.min.js' %}"></script>
-
-  <!-- Core plugin JavaScript-->
-  <script src="{% static 'GUI/vendor/jquery-easing/jquery.easing.min.js' %}"></script>
-
-  <!-- Custom scripts for all pages-->
-  <script src="{% static 'GUI/scripts/sb-admin.js' %}"></script>
-</body>
-</html>
+{% endblock content %}

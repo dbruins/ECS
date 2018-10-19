@@ -162,9 +162,11 @@ class DetectorController:
             socketSendUpdateToPCA.send(json.dumps(data).encode())
             r = socketSendUpdateToPCA.recv()
             if r == codes.idUnknown:
+                print("wrong PCA")
                 socketSendUpdateToPCA.close()
                 data = self.getPCAData()
                 self.changePCA(data)
+                self.sendUpdate(comment)
         except zmq.Again:
             print("timeout sending status")
         except zmq.error.ContextTerminated:
@@ -313,7 +315,7 @@ class DetectorA(DetectorController):
 
 
     def executeScript(self,scriptname):
-        self.scriptProcess = subprocess.Popen(["exec sh "+scriptname], shell=True)
+        self.scriptProcess = subprocess.Popen(["exec ./"+scriptname], shell=True)
         ret = self.scriptProcess.wait()
         if ret:
             return False

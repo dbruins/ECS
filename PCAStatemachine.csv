@@ -1,51 +1,52 @@
 Idle,configure,Configuring_TFC
 
-Configuring_TFC,success,TFC_Configured
-Configuring_TFC,fail,Idle
+Configuring_TFC,success,TFC_Active
+Configuring_TFC,failure,Idle
 Configuring_TFC,abort,Idle
 
-TFC_Configured,abort,Idle
-TFC_Configured,configure,Configuring_Detectors
-TFC_Configured,error_TFC,Idle
+TFC_Active,abort,Idle
+TFC_Active,configure,Configuring_Detectors
+TFC_Active,error_TFC,Idle
 
 Configuring_Detectors,abort,Idle
 Configuring_Detectors,error_TFC,Idle
-Configuring_Detectors,success,Detectors_Configured
-Configuring_Detectors,fail,TFC_Configured
+Configuring_Detectors,success,Detectors_Active
+Configuring_Detectors,failure,TFC_Active
 
-Detectors_Configured,abort,Idle
-Detectors_Configured,error_TFC,Idle
-Detectors_Configured,error_Detector,TFC_Configured
-Detectors_Configured,configure,Configuring_FLES_and_DCS
+Detectors_Active,abort,Idle
+Detectors_Active,error_TFC,Idle
+Detectors_Active,error_Detector,TFC_Active
+Detectors_Active,configure,Configuring_FLES_and_DCS
 
 Configuring_FLES_and_DCS,abort,Idle
 Configuring_FLES_and_DCS,error_TFC,Idle
-Configuring_FLES_and_DCS,error_Detector,TFC_Configured
-Configuring_FLES_and_DCS,success,FLES_and_DCS_Configured
-Configuring_FLES_and_DCS,fail,Detectors_Configured
+Configuring_FLES_and_DCS,error_Detector,TFC_Active
+Configuring_FLES_and_DCS,success,FLES_and_DCS_Active
+Configuring_FLES_and_DCS,failure,Detectors_Active
 
-FLES_and_DCS_Configured,abort,Idle
-FLES_and_DCS_Configured,error_TFC,Idle
-FLES_and_DCS_Configured,error_Detector,TFC_Configured
-FLES_and_DCS_Configured,error_FLES_OR_DCS,Detectors_Configured
-FLES_and_DCS_Configured,configure,Configuring_QA
+FLES_and_DCS_Active,abort,Idle
+FLES_and_DCS_Active,error_TFC,Idle
+FLES_and_DCS_Active,error_Detector,TFC_Active
+FLES_and_DCS_Active,error_FLES_OR_DCS,Detectors_Active
+FLES_and_DCS_Active,configure,Configuring_QA
 
 Configuring_QA,abort,Idle
 Configuring_QA,error_TFC,Idle
-Configuring_QA,error_Detector,TFC_Configured
-Configuring_QA,error_FLES_OR_DCS,Detectors_Configured
-Configuring_QA,success,QA_Configured
-Configuring_QA,fail,FLES_and_DCS_Configured
+Configuring_QA,error_Detector,TFC_Active
+Configuring_QA,error_FLES_OR_DCS,Detectors_Active
+Configuring_QA,success,QA_Active
+Configuring_QA,failure,FLES_and_DCS_Active
 
-QA_Configured,abort,Idle
-QA_Configured,error_TFC,Idle
-QA_Configured,error_Detector,TFC_Configured
-QA_Configured,error_FLES_OR_DCS,Detectors_Configured
-QA_Configured,error_QA,FLES_and_DCS_Configured
-QA_Configured,start_recording,Recording
+QA_Active,abort,Idle
+QA_Active,error_TFC,Idle
+QA_Active,error_Detector,TFC_Active
+QA_Active,error_FLES_OR_DCS,Detectors_Active
+QA_Active,error_QA,FLES_and_DCS_Active
+QA_Active,start_recording,Recording
 
 Recording,abort,Idle
 Recording,error_TFC,Idle
-Recording,error_FLES_OR_DCS,Detectors_Configured
-Recording,error_QA,FLES_and_DCS_Configured
-Recording,stop_recording,QA_Configured
+Recording,error_Detector,TFC_Active
+Recording,error_FLES_OR_DCS,Detectors_Active
+Recording,error_QA,FLES_and_DCS_Active
+Recording,stop_recording,QA_Active

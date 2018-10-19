@@ -1,338 +1,203 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "GUI/base.html" %}
 
-  <head>
+{% block title %}
+ECS Dashboard
+{% endblock %}
 
-    <meta charset="utf-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <meta name="description" content="">
-    <meta name="author" content="">
-    <meta http-equiv=”Pragma” content=”no-cache”>
-    <meta http-equiv=”Expires” content=”-1″>
-    <meta http-equiv=”CACHE-CONTROL” content=”NO-CACHE”>
+{% block script %}
+<script>
+  function createWebSocket(){
+      var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/ecs/');
 
-    <title>ECS Dashboard</title>
-
-    {% load static %}
-    <!-- Bootstrap core CSS-->
-    <link rel="stylesheet" type="text/css" href="{% static 'GUI/vendor/bootstrap/css/bootstrap.min.css' %}">
-    <!-- Page level plugin CSS-->
-    <link rel="stylesheet" type="text/css" href="{% static 'GUI/vendor/fontawesome-free/css/all.min.css' %}">
-    <!-- Custom styles for this template-->
-    <link href="{% static 'GUI/sb-admin.css' %}" rel="stylesheet">
-    <link href="{% static 'GUI/ecs.css' %}" rel="stylesheet">
-
-    <script>
-    function createWebSocket(){
-        var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/ecs/');
-
-        function updateState(id,newState,unmappedState,sequenceNumber,tag,comment,origin){
-          cssClass = newState
-          stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>'
-          if (tag == ""){
-            tag = "No Configuration Tag"
-          }
-          var stateObject = $('#dState'+id+origin)
-          //check if state already exists
-          if(stateObject.length){
-              if(parseInt(stateObject.attr("sequencenumber")) < sequenceNumber)
-                stateObject.attr("sequencenumber",sequenceNumber)
-                stateObject.html(stateCircle+newState);
-                $('#detUnmappedState'+id+origin).html(unmappedState)
-                $('#detTagName'+id+origin).html(tag)
-                $('#detComment'+id+origin).html(comment)
-          }
-          else{
-            newRow = '<tr id="dRow'+id+'" class="tableRow'+origin+'"> <td>'+id+'</td><td id="dState'+id+origin+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+'</td><td id ="detUnmappedState'+id+origin+'">'+unmappedState+'</td><td id="detTagName'+id+origin+'">'+tag+'</td><td id="detComment'+id+origin+'">'+comment+'</td></tr>';
-            $("#stateTable"+origin).append(newRow)
-          }
+      function updateState(id,newState,unmappedState,sequenceNumber,tag,comment,origin,isGlobalSystem){
+        cssClass = newState
+        stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>'
+        if (tag == ""){
+          tag = "No Configuration Tag"
         }
+        if (id == origin){
+          $("#global"+id).html(stateCircle+newState);
+          $("#globalTag"+id).html(tag);
+          return;
+        }
+        var stateObject = $('#dState'+id+origin)
+        //check if state already exists
+        if(stateObject.length){
+            if(parseInt(stateObject.attr("sequencenumber")) < sequenceNumber)
+              stateObject.attr("sequencenumber",sequenceNumber)
+              stateObject.html(stateCircle+newState);
+              $('#detUnmappedState'+id+origin).html(unmappedState)
+              $('#detTagName'+id+origin).html(tag)
+              $('#detComment'+id+origin).html(comment)
+        }
+        else{
+          if (isGlobalSystem)
+            var table = $("#globalSystemStateTable"+origin);
+          else
+            var table = $("#detectorStateTable"+origin);
+          newRow = '<tr id="dRow'+id+'" class="tableRow'+origin+'"> <td>'+id+'</td><td id="dState'+id+origin+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+'</td><td id ="detUnmappedState'+id+origin+'">'+unmappedState+'</td><td id="detTagName'+id+origin+'">'+tag+'</td><td id="detComment'+id+origin+'">'+comment+'</td></tr>';
+          table.append(newRow)
+        }
+      }
 
-        updateSocket.onopen = function(e){
-          $(".tableRow").remove()
-          //get stateTables
-          console.log("Connection open")
-          $.ajax({
-              type: "GET",
-              url: "{% url 'GUI:currentTableAndLogRequest' 'ecs' %}",
-              "success": function(result) {
-                  var partitions = result["table"]
-                  var log = result["log"]
-                  for (var pca in partitions){
-                    var stateTable = partitions[pca]
-                    for (var id in stateTable){
-                      var sequenceNumber = stateTable[id][0];
-                      var stateObject = stateTable[id][1];
-                      var newState = stateObject["state"];
-                      var unmappedState = stateObject["unmappedState"]
-                      var tag = (stateObject["configTag"] == undefined) ? "" : stateObject["configTag"];
-                      var comment = (stateObject["comment"] == undefined) ? "" : stateObject["comment"];
-                      updateState(id,newState,unmappedState,sequenceNumber,tag,comment,pca);
-                    }
+      updateSocket.onopen = function(e){
+        $(".tableRow").remove()
+        //get stateTables
+        $.ajax({
+            type: "GET",
+            url: "{% url 'GUI:currentTableAndLogRequest' 'ecs' %}",
+            "success": function(result) {
+                var partitions = result["table"]
+                var log = result["log"]
+                for (var pca in partitions){
+                  var stateTable = partitions[pca]
+                  for (var id in stateTable){
+                    var sequenceNumber = stateTable[id][0];
+                    var stateObject = stateTable[id][1];
+                    var isGlobalSystem = stateTable[id][2];
+                    var newState = stateObject["state"];
+                    var unmappedState = stateObject["unmappedState"]
+                    var tag = (stateObject["configTag"] == undefined) ? "" : stateObject["configTag"];
+                    var comment = (stateObject["comment"] == undefined) ? "" : stateObject["comment"];
+                    updateState(id,newState,unmappedState,sequenceNumber,tag,comment,pca,isGlobalSystem);
                   }
-                  if (log){
-                    //empty log
-                    $('#log').html("")
-                    $('#log').append(log+"\n");
-                    //allways scroll directly to bottom
-                    var textarea = document.getElementById('log');
-                    textarea.scrollTop = textarea.scrollHeight;
+                }
+                if (log){
+                  //empty log
+                  $('#log').html("")
+                  $('#log').append(log+"\n");
+                  //allways scroll directly to bottom
+                  var textarea = document.getElementById('log');
+                  textarea.scrollTop = textarea.scrollHeight;
 
-                  }
-              },
-          });
+                }
+            },
+        });
+      }
+
+      updateSocket.onclose = function(e){
+        if (e.code == 1000)
+          //normal shutdown
+          return
+        else{
+           setTimeout(function(){
+              console.log("trying to reconnect Websocket");
+              createWebSocket()
+           },2000);
         }
+      }
 
-        updateSocket.onclose = function(e){
-          if (e.code == 1000)
-            //normal shutdown
-            return
-          else{
-             setTimeout(function(){
-                console.log("trying to reconnect Websocket");
-                createWebSocket()
-             },2000);
+      updateSocket.onmessage = function(e) {
+          var data = JSON.parse(e.data);
+          var message = data['message'];
+          var type = data['type'];
+          var origin = data['origin']
+          if (type == "state"){
+            var update = JSON.parse(message);
+            var id = update['id'];
+            var stateObject = update['state'];
+            if(stateObject == "reset"){
+                //clear Table
+                $(".tableRow"+origin).remove()
+            }
+            else if (stateObject == "remove"){
+                //delete Row
+                $('#dRow'+id).remove()
+            }
+            else{
+              var newState = stateObject["state"];
+              var sequenceNumber = update['sequenceNumber'];
+              var unmappedState = stateObject["unmappedState"];
+              var isGlobalSystem = stateObject["isGlobalSystem"];
+              var tag = (stateObject["configTag"] == undefined) ? "" : stateObject["configTag"];
+              var comment = (stateObject["comment"] == undefined) ? "" : stateObject["comment"];
+              updateState(id,newState,unmappedState,sequenceNumber,tag,comment,origin,isGlobalSystem);
+            }
           }
-        }
+          else if (type == "log"){
+            $('#log').append(message+"\n");
+            //allways scroll directly to bottom
+            var textarea = document.getElementById('log');
+            textarea.scrollTop = textarea.scrollHeight;
+          }
+          else if (type == "permissionTimeout"){
+            $('#alertBox').css('visibility', 'visible');
+            $('#alertBox').html("<strong>Warning!</strong> Your permission timed out")
+            $('#controlLink').html("take control of {{view.pcaObject}}")
+            $('#controlLink').attr("href", "{% url 'GUI:take_control' 'ecs' 'ecs'%}");
+          }
+      };
+  }
+  createWebSocket()
+</script>
+{% endblock script %}
 
-        updateSocket.onmessage = function(e) {
-            var data = JSON.parse(e.data);
-            var message = data['message'];
-            var type = data['type'];
-            var origin = data['origin']
-            if (type == "state"){
-              var update = JSON.parse(message);
-              var id = update['id'];
-              var stateObject = update['state'];
-              if(stateObject == "reset"){
-                  //clear Table
-                  $(".tableRow"+origin).remove()
-              }
-              else if (stateObject == "remove"){
-                  //delete Row
-                  $('#dRow'+id).remove()
-              }
-              else{
-                var newState = stateObject["state"];
-                var sequenceNumber = update['sequenceNumber'];
-                var unmappedState = stateObject["unmappedState"]
-                var tag = (stateObject["configTag"] == undefined) ? "" : stateObject["configTag"];
-                var comment = (stateObject["comment"] == undefined) ? "" : stateObject["comment"];
-                updateState(id,newState,unmappedState,sequenceNumber,tag,comment,origin);
-              }
-            }
-            else if (type == "log"){
-              $('#log').append(message+"\n");
-              //allways scroll directly to bottom
-              var textarea = document.getElementById('log');
-              textarea.scrollTop = textarea.scrollHeight;
-            }
-            else if (type == "permissionTimeout"){
-              $('#alertBox').css('visibility', 'visible');
-              $('#alertBox').html("<strong>Warning!</strong> Your permission timed out")
-              $('#controlLink').html("take control of {{view.pcaObject}}")
-              $('#controlLink').attr("href", "{% url 'GUI:take_control' 'ecs'%}");
-            }
-        };
-    }
-    createWebSocket()
-    </script>
+{% block sideAndTopBar %}
+  {{block.super}}
+{% endblock %}
 
-  </head>
-  {%block control%}
-  {% load guardian_tags %}
-  {% get_obj_perms request.user for view.ecsObject as "ecsPerms" %}
-  <body id="page-top">
+{% block breadcrumb %}
+  <li class="breadcrumb-item active">Overview</li>
+{% endblock %}
 
-    <nav class="navbar navbar-expand navbar-dark bg-dark static-top">
-
-      <a class="navbar-brand mr-1" href="{% url 'GUI:index'%}">Start ECS</a>
-
-      <button class="btn btn-link btn-sm text-white order-1 order-sm-0" id="sidebarToggle" href="#">
-        <i class="fas fa-bars"></i>
-      </button>
-
-      <ul class="navbar-nav ml-auto mr-0 mr-md-3 my-2 my-md-0">
-        <li class="nav-item dropdown no-arrow">
-          <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-            <i class="fas fa-user-circle fa-fw"></i>
-          </a>
-          <div class="dropdown-menu dropdown-menu-right" aria-labelledby="userDropdown">
-            <h5 class="dropdown-header">Logged in as {{user}}</h5>
-            {% if perms.GUI.can_take_control %}
-              {% if view.userInControl and view.userInControl != "You" %}
-                <h5 class="dropdown-header">Control already Taken by User : {{view.userInControl}}</h5>
-              {% endif %}
-              {% if "has_control" in ecsPerms %}
-                <h5 class="dropdown-header">You are currently controlling the ECS</h5>
-                <a id="controlLink" class="dropdown-item" href="{% url 'GUI:giveup_control' 'ecs'%}">give up control of {{view.ecsObject}}</a>
-              {% elif not view.userInControl %}
-                <a id="controlLink" class="dropdown-item" href="{% url 'GUI:take_control' 'ecs'%}">take control of {{view.ecsObject}}</a>
-              {% endif %}
-              <div class="dropdown-divider"></div>
-            {% endif %}
-            <a class="dropdown-item" href="#" data-toggle="modal" data-target="#logoutModal">Logout</a>
-          </div>
-        </li>
-      </ul>
-
-    </nav>
-
-    <div id="wrapper">
-
-      <!-- Sidebar -->
-      <ul class="sidebar navbar-nav">
-        <li class="nav-item active">
-          <a class="nav-link" href="{% url 'GUI:index' %}">
-            <i class="fas fa-fw fa-tachometer-alt"></i>
-            <span>Overview</span>
-          </a>
-        </li>
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" id="pcaDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-            <i class="fas fa-fw fa-desktop"></i>
-            <span>PCAs</span>
-          </a>
-          <div class="dropdown-menu" aria-labelledby="pcaDropdown">
-            {% for pca in view.ecsMap.items %}
-              {% if pca.0 != "unmapped"%}
-                <h6 class="dropdown-header">PCA <a href="{%url 'GUI:pca' pca.0%}">{{pca.0}}</a> </h6>
-                {% if forloop.revcounter > 2 %}
-                  <div class="dropdown-divider"></div>
-                {%endif%}
-              {%endif%}
-            {%endfor%}
-          </div>
-        </li>
-        {% if "has_control" in ecsPerms %}
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" id="detectorActDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-            <i class="fas fa-fw fa-desktop"></i>
-            <span>Detector Activities</span>
-          </a>
-          <div class="dropdown-menu" aria-labelledby="detectorActDropdown">
-            <a class="dropdown-item" href="{% url 'GUI:create_detector' %}">Create Detector</a>
-            <a class="dropdown-item" href="{% url 'GUI:delete_detectors' %}">Delete Detector</a>
-            <a class="dropdown-item" href="{% url 'GUI:move_detectors' %}">Move Detector</a>
-          </div>
-        </li>
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" id="partitionActDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-            <i class="fas fa-fw fa-desktop"></i>
-            <span>Partition Activities</span>
-          </a>
-          <div class="dropdown-menu" aria-labelledby="partitionActDropdown">
-            <a class="dropdown-item" href="{% url 'GUI:create_pca' %}">Create Partition</a>
-            <a class="dropdown-item" href="{% url 'GUI:delete_pca' %}">Delete Partition</a>
-          </div>
-        </li>
-        {%endif%}
-      </ul>
-
-      <div id="content-wrapper">
-
+{% block content %}
+  <h1>ECS Status</h1>
+  <div class="alert alert-danger" id="alertBox" style="visibility: hidden"></div>
+  <div>
+    {% for pca in view.ecsMap.items %}
+      {% if pca.0 != "unmapped"%}
+        <h2 {% if not forloop.first %} class="indexPCAHeading" {% endif %}>PCA <a href="{%url 'GUI:pca' pca.0%}">{{pca.0}}</a> </h2>
         <div class="container-fluid">
-
-          <!-- Breadcrumbs-->
-          <ol class="breadcrumb">
-            <li class="breadcrumb-item active">Overview</li>
-          </ol>
-          <div class="alert alert-danger" id="alertBox" style="visibility: hidden"></div>
-          <h1>ECS Status</h1>
-
-          <div>
-            {% for pca in view.ecsMap.items %}
-              {% if pca.0 != "unmapped"%}
-              <h2>PCA <a href="{%url 'GUI:pca' pca.0%}">{{pca.0}}</a> </h2>
-              {%else%}
-              <h2>Unused Detectors</h2>
-              {%endif%}
-              <table class="table table-bordered" id="stateTable{{pca.0}}">
-                <tr>
-                  <th class="col-md-3">Detector</th>
-                  <th class="col-md-3">Status as seen by PCA</th>
-                  <th class="col-md-2">Status</th>
-                  <th class="col-md-2">Config Tag</th>
-                  <th class="col-md-3">Comment</th>
-                </tr>
-              </table>
-            {% endfor %}
-          </div>
-          <textarea class="form-control log" rows="10" readonly id="log"></textarea>
-        </div>
-        <!-- /.container-fluid -->
-
-        <!-- Sticky Footer
-        <footer class="sticky-footer">
-          <div class="container my-auto">
-            <div class="copyright text-center my-auto">
-              <span>CBM ECS</span>
+          <div class="row">
+            <div class="col-md-4">
+              <h4>{{pca.0}} Global State:</h4>
+            </div>
+            <div class="col-md-4">
+              <h4>{{pca.0}} Global Config Tag:</h4>
             </div>
           </div>
-        </footer>
-        -->
-      </div>
-      <!-- /.content-wrapper -->
-
-    </div>
-    <!-- /#wrapper -->
-
-    <!-- Scroll to Top Button
-    <a class="scroll-to-top rounded" href="#page-top">
-      <i class="fas fa-angle-up"></i>
-    </a>-->
-
-    <!-- Logout Modal-->
-    {% if user.is_authenticated %}
-      <div class="modal fade" id="logoutModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true">
-        <div class="modal-dialog" role="document">
-          <div class="modal-content">
-            <div class="modal-header">
-              <h5 class="modal-title" id="exampleModalLabel">{{ user.get_username }}, ready to Leave?</h5>
-              <button class="close" type="button" data-dismiss="modal" aria-label="Close">
-                <span aria-hidden="true">×</span>
-              </button>
+          <div class="row">
+            <div class="col-md-4">
+              <h2 id="global{{pca.0}}"></h2>
             </div>
-            <div class="modal-body">Select "Logout" below if you are ready to end your current session.</div>
-            <div class="modal-footer">
-              <button class="btn btn-secondary" type="button" data-dismiss="modal">Cancel</button>
-              <a class="btn btn-primary" href="{% url 'GUI:logout'%}?next={{request.path}}">Logout</a>
+            <div class="col-md-4">
+              <h2 id="globalTag{{pca.0}}"></h2>
             </div>
           </div>
         </div>
-      </div>
-    {% else %}
-      <div class="modal fade" id="logoutModal" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true">
-        <div class="modal-dialog" role="document">
-          <div class="modal-content">
-            <div class="modal-header">
-              <h5 class="modal-title" id="exampleModalLabel">Login?</h5>
-              <button class="close" type="button" data-dismiss="modal" aria-label="Close">
-                <span aria-hidden="true">×</span>
-              </button>
-            </div>
-            <div class="modal-body">Select "Login" below if you are ready to login.</div>
-            <div class="modal-footer">
-              <button class="btn btn-secondary" type="button" data-dismiss="modal">Cancel</button>
-              <a class="btn btn-primary" href="{% url 'GUI:login'%}?next={{request.path}}">Login</a>
-            </div>
-          </div>
-        </div>
-      </div>
-    {% endif %}
-    {%endblock%}
-
-
-    <!-- Bootstrap core JavaScript-->
-    <script src="{% static 'GUI/vendor/jquery/jquery.min.js' %}"></script>
-    <script src="{% static 'GUI/vendor/bootstrap/js/bootstrap.bundle.min.js' %}"></script>
-
-    <!-- Core plugin JavaScript-->
-    <script src="{% static 'GUI/vendor/jquery-easing/jquery.easing.min.js' %}"></script>
-
-    <!-- Custom scripts for all pages-->
-    <script src="{% static 'GUI/scripts/sb-admin.js' %}"></script>
-  </body>
-
-</html>
+        <table class="table table-bordered" id="detectorStateTable{{pca.0}}">
+          <tr>
+            <th class="col-md-3">Detector</th>
+            <th class="col-md-3">Status as seen by PCA</th>
+            <th class="col-md-2">Status</th>
+            <th class="col-md-2">Config Tag</th>
+            <th class="col-md-3">Comment</th>
+          </tr>
+        </table>
+        <table class="table table-bordered" id="globalSystemStateTable{{pca.0}}">
+          <tr>
+            <th class="col-md-3">Global System</th>
+            <th class="col-md-3">Status as seen by PCA</th>
+            <th class="col-md-2">Status</th>
+            <th class="col-md-2">Config Tag</th>
+            <th class="col-md-3">Comment</th>
+          </tr>
+        </table>
+      {%else%}
+        <h2>Unused Detectors</h2>
+        <table class="table table-bordered" id="detectorStateTable{{pca.0}}">
+          <tr>
+            <th class="col-md-3">Detector</th>
+            <th class="col-md-3">Status as seen by PCA</th>
+            <th class="col-md-2">Status</th>
+            <th class="col-md-2">Config Tag</th>
+            <th class="col-md-3">Comment</th>
+          </tr>
+        </table>
+      {%endif%}
+      <hline/>
+    {% endfor %}
+  </div>
+  <textarea class="form-control log" rows="10" readonly id="log"></textarea>
+  </div>
+{% endblock content %}

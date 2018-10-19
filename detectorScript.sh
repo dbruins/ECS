@@ -1,7 +1,8 @@
-x=$(shuf -i 1-8 -n 1)
+#!/bin/bash
+x=$((RANDOM%5))
 sleep $x
-x=$(shuf -i 0-10 -n 1)
-if [ "$x" -gt 9 ]
+x=$((RANDOM%100))
+if [ "$x" -gt 101 ]
 then
   exit 1
 else

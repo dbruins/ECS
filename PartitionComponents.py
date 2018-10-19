@@ -33,7 +33,7 @@ class PartitionComponent:
 
 
         #ping Thread will set Statemachine on connection
-        self.connected = False
+        self.connected = None
         self.stateMachine = Statemachine(conf["stateFile"],False)
 
         self.mapper = {}
@@ -197,12 +197,23 @@ class DetectorA(Detector):
         return self.transitionRequest(DetectorTransitions.configure,configTag)
 
     def abort(self):
+        if not self.stateMachine.checkIfPossible(DetectorTransitions.abort):
+            return False
         return self.transitionRequest(DetectorTransitions.abort)
 
 class GlobalSystemComponent(PartitionComponent):
     def __init__(self,pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
         self.pcaId = pcaId
+        self.name = "Unset Name"
         super().__init__(address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction)
+
+    def reconnectFunction(self):
+        print("%s connected" % self.name)
+        self.pcaReconnectFunction(self.name)
+
+    def timeoutFunction(self):
+        print("%s disconnected" % self.name)
+        self.pcaTimeoutFunction(self.name)
 
     def getState(self):
         if not self.connected:
@@ -243,7 +254,6 @@ class GlobalSystemComponent(PartitionComponent):
             #check if the command has arrived
             #receive status code
             returnMessage = socketSender.recv()
-            print(returnMessage)
             if returnMessage == codes.busy:
                 self.logfunction("%s is busy" % self.name)
                 return False
@@ -283,16 +293,8 @@ class GlobalSystemComponent(PartitionComponent):
 
 class DCS(GlobalSystemComponent):
     def __init__(self,pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
-        self.name = "DCS"
         super().__init__(pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction)
-
-    def reconnectFunction(self):
-        print("DCS connect")
-        self.pcaTimeoutFunction(self.name)
-
-    def timeoutFunction(self):
-        print("DCS disconnect")
-        self.pcaReconnectFunction(self.name)
+        self.name = "DCS"
 
     def getReady(self,configTag):
         if not (self.stateMachine.currentState == DCSStates.Unconfigured) and self.connected:
@@ -301,20 +303,14 @@ class DCS(GlobalSystemComponent):
         return self.transitionRequest(DCSTransitions.configure,configTag)
 
     def abort(self):
+        if not self.stateMachine.checkIfPossible(DCSTransitions.abort):
+            return False
         return self.transitionRequest(DCSTransitions.abort)
 
 class TFC(GlobalSystemComponent):
     def __init__(self,pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
-        self.name = "TFC"
         super().__init__(pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction)
-
-    def reconnectFunction(self):
-        print("TFC connect")
-        self.pcaTimeoutFunction(self.name)
-
-    def timeoutFunction(self):
-        print("TFC disconnect")
-        self.pcaReconnectFunction(self.name)
+        self.name = "TFC"
 
     def getReady(self,configTag):
         if not (self.stateMachine.currentState == TFCStates.Unconfigured) and self.connected:
@@ -323,20 +319,14 @@ class TFC(GlobalSystemComponent):
         return self.transitionRequest(TFCTransitions.configure,configTag)
 
     def abort(self):
+        if not self.stateMachine.checkIfPossible(TFCTransitions.abort):
+            return False
         return self.transitionRequest(TFCTransitions.abort)
 
 class QA(GlobalSystemComponent):
     def __init__(self,pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
-        self.name = "QA"
         super().__init__(pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction)
-
-    def reconnectFunction(self):
-        print("QA connect")
-        self.pcaTimeoutFunction(self.name)
-
-    def timeoutFunction(self):
-        print("QA disconnect")
-        self.pcaReconnectFunction(self.name)
+        self.name = "QA"
 
     def startRecording(self):
         if self.stateMachine.currentState == QAStates.Active:
@@ -355,20 +345,14 @@ class QA(GlobalSystemComponent):
         return self.transitionRequest(QATransitions.configure,configTag)
 
     def abort(self):
+        if not self.stateMachine.checkIfPossible(QATransitions.abort):
+            return False
         return self.transitionRequest(QATransitions.abort)
 
 class FLES(GlobalSystemComponent):
     def __init__(self,pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
-        self.name = "FLES"
         super().__init__(pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction)
-
-    def reconnectFunction(self):
-        print("FLES connect")
-        self.pcaTimeoutFunction(self.name)
-
-    def timeoutFunction(self):
-        print("FLES disconnect")
-        self.pcaReconnectFunction(self.name)
+        self.name = "FLES"
 
     def startRecording(self):
         if self.stateMachine.currentState == FLESStates.Active:
@@ -387,6 +371,8 @@ class FLES(GlobalSystemComponent):
         return self.transitionRequest(FLESTransitions.configure,configTag)
 
     def abort(self):
+        if not self.stateMachine.checkIfPossible(FLESTransitions.abort):
+            return False
         return self.transitionRequest(FLESTransitions.abort)
 
 

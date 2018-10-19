@@ -12,6 +12,7 @@ import logging
 from ECSCodes import ECSCodes
 codes = ECSCodes()
 from states import PCAStates, PCATransitions, MappedStates, DCSStates,DCSTransitions, DetectorStates, DetectorTransitions, FLESStates, FLESTransitions, QAStates, QATransitions, TFCStates, TFCTransitions, GlobalSystemStates, GlobalSystemStatesTransitions
+pcaStates = PCAStates()
 import configparser
 import copy
 import json
@@ -208,9 +209,9 @@ class PCA:
 
         self.configureFunctionForState = {
             PCAStates.Idle : self.TFC.getReady,
-            PCAStates.TFC_Configured : self.makeDetectorsReady,
-            PCAStates.Detectors_Configured : self.makeDCSandFLESReady,
-            PCAStates.FLES_and_DCS_Configured: self.QA.getReady,
+            PCAStates.TFC_Active : self.makeDetectorsReady,
+            PCAStates.Detectors_Active : self.makeDCSandFLESReady,
+            PCAStates.FLES_and_DCS_Active: self.QA.getReady,
         }
 
         #create Detector objects
@@ -222,7 +223,7 @@ class PCA:
             t.start()
         for t in threadArray:
             t.join()
-        self.publishQueue.put((self.id,stateObject(self.stateMachine.currentState)))
+        self.publishQueue.put((self.id,stateObject([self.stateMachine.currentState,self.stateMachine.currentState,self.configTag,None])))
         #thread stuff
         start_new_thread(self.waitForUpdates,())
         start_new_thread(self.waitForRequests,())
@@ -250,6 +251,9 @@ class PCA:
             if command == codes.abort:
                 self.abort()
                 continue
+
+    def getCurrentConfigTag(self):
+        return self.configTag
 
     def waitForRemoteCommand(self):
         """wait for an external(start,stop etc.) command e.g. from that "gorgeous" WebGUI
@@ -420,7 +424,8 @@ class PCA:
     def addDetector(self,detector):
         """add Detector to Dictionary and pubish it's state"""
         #detector list can only be changed in Idle State
-        if self.stateMachine.currentState != PCAStates.Idle:
+        if pcaStates.isActiveState(self.stateMachine.currentState):
+            print(self.stateMachine.currentState)
             return codes.busy
         self.sem.acquire()
         #try:
@@ -434,7 +439,7 @@ class PCA:
         confSection = types.getConfsectionForType(detector.type)
         det = typeClass(detector.id,detector.address,detector.portTransition,detector.portCommand,confSection,self.log,self.handleDetectorTimeout,self.handleDetectorReconnect)
         self.detectors[det.id] = det
-        self.publishQueue.put((det.id,det.getStateObject()))
+        #self.publishQueue.put((det.id,det.getStateObject()))
         #global state doesn't exist during start up
         if self.stateMachine:
             start_new_thread(self.transitionDetectorIntoGlobalState,(det.id,))
@@ -446,7 +451,8 @@ class PCA:
 
     def removeDetector(self,id):
         """remove Detector from Dictionary"""
-        if self.stateMachine.currentState != PCAStates.Idle:
+        if pcaStates.isActiveState(self.stateMachine.currentState):
+            print(self.stateMachine.currentState)
             return codes.busy
         self.sem.acquire()
         try:
@@ -471,7 +477,10 @@ class PCA:
 
     def globalSystemReconnect(self,id):
         gs = self.globalSystems[id]
-        self.publishQueue.put((id,gs.getStateObject()))
+        stateObj = gs.getStateObject()
+        self.publishQueue.put((id,stateObj))
+        if stateObj.configTag and self.getCurrentConfigTag() != stateObj.configTag:
+            gs.abort()
 
     def handleDCSMessage(self,detId,message):
         det = self.detectors[detId]
@@ -488,6 +497,10 @@ class PCA:
         #if detector is active try to transition him into globalState
         if id in self.detectors:
             self.publishQueue.put((id,stateObj))
+            print(stateObj.configTag)
+            if stateObj.configTag and self.getCurrentConfigTag() != stateObj.configTag:
+                det = self.detectors[id]
+                det.abort()
             self.transitionDetectorIntoGlobalState(id)
 
     def transitionDetectorIntoGlobalState(self,id):
@@ -495,6 +508,12 @@ class PCA:
         det = self.detectors[id]
         if self.stateMachine.currentState == PCAStates.Recording:
             det.getReady()
+
+    def error_transition(self,transition):
+        if self.stateMachine.checkIfPossible(transition):
+            if self.stateMachine.currentState == PCAStates.Recording:
+                self.stopRecording()
+            self.transition(transition)
 
     def checkGlobalState(self,id):
         #globalStateChange
@@ -527,11 +546,11 @@ class PCA:
                     if self.autoConfigure:
                         self.configure()
             #after stop transition check if all Detectors are still ready(detector error won't stop the Recording)
-            elif self.stateMachine.currentState == PCAStates.QA_Configured:
+            elif self.stateMachine.currentState == PCAStates.QA_Active:
                 for id in self.detectors.keyIterator():
                     d = self.detectors[id]
                     if d.getMappedState() != MappedStates.Active:
-                        self.transition(PCATransitions.error_Detector)
+                        self.error_transition(PCATransitions.error_Detector)
         elif id == "TFC":
             if self.stateMachine.currentState == PCAStates.Configuring_TFC:
                 if self.TFC.getMappedState() == MappedStates.Active:
@@ -539,10 +558,9 @@ class PCA:
                     if self.autoConfigure:
                         self.configure()
                 elif self.TFC.getMappedState() == MappedStates.Unconfigured:
-                    self.transition(PCATransitions.fail)
+                    self.transition(PCATransitions.failure)
             elif self.TFC.getMappedState() == MappedStates.Unconfigured or self.TFC.getMappedState() == TFCStates.ConnectionProblem:
-                if self.stateMachine.checkIfPossible(PCATransitions.error_TFC):
-                    self.transition(PCATransitions.error_TFC)
+                self.error_transition(PCATransitions.error_TFC)
         elif id in self.detectors:
             det = self.detectors[id]
             if self.stateMachine.currentState == PCAStates.Configuring_Detectors and det.getMappedState() == MappedStates.Active :
@@ -558,9 +576,9 @@ class PCA:
                         self.configure()
             elif det.getMappedState() == MappedStates.Unconfigured or det.getMappedState() == DetectorStates.ConnectionProblem:
                 if self.stateMachine.currentState == PCAStates.Configuring_Detectors:
-                    self.transition(PCATransitions.fail)
-                elif self.stateMachine.checkIfPossible(PCATransitions.error_Detector):
-                    self.transition(PCATransitions.error_Detector)
+                    self.transition(PCATransitions.failure)
+                else:
+                    self.error_transition(PCATransitions.error_Detector)
         elif id in {"FLES","DCS"}:
             if self.stateMachine.currentState == PCAStates.Configuring_FLES_and_DCS:
                 if self.FLES.getMappedState() == MappedStates.Active and self.DCS.getMappedState() == MappedStates.Active:
@@ -568,10 +586,9 @@ class PCA:
                     if self.autoConfigure:
                         self.configure()
                 elif (id == "FLES" and self.FLES.getMappedState() == MappedStates.Unconfigured) or (id == "DCS" and self.DCS.getMappedState() == MappedStates.Unconfigured):
-                        self.transition(PCATransitions.fail)
+                        self.transition(PCATransitions.failure)
             elif self.FLES.getMappedState() == MappedStates.Unconfigured or self.FLES.getMappedState() == FLESStates.ConnectionProblem or self.DCS.getMappedState() == MappedStates.Unconfigured or self.DCS.getMappedState() == DCSStates.ConnectionProblem:
-                if self.stateMachine.checkIfPossible(PCATransitions.error_FLES_OR_DCS):
-                    self.transition(PCATransitions.error_FLES_OR_DCS)
+                self.error_transition(PCATransitions.error_FLES_OR_DCS)
             if id == "FLES":
                 if self.FLES.stateMachine.currentState == FLESStates.Recording and self.stateMachine.currentState != PCAStates.Recording:
                     self.FLES.stopRecording()
@@ -582,10 +599,9 @@ class PCA:
                     if self.autoConfigure:
                         self.configure()
                 elif self.QA.getMappedState() == MappedStates.Unconfigured:
-                    self.transition(PCATransitions.fail)
+                    self.transition(PCATransitions.failure)
             elif self.QA.getMappedState() == MappedStates.Unconfigured or self.QA.getMappedState() == QAStates.ConnectionProblem:
-                if self.stateMachine.checkIfPossible(PCATransitions.error_QA):
-                    self.transition(PCATransitions.error_QA)
+                self.error_transition(PCATransitions.error_QA)
             elif self.QA.stateMachine.currentState == QAStates.Recording and self.stateMachine.currentState != PCAStates.Recording:
                 self.QA.stopRecording()
 
@@ -594,7 +610,8 @@ class PCA:
         """try to transition the own Statemachine"""
         oldstate = self.stateMachine.currentState
         if self.stateMachine.transition(command):
-            self.publishQueue.put((self.id,stateObject(self.stateMachine.currentState)))
+            #self.publishQueue.put((self.id,stateObject(self.stateMachine.currentState)))
+            self.publishQueue.put((self.id,stateObject([self.stateMachine.currentState,self.stateMachine.currentState,self.configTag,None])))
             self.log("GLobal Statechange: "+oldstate+" -> "+self.stateMachine.currentState)
 
     def lockPartition(self):
@@ -697,6 +714,8 @@ class PCA:
         returnQueue = Queue()
         self.sem.acquire()
         try:
+            self.configTag=False
+            self.transition(PCATransitions.abort)
             for id in self.detectors.keyIterator():
                 d = self.detectors[id]
                 t = threading.Thread(name='dabort'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.abort,None, None))
@@ -706,7 +725,6 @@ class PCA:
             self.DCS.abort()
             self.QA.abort()
             self.FLES.abort()
-            self.transition(PCATransitions.abort)
         except Exception as e:
             self.log("Exception while aborting: %s" %(str(e),))
         finally:

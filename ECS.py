@@ -242,7 +242,6 @@ class DataBaseWrapper:
         val = (id,)
         try:
             res = c.execute("SELECT * From GlobalSystems Where id=?",val).fetchone()
-            print(res)
             if not res:
                 return codes.idUnknown
             return globalSystemDataObject(res)
@@ -267,13 +266,12 @@ import paramiko
 from  UnmappedDetectorController import UnmappedDetectorController
 
 from channels.layers import get_channel_layer
-from asgiref.sync import async_to_sync
 from GUI.models import Question, Choice, pcaModel
 from django.conf import settings
 from collections import deque
 from django.utils import timezone
 from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject
-
+import asyncio
 class ECS:
     """The Experiment Control System"""
     def __init__(self):
@@ -373,7 +371,7 @@ class ECS:
         self.pcaHandlers = {}
         #create Handlers for PCAs
         for p in self.partitions:
-            self.pcaHandlers[p.id] = PCAHandler(p,self.log)
+            self.pcaHandlers[p.id] = PCAHandler(p,self.log,self.globalSystems)
             #add database object for storing user permissions
             pcaModel.objects.create(id=p.id,permissionTimestamp=timezone.now())
         #user Permissions ecs
@@ -544,7 +542,7 @@ class ECS:
                 self.log("PCA Client for %s could not be startet" % partition.id,True)
             #connect to pca
             self.partitions[partition.id] = partition
-            self.pcaHandlers[partition.id] = PCAHandler(partition,self.log)
+            self.pcaHandlers[partition.id] = PCAHandler(partition,self.log,self.globalSystems)
             #add database object for storing user permissions
             pcaModel.objects.create(id=partition.id,permissionTimestamp=timezone.now())
             return True
@@ -632,7 +630,7 @@ class ECS:
                     raise Exception("Detector Type is unknown")
             else:
                 if isinstance(ret,Exception):
-                    return str(e)
+                    return str(ret)
                 else:
                     return "Database error"
         except Exception as e:
@@ -693,6 +691,7 @@ class ECS:
         dbChanged = False
         #is not assigned to any partition(unmapped)
         unused = False
+        informedSystems=[]
 
         skipUnmap = False
         skipAdd = False
@@ -761,30 +760,6 @@ class ECS:
                 finally:
                     requestSocket.close()
 
-            #inform GlobalSystems
-            informedSystems=[]
-            for gsID in self.globalSystems:
-                try:
-                    gs = self.globalSystems[gsID]
-                    requestSocket = self.zmqContext.socket(zmq.REQ)
-                    requestSocket.connect("tcp://%s:%s"  % (gs.address,gs.portCommand))
-                    if newPartition:
-                        requestSocket.send_multipart([codes.remapDetector,newPartition.id.encode(),detector.id.encode()])
-                    else:
-                        requestSocket.send_multipart([codes.remapDetector,codes.removed,detector.id.encode()])
-                    ret = requestSocket.recv()
-                    if ret != codes.ok:
-                        raise Exception("Global System returned ErrorCode")
-                    informedSystems.append(gsID)
-                except zmq.Again:
-                    self.log("timeout informing Global System %s" % (gsID),True)
-                    raise Exception("timeout informing Global System %s" % (gsID))
-                except Exception as e:
-                    self.log("error informing Global System %s: %s " % (gsID,str(e)),True)
-                    raise Exception("error informing Global System %s: %s " % (gsID,str(e)))
-                finally:
-                    requestSocket.close()
-
             if not unused:
                 if not skipUnmap:
                     #remove from Old Partition
@@ -841,6 +816,30 @@ class ECS:
                 self.unmappedDetectorController.addDetector(detector)
             added = True
             print("added")
+
+            #inform GlobalSystems
+            for gsID in self.globalSystems:
+                try:
+                    gs = self.globalSystems[gsID]
+                    requestSocket = self.zmqContext.socket(zmq.REQ)
+                    requestSocket.connect("tcp://%s:%s"  % (gs.address,gs.portCommand))
+                    if newPartition:
+                        requestSocket.send_multipart([codes.remapDetector,newPartition.id.encode(),detector.id.encode()])
+                    else:
+                        requestSocket.send_multipart([codes.remapDetector,codes.removed,detector.id.encode()])
+                    ret = requestSocket.recv()
+                    if ret != codes.ok:
+                        raise Exception("Global System returned ErrorCode")
+                    informedSystems.append(gsID)
+                except zmq.Again:
+                    self.log("timeout informing Global System %s" % (gsID),True)
+                    raise Exception("timeout informing Global System %s" % (gsID))
+                except Exception as e:
+                    self.log("error informing Global System %s: %s " % (gsID,str(e)),True)
+                    raise Exception("error informing Global System %s: %s " % (gsID,str(e)))
+                finally:
+                    requestSocket.close()
+
             #inform DetectorController
             requestSocket = self.zmqContext.socket(zmq.REQ)
             requestSocket.connect("tcp://%s:%s"  % (detector.address,detector.portCommand))
@@ -879,8 +878,7 @@ class ECS:
                             raise Exception("Error during changing Database")
 
                 #inform GlobalSystems
-                informedSystems=[]
-                for gsID in self.globalSystems:
+                for gsID in informedSystems:
                     try:
                         gs = self.globalSystems[gsID]
                         requestSocket = self.zmqContext.socket(zmq.REQ)
@@ -892,7 +890,6 @@ class ECS:
                         ret = requestSocket.recv()
                         if ret != codes.ok:
                             raise Exception("Global System returned ErrorCode")
-                        informedSystems.append(gsID)
                     except zmq.Again:
                         self.log("timeout informing Global System %s" % (gsID),True)
                         raise Exception("timeout informing Global System %s" % (gsID))
@@ -1002,11 +999,19 @@ class ECS:
                 self.log("received malformed request message: %s", str(m),True)
                 continue
 
+            def partitionForDetector(arg):
+                ret = db.getPartitionForDetector(arg)
+                if ret != codes.idUnknown:
+                    return ret
+                else:
+                    return self.unmappedDetectorControllerData
+
+
             def switcher(code,arg=None):
                 #functions for codes
                 dbFunctionDictionary = {
                     codes.pcaAsksForConfig: db.getPartition,
-                    codes.detectorAsksForPCA: db.getPartitionForDetector,
+                    codes.detectorAsksForPCA: partitionForDetector,
                     codes.getDetectorForId: db.getDetector,
                     codes.pcaAsksForDetectorList: db.getDetectorsForPartition,
                     codes.getPartitionForId: db.getPartition,
@@ -1148,6 +1153,24 @@ class ECS:
         channel_layer = get_channel_layer()
         message = origin+": "+str
         self.logQueue.append(message)
+        async def sendUpdate(recipient,type,message):
+            await channel_layer.group_send(
+                #group name
+                "ecs",
+                {
+                    #method called in consumer
+                    'type': 'logUpdate',
+                    'text': message,
+                    'origin': origin,
+                }
+            )
+        #python < 3.7
+        """loop = asyncio.new_event_loop()
+        task = loop.create_task(sendU(type,message))
+        result = loop.run_until_complete(task)"""
+        #run only exists in python3.7
+        asyncio.run(sendUpdate("ecs",type,message))
+        """
         async_to_sync(channel_layer.group_send)(
             #group name
             "ecs",
@@ -1158,6 +1181,7 @@ class ECS:
                 'origin': origin,
             }
         )
+        """
 
     def terminateECS(self):
         for p in self.partitions:
@@ -1172,7 +1196,7 @@ class ECS:
         self.zmqContextNoTimeout.term()
 
 class PCAHandler:
-    def __init__(self,partitionInfo,ecsLogfunction):
+    def __init__(self,partitionInfo,ecsLogfunction,globalSystems):
         self.id = partitionInfo.id
         self.address = partitionInfo.address
         self.portLog = partitionInfo.portLog
@@ -1180,6 +1204,7 @@ class PCAHandler:
         self.portPublish = partitionInfo.portPublish
         self.portCurrentState = partitionInfo.portCurrentState
         self.ecsLogfunction = ecsLogfunction
+        self.globalSystems = globalSystems
 
         self.context = zmq.Context()
         self.stateMap = ECS_tools.MapWrapper()
@@ -1301,12 +1326,15 @@ class PCAHandler:
                 state = "remove"
             else:
                 state = json.loads(state.decode())
+                print(id,state)
                 self.stateMap[id] = (sequence, stateObject(state))
 
+            isGlobalSystem = id in self.globalSystems
             #send update to WebUI(s)
             jsonWebUpdate = {"id" : id,
                              "state" : state,
-                             "sequenceNumber" : sequence
+                             "sequenceNumber" : sequence,
+                             "isGlobalSystem" : isGlobalSystem,
                             }
             jsonWebUpdate = json.dumps(jsonWebUpdate)
             self.sendUpdateToWebsockets("update",jsonWebUpdate)
@@ -1319,32 +1347,38 @@ class PCAHandler:
 
     def sendUpdateToWebsockets(self,type,message):
         channel_layer = get_channel_layer()
-        #pca page
-        async_to_sync(channel_layer.group_send)(
-            #the group name
-            self.id,
-            {
-                #calls method update in the consumer which is registered to channel layer
-                'type': type,
-                #argument(s) with which update is called
-                'text': message
-            }
-        )
-
+        async def sendUpdate(recipient,type,message):
+            if recipient != "ecs":
+                await channel_layer.group_send(
+                    recipient,
+                    {
+                        #calls method update in the consumer which is registered to channel layer
+                        'type': type,
+                        #argument(s) with which update is called
+                        'text': message,
+                    }
+                )
+            else:
+                await channel_layer.group_send(
+                    recipient,
+                    {
+                        #calls method update in the consumer which is registered to channel layer
+                        'type': type,
+                        #argument(s) with which update is called
+                        'text': message,
+                        #ecs page needs to know where the update came from
+                        'origin': self.id,
+                    }
+                )
+        #python < 3.7
+        """loop = asyncio.new_event_loop()
+        task = loop.create_task(sendU(type,message))
+        result = loop.run_until_complete(task)"""
+        #run only exists in python3.7
+        asyncio.run(sendUpdate(self.id,type,message))
         if type != "logUpdate":
-            #ecs page
-            async_to_sync(channel_layer.group_send)(
-                #the group name
-                "ecs",
-                {
-                    #calls method update in the consumer which is registered to channel layer
-                    'type': type,
-                    #argument(s) with which update is called
-                    'text': message,
-                    #ecs page needs to know where the update came from
-                    'origin': self.id
-                }
-            )
+            #ecs page only needs state Updates
+            asyncio.run(sendUpdate("ecs",type,message))
 
     def waitForLogUpdates(self):
         """wait for new log messages from PCA"""

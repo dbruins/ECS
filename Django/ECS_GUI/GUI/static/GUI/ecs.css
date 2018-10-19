@@ -3,12 +3,12 @@
   margin-right: 1em;
 }
 
-.Ready, .Configuring, .Configuring_TFC, .TFC_Configured, .Configuring_Detectors, .Detectors_Configured, .Configuring_FLES_and_DCS, .FLES_and_DCS_Configured, .Configuring_QA{
+.Ready, .Configuring, .Configuring_TFC, .TFC_Active, .Configuring_Detectors, .Detectors_Active, .Configuring_FLES_and_DCS, .FLES_and_DCS_Active, .Configuring_QA{
   color: #F0F200;
   margin-right: 1em;
 }
 
-.Running, .Active, .Recording, .QA_Configured{
+.Running, .Active, .Recording, .QA_Active{
   color: #5CB85C;
   margin-right: 1em;
 }
@@ -19,4 +19,9 @@
 
 .activeButton {
   margin-left: 1em;
+}
+
+.indexPCAHeading {
+  margin-top: 2.5em;
+  margin-bottom: 0.5em;
 }
