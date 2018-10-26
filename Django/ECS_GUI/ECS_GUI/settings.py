@@ -147,11 +147,14 @@ UNUSED_DETECTORS_PUBLISH_PORT = 5002
 UNUSED_DETECTORS_CURRENT_STATE_PORT = 5003
 UNUSED_DETECTORS_UPDATES_PORT = 5004
 
-PCA_CODE_PATH = "/home/daniel/Dokumente/Masterarbeit/ECS"
-PCA_CONFIG_PATH = "/home/daniel/Dokumente/Masterarbeit/ECS/init.cfg"
+PATH_TO_PROJECT = "/home/daniel/Dokumente/Masterarbeit/ECS"
+PCA_CONFIG_PATH = PATH_TO_PROJECT+"/init.cfg"
 PCA_CODEFILE_NAME = "PCA.py"
+DETECTOR_CODEFILE_NAME = "DetectorController.py"
+GLOBALSYSTEM_CODE_FILE = "GlobalSystemClient.py"
 CHECK_IF_RUNNING_SCRIPT = "checkIfRunning.py"
 LOG_PATH_ECS = "./logECS"
+PYTHON_VIRTENV_ACTIVATE_FILE = "virtenv"
 
 ASGI_APPLICATION = 'ECS_GUI.routing.application'
 CHANNEL_LAYERS = {

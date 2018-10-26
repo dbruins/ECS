@@ -1,8 +1,7 @@
 from django.shortcuts import get_object_or_404,render,redirect
 from guardian.shortcuts import assign_perm, get_users_with_perms, remove_perm, get_user_perms
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
-from GUI.models import Question, Choice, pcaModel
-from django.template import loader
+from GUI.models import pcaModel
 from django.urls import reverse
 from django.conf import settings
 from channels.layers import get_channel_layer
@@ -13,22 +12,18 @@ from django.contrib.auth.models import Permission
 from django.apps import apps
 import zmq
 import threading
-import struct
 from multiprocessing import Queue
 import time
 from django.utils import timezone
-import configparser
 from django import forms
-from collections import deque
 import sys
 #ECS Codes and DataObjects should be in the same Path later
-projectPath = settings.PCA_CODE_PATH
+projectPath = settings.PATH_TO_PROJECT
 sys.path.append(projectPath)
 from ECSCodes import ECSCodes
 codes = ECSCodes()
-import ECS_tools
 from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject
-from ECS import ECS
+from ECS import ECS,DataBaseWrapper
 
 ecs = ECS()
 
@@ -123,16 +118,28 @@ class index(ecsMixin,TemplateView):
 
     def dispatch(self, request, *args, **kwargs):
         self.ecsMap = {}
+        self.usersInPCAControl = {}
         for pca in ecs.pcaHandlers.items():
             self.ecsMap[pca[0]] = pca[1].stateMap.map
+            #get users who have control for PCA
+            users = get_users_with_perms(pcaModel.objects.filter(id=pca[0]).get(), attach_perms = True)
+            if len(users)>0:
+                #there should only be at most one who is controlling partition/ecs
+                user = list(users.keys())[0]
+                if user == request.user:
+                    self.usersInPCAControl[pca[0]] = "You"
+                else:
+                    self.usersInPCAControl[pca[0]]=user
+            else:
+                self.usersInPCAControl[pca[0]]=None
         self.ecsMap["unmapped"] = ecs.unmappedDetectorController.statusMap.map
         #check if another user has control over pca
         self.userInControl = None
-        usersWithPermission = get_users_with_perms(self.ecsObject, attach_perms = True)
-        for user, perms in usersWithPermission.items():
-            if "has_control" in perms:
-                self.userInControl = user
-                break
+        #get users who have control for ecs
+        users = get_users_with_perms(self.ecsObject, attach_perms = True)
+        if len(users)>0:
+            #there should only be at most one who is controlling partition/ecs
+            self.userInControl = list(users.keys())[0]
         if self.userInControl == request.user:
             self.userInControl = "You"
         return super().dispatch(request, *args, **kwargs)
@@ -322,6 +329,48 @@ class deleteDetector(ecsMixin,ecsPermissionMixin,TemplateView):
             return self.get(request, *args, **kwargs)
         return HttpResponseRedirect('/')
 
+class clientPage(ecsMixin,ecsPermissionMixin,TemplateView):
+    template_name = 'GUI/clients.html'
+    raise_exception = True
+
+    def get(self, request, *args, **kwargs):
+        self.pcas = {}
+        self.detectors = {}
+        for pca in ecs.pcaHandlers.items():
+            self.pcas[pca[0]] = ecs.checkIfRunning(ecs.partitions[pca[0]])
+            for d in ecs.getDetectorsForPartition(pca[0]):
+                self.detectors[d.id] = ecs.checkIfRunning(d)
+        self.globalSystems = {}
+        for gs in ecs.globalSystems.items():
+            self.globalSystems[gs[0]] = ecs.checkIfRunning(ecs.globalSystems[gs[0]])
+        return super().get(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        id = request.POST['id']
+        action = request.POST['action']
+        if request.POST['type'] == "partition":
+            object = ecs.partitions[id]
+        elif request.POST['type'] == "detector":
+            object = ecs.getDetector(id)
+        elif request.POST['type'] == "global":
+            object = ecs.globalSystems[id]
+        else:
+            return HttpResponse(status=500)
+        if action == "start":
+            pid = ecs.startClient(object)
+            if not pid:
+                return HttpResponse(status=500)
+            else:
+                return JsonResponse({"pid":pid,})
+        elif action == "stop":
+            ret = ecs.stopClient(object)
+            if ret:
+                return HttpResponse(status=200)
+            else:
+                return HttpResponse(status=500)
+        else:
+            return HttpResponse(status=500)
+
 class pcaPermissionMixin(PermissionRequiredMixin):
     #PermissionRequiredMixin
     return_403 = True
@@ -339,7 +388,6 @@ class ready(ecsMixin,pcaPermissionMixin,View):
         autoConfigure = request.POST['autoConfigure']
         configTag = request.POST['configTag']
         pca = ecs.getPCAHandler(pcaId)
-        print(autoConfigure,configTag)
         arg = {
             "configTag" : configTag,
             "autoConfigure": autoConfigure,
@@ -390,6 +438,8 @@ def getUnmappedDetectors(request):
     else:
         return JsonResponse(detList.asDictionary())
 
+from states import PCAStates
+PCAStates = PCAStates()
 @login_required
 def currentTableAndLogRequest(request,pcaId):
     """get Log Data and current Statetable on Websocket connect"""
@@ -404,6 +454,10 @@ def currentTableAndLogRequest(request,pcaId):
         map["unmapped"] = dict((k,(v[0],v[1].asJson(),k in ecs.globalSystems)) for k,v in ecs.unmappedDetectorController.statusMap.map.items())
         if len(ecs.logQueue) > 0:
             bufferdLog = "\n".join(list(ecs.logQueue))
+        response = {
+            "table" : map,
+            "log" : bufferdLog,
+        }
     else:
         #single pca
         if pcaId in ecs.pcaHandlers:
@@ -413,14 +467,16 @@ def currentTableAndLogRequest(request,pcaId):
             #send buffered log entries
             if len(handler.logQueue) > 0:
                 bufferdLog = "\n".join(list(handler.logQueue))
+            buttons = PCAStates.UIButtonsForState(handler.stateMap.map[pcaId][1].state)
         else:
             bufferdLog = ""
             map = {}
-
-    response = {
-        "table" : map,
-        "log" : bufferdLog,
-    }
+            buttons = {}
+        response = {
+            "table" : map,
+            "log" : bufferdLog,
+            "buttons": buttons,
+        }
     return JsonResponse(response)
 
 @permission_required('GUI.can_take_control')

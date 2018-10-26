@@ -155,6 +155,7 @@ class DataBaseWrapper:
             return e
 
     def getDetectorMapping(self):
+        """get entire PCA Detector Mapping Table"""
         c = self.connection.cursor()
         try:
             c.execute("SELECT * From Mapping")
@@ -178,6 +179,7 @@ class DataBaseWrapper:
             return e
 
     def remapDetector(self,detId,newPcaId,oldPcaID):
+        """assign Detector to a different Partition"""
         c = self.connection.cursor()
         vals = (detId,newPcaId)
         try:
@@ -272,6 +274,10 @@ from collections import deque
 from django.utils import timezone
 from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject
 import asyncio
+import signal
+from states import PCAStates
+PCAStates = PCAStates()
+
 class ECS:
     """The Experiment Control System"""
     def __init__(self):
@@ -283,13 +289,19 @@ class ECS:
         self.disconnectedDetectors = ECS_tools.MapWrapper()
         self.stateMap = ECS_tools.MapWrapper()
         self.logQueue = deque(maxlen=settings.BUFFERED_LOG_ENTRIES)
+        #signal.signal(signal.SIGTERM, self.terminateECS)
 
         self.receive_timeout = settings.TIMEOUT
         self.pingInterval = settings.PINGINTERVAL
         self.pingTimeout = settings.PINGTIMEOUT
-        self.pathToPCACodeFile = settings.PCA_CODE_PATH
+        self.pathToPCACodeFile = settings.PATH_TO_PROJECT
+        self.pathToDetectorCodeFile = settings.PATH_TO_PROJECT
+        self.pathToGlobalSystemFile = settings.PATH_TO_PROJECT
+        self.DetectorCodeFileName = settings.DETECTOR_CODEFILE_NAME
         self.PCACodeFileName = settings.PCA_CODEFILE_NAME
+        self.globalSystemFileName = settings.GLOBALSYSTEM_CODE_FILE
         self.checkIfRunningScript = settings.CHECK_IF_RUNNING_SCRIPT
+        self.virtenvFile =  settings.PYTHON_VIRTENV_ACTIVATE_FILE
 
         self.zmqContext = zmq.Context()
         self.zmqContext.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
@@ -329,6 +341,7 @@ class ECS:
         else:
             logging.getLogger().handlers[1].setLevel(logging.CRITICAL)
 
+        #Information for UnmappedDetectorController
         data = {
             "id" : "unmapped",
             "address" : settings.ECS_ADDRESS,
@@ -348,7 +361,7 @@ class ECS:
         for s in systemList:
             res.append(self.database.getGlobalSystem(s))
 
-        #create Objects
+        #Store GlobalSystem Information
         tfcData, dcsData, qaData, flesData = res
         self.globalSystems = {}
         self.globalSystems["TFC"] = tfcData
@@ -359,8 +372,6 @@ class ECS:
         t = threading.Thread(name="requestHandler", target=self.waitForRequests)
         t.start()
 
-        #for storing PCA und Detector Process Ids
-        self.clientProcesses = {}
         #start PCA clients via ssh
         for p in self.partitions:
             ret = self.startClient(p)
@@ -384,7 +395,7 @@ class ECS:
         unmappedDetectors = self.database.getAllUnmappedDetectors()
         self.unmappedDetectorController = UnmappedDetectorController(unmappedDetectors,self.unmappedDetectorControllerData.portPublish,self.unmappedDetectorControllerData.portUpdates,self.unmappedDetectorControllerData.portCurrentState,self.log)
 
-
+        #todo obsolete?
         t = threading.Thread(name="consistencyCheckThread", target=self.consistencyCheckThread)
         #t.start()
 
@@ -395,6 +406,7 @@ class ECS:
             return None
 
     def consistencyCheckThread(self):
+        """checks wether states and Detector Assignment is Consistend between all Clients"""
         while True:
             time.sleep(5)
             if self.terminate:
@@ -403,23 +415,25 @@ class ECS:
 
     def checkIfRunning(self,clientObject):
         """check if client is Running"""
-        if not (isinstance(clientObject,detectorDataObject) or isinstance(clientObject,partitionDataObject)):
+        if isinstance(clientObject,detectorDataObject):
+            path = self.pathToDetectorCodeFile
+        elif isinstance(clientObject,globalSystemDataObject):
+            path = self.pathToGlobalSystemFile
+        elif isinstance(clientObject,partitionDataObject):
+            path = self.pathToPCACodeFile
+        else:
             raise Exception("Expected detector or partition Object but got %s" % type(clientObject))
         id = clientObject.id
         address = clientObject.address
         fileName = self.checkIfRunningScript
-        if isinstance(clientObject,detectorDataObject):
-            path = self.pathToDetectorCodeFile
-        else:
-            path = self.pathToPCACodeFile
         ssh = None
         try:
             ssh = paramiko.SSHClient()
             ssh.load_system_host_keys()
-            #login on pca computer
-            ssh.connect(address,look_for_keys=False)
+            #login on pca computer needs a rsa key
+            ssh.connect(address)
             #python script returns -1 if not running or the pid otherwise
-            stdin, stdout, stderr = ssh.exec_command("pid=$(cd %s;./%s %s); echo $pid" % (path,fileName,id))
+            stdin, stdout, stderr = ssh.exec_command("pid=$(cd %s;source %s; python %s %s); echo $pid" % (path,self.virtenvFile,fileName,id))
             pid = stdout.readline()
             pid = pid.strip()
             ssh.close()
@@ -434,31 +448,34 @@ class ECS:
 
     def startClient(self,clientObject):
         """starts a PCA or Detector client via SSH returns the process Id on success"""
-        if not (isinstance(clientObject,detectorDataObject) or isinstance(clientObject,partitionDataObject)):
-            raise Exception("Expected detector or partition Object but got %s" % type(clientObject))
-        id = clientObject.id
-        address = clientObject.address
         if isinstance(clientObject,detectorDataObject):
             path = self.pathToDetectorCodeFile
             fileName = self.DetectorCodeFileName
-        else:
+        elif isinstance(clientObject,globalSystemDataObject):
+            path = self.pathToGlobalSystemFile
+            fileName = self.globalSystemFileName
+        elif isinstance(clientObject,partitionDataObject):
             path = self.pathToPCACodeFile
             fileName = self.PCACodeFileName
+        else:
+            raise Exception("Expected detector, partition or globalSystem Object but got %s" % type(clientObject))
+        id = clientObject.id
+        address = clientObject.address
         ssh = None
         try:
             pid = self.checkIfRunning(clientObject)
             if not pid:
                 ssh = paramiko.SSHClient()
                 ssh.load_system_host_keys()
-                #login on pca computer
-                ssh.connect(address,look_for_keys=False)
-                stdin, stdout, stderr = ssh.exec_command("cd %s;./%s %s > /dev/null & echo $!" % (path,fileName,id))
+                #login on pca computer needs a rsa key
+                ssh.connect(address)
+                #start Client and get its pid
+                stdin, stdout, stderr = ssh.exec_command("cd %s;source %s;python %s %s > /dev/null & echo $!" % (path,self.virtenvFile,fileName,id))
                 pid = stdout.readline()
                 pid = pid.strip()
                 ssh.close()
             else:
                 self.log("Detector Client %s is already Running with PID %s" % (id,pid))
-            self.clientProcesses[id] = pid
             return pid
         except Exception as e:
             if ssh:
@@ -468,25 +485,26 @@ class ECS:
 
     def stopClient(self,clientObject):
         """kills a PCA or Detector Client via SSH"""
-        if not (isinstance(clientObject,detectorDataObject) or isinstance(clientObject,partitionDataObject)):
-            raise Exception("Expected detector or partition Object but got %s" % type(clientObject))
+        if not (isinstance(clientObject,detectorDataObject) or isinstance(clientObject,partitionDataObject) or isinstance(clientObject,globalSystemDataObject)):
+            raise Exception("Expected detector, partition or globalSystem Object but got %s" % type(clientObject))
         id = clientObject.id
         address = clientObject.address
-        if id not in self.clientProcesses:
-            self.log("tried to stop Client with an unknown ID %s " % id,True)
-            return False
+        pid = self.checkIfRunning(clientObject)
+        if not pid:
+            self.log("tried to stop %s Client but it wasn't running" % id)
+            return True
         ssh = None
         try:
             ssh = paramiko.SSHClient()
             ssh.load_system_host_keys()
-            ssh.connect(address,look_for_keys=False)
-            stdin, stdout, stderr = ssh.exec_command("kill %s" % (self.clientProcesses[id],))
+            ssh.connect(address)
+            stdin, stdout, stderr = ssh.exec_command("kill %s" % (pid,))
             returnValue = stdout.channel.recv_exit_status()
             ssh.close()
             if returnValue == 0:
                 return True
             else:
-                self.log("error stopping Client for %s (probably wasn't running)" % id)
+                self.log("error stopping Client for %s" % id)
                 return False
         except Exception as e:
             if ssh:
@@ -495,11 +513,12 @@ class ECS:
             return False
 
     def createPartition(self,partition):
+        """ Create a new Partition and start it's PCA Client"""
         db = DataBaseWrapper(self.log)
         ret = db.addPartition(partition)
         db.close()
         if ret == codes.ok:
-            #todo inform GlobalSystems
+            #inform GlobalSystems
             informedSystems = []
             for gsID in self.globalSystems:
                 try:
@@ -512,7 +531,7 @@ class ECS:
                         raise Exception("Global System returned ErrorCode")
                     informedSystems.append(gsID)
                 except Exception as e:
-                    #start rollback
+                    #start rollback(tell all informed Global Systems to remove the new partition)
                     db = DataBaseWrapper(self.log)
                     ret = db.removePartition(partition.id)
                     db.close()
@@ -550,6 +569,7 @@ class ECS:
             return str(ret)
 
     def deletePartition(self,pcaId,forceDelete=False):
+        """delete a Partition on stop it's client"""
         try:
             db = DataBaseWrapper(self.log)
             partition = db.getPartition(pcaId)
@@ -568,6 +588,7 @@ class ECS:
             if isinstance(ret,Exception):
                 return str(ret)
 
+            #inform Global Systems
             informedSystems=[]
             for gsID in self.globalSystems:
                 try:
@@ -594,10 +615,12 @@ class ECS:
                             raise Exception("Global System returned ErrorCode during rollback")
                     if isinstance(e,zmq.Again):
                         self.log("timeout informing Global System %s" % (gsID),True)
-                        return "timeout informing Global System %s" % (gsID)
+                        if not forceDelete:
+                            return "timeout informing Global System %s" % (gsID)
                     else:
                         self.log("error informing Global System %s: %s" % (gsID),str(e),True)
-                        return "error informing Global System %s: %s " % (gsID,str(e))
+                        if not forceDelete:
+                            return "error informing Global System %s: %s " % (gsID,str(e))
                 finally:
                     requestSocket.close()
             #try to stop pca Client
@@ -607,6 +630,7 @@ class ECS:
             #terminate pcaHandler
             self.pcaHandlers[pcaId].terminatePCAHandler()
             del self.pcaHandlers[pcaId]
+            #delete PCA Permissions
             pcaModel.objects.get(id=pcaId).delete()
 
             return True
@@ -617,6 +641,7 @@ class ECS:
             db.close()
 
     def createDetector(self,dataObject):
+        """create a new Detector"""
         db = DataBaseWrapper(self.log)
         dbChanged = False
         try:
@@ -675,6 +700,14 @@ class ECS:
         detectors = db.getDetectorsForPartition(pcaId)
         db.close()
         return detectors
+
+    def getDetector(self,id):
+        """get's Detector Data from the database"""
+        db = DataBaseWrapper(self.log)
+        detector = db.getDetector(id)
+        db.close()
+        return detector
+
     def getUnmappedDetectors(self):
         db = DataBaseWrapper(self.log)
         ret = db.getAllUnmappedDetectors()
@@ -702,13 +735,14 @@ class ECS:
             unused = True
         else:
             if not self.pcaHandlers[oldPartition.id].PCAConnection:
+                #skip informing PCA if its not connected and forceMove is True
                 if forceMove:
                     skipUnmap = True
                 else:
                     db.close()
                     return "Partition %s is not connected" % oldPartition.id
-        #detector will be unmapped
         if partitionId == "unmapped":
+            #detector will be unmapped
             newPartition = False
         else:
             if not self.pcaHandlers[partitionId].PCAConnection:
@@ -718,7 +752,7 @@ class ECS:
                     db.close()
                     return "Partition %s is not connected" % partitionId
             newPartition = self.partitions[partitionId]
-        print("remapping")
+
         try:
             detector = db.getDetector(detectorId)
             #change Database
@@ -734,7 +768,7 @@ class ECS:
             print("db done")
             dbChanged = True
 
-            #lock partitions
+            #lock partitions(PCAs don't accept commands while locked)
             partitionsToLock = []
             lockedPartitions = []
             if not unused:
@@ -768,7 +802,6 @@ class ECS:
                         requestSocket.connect("tcp://%s:%s"  % (oldPartition.address,oldPartition.portCommand))
                         requestSocket.send_multipart([codes.removeDetector,detectorId.encode()])
                         ret = requestSocket.recv()
-                        print(ret)
                         if ret == codes.busy:
                             self.log("%s is not in Idle State" % (oldPartition.id),True)
                             raise Exception("%s is not in Idle State" % (oldPartition.id))
@@ -815,7 +848,6 @@ class ECS:
                 #add to unused detectors
                 self.unmappedDetectorController.addDetector(detector)
             added = True
-            print("added")
 
             #inform GlobalSystems
             for gsID in self.globalSystems:
@@ -959,14 +991,12 @@ class ECS:
         finally:
             db.close()
             #unlock partitions
-            print(lockedPartitions)
             for p in lockedPartitions:
                 try:
                     requestSocket = self.zmqContext.socket(zmq.REQ)
                     requestSocket.connect("tcp://%s:%s"  % (p.address,p.portCommand))
                     requestSocket.send_multipart([codes.unlock])
                     ret = requestSocket.recv()
-                    print(ret)
                     if ret != codes.ok:
                         self.log("%s returned error for unlocking Partition" % (p.id),True)
                         raise Exception("%s returned unlocking Partition" % (p.id))
@@ -981,6 +1011,7 @@ class ECS:
 
 
     def waitForRequests(self):
+        """waits for client Requests"""
         #SQLite objects created in a thread can only be used in that same thread. So we need a second connection -_-
         db = DataBaseWrapper(self.log)
         while True:
@@ -1054,6 +1085,7 @@ class ECS:
                 switcher(code)
 
     def checkPartition(self,partition):
+        """checks is Partition has the corrent DetectorList"""
         db = DataBaseWrapper(self.log)
         detectors = db.getDetectorsForPartition(partition.id)
         if isinstance(detectors,Exception):
@@ -1083,6 +1115,7 @@ class ECS:
             requestSocket.close()
 
     def checkDetector(self,detector):
+        """check if Detector has the correct Partition"""
         db = DataBaseWrapper(self.log)
         partition = db.getPartitionForDetector(detector.id)
         if isinstance(partition,Exception):
@@ -1114,10 +1147,8 @@ class ECS:
         finally:
             requestSocket.close()
 
-
-
-
     def checkSystemConsistency(self):
+        """check if Detector assignmet is correct"""
         db = DataBaseWrapper(self.log)
         unmappedDetectors = db.getAllUnmappedDetectors()
         db.close()
@@ -1140,6 +1171,7 @@ class ECS:
             self.checkDetector(d)
 
     def log(self,message,error=False,origin="ecs"):
+        """log to file, terminal and Websocket"""
         str=datetime.now().strftime("%Y-%m-%d %H:%M:%S")+":" + message
         try:
             self.socketLogPublish.send(str.encode())
@@ -1184,6 +1216,7 @@ class ECS:
         """
 
     def terminateECS(self):
+        """cleanup on shutdown"""
         for p in self.partitions:
             self.stopClient(p)
         self.terminate = True
@@ -1196,6 +1229,7 @@ class ECS:
         self.zmqContextNoTimeout.term()
 
 class PCAHandler:
+    """Handler Object for Partition Agents"""
     def __init__(self,partitionInfo,ecsLogfunction,globalSystems):
         self.id = partitionInfo.id
         self.address = partitionInfo.address
@@ -1301,6 +1335,7 @@ class PCAHandler:
             self.PCAConnection = True
 
     def waitForUpdates(self):
+        """wait for updates on subscription socket"""
         while True:
             try:
                 m = self.socketSubscription.recv_multipart()
@@ -1326,7 +1361,6 @@ class PCAHandler:
                 state = "remove"
             else:
                 state = json.loads(state.decode())
-                print(id,state)
                 self.stateMap[id] = (sequence, stateObject(state))
 
             isGlobalSystem = id in self.globalSystems
@@ -1336,6 +1370,9 @@ class PCAHandler:
                              "sequenceNumber" : sequence,
                              "isGlobalSystem" : isGlobalSystem,
                             }
+            if id == self.id and isinstance(state,dict):
+                jsonWebUpdate["buttons"] = PCAStates.UIButtonsForState(state["state"])
+                print(jsonWebUpdate)
             jsonWebUpdate = json.dumps(jsonWebUpdate)
             self.sendUpdateToWebsockets("update",jsonWebUpdate)
 
@@ -1346,6 +1383,7 @@ class PCAHandler:
         self.sendUpdateToWebsockets("logUpdate",message)
 
     def sendUpdateToWebsockets(self,type,message):
+        """send state Updates to the Websocket"""
         channel_layer = get_channel_layer()
         async def sendUpdate(recipient,type,message):
             if recipient != "ecs":
@@ -1391,5 +1429,6 @@ class PCAHandler:
             self.log(m)
 
     def terminatePCAHandler(self):
+        """cleanup on shutdown"""
         self.context.term()
         print("%s terminated" % self.id)

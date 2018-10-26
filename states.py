@@ -11,12 +11,24 @@ class PCAStates:
     Recording = "Recording"
 
     configuringStates = {Configuring_TFC,Configuring_Detectors,Configuring_FLES_and_DCS,Configuring_QA}
+    configuringEnabled = {Idle,TFC_Active,Detectors_Active,FLES_and_DCS_Active}
+    startEnabled = {QA_Active}
+    stopEnabled = {Recording}
 
     def isConfiguringState(self,state):
         return state in self.configuringStates
 
     def isActiveState(self,state):
         return state in self.configuringStates.union([self.Recording])
+
+    def UIButtonsForState(self,state):
+        ret = {
+            "configure": state in self.configuringEnabled,
+            "start": state in self.startEnabled,
+            "stop": state in self.stopEnabled,
+        }
+        return ret
+
 
 class PCATransitions:
     success = "success"

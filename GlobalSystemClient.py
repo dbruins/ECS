@@ -13,6 +13,8 @@ import zmq
 import threading
 import _thread
 import sys
+import re
+import time
 
 class GlobalSystemClient:
     def __init__(self,type):
@@ -86,7 +88,8 @@ class GlobalSystemClient:
         #send update to All PCAs
         self.sendUpdateToAll()
 
-        _thread.start_new_thread(self.waitForCommands,())
+        t = threading.Thread(name="waitForCommands", target=self.waitForCommands)
+        t.start()
 
     def sendUpdate(self,pcaId,comment=None):
         partition = self.PCAs[pcaId]
@@ -491,6 +494,7 @@ class QAClient(GlobalSystemClient):
 
 class FLESClient(GlobalSystemClient):
     def __init__(self):
+        self.jobIds = {}
         super().__init__("FLES")
 
 
@@ -520,8 +524,9 @@ class FLESClient(GlobalSystemClient):
                         self.transition(pcaId,FLESTransitions.configure,tag)
                         self.isPCAinTransition[pcaId] = True
                         self.sendUpdate(pcaId)
-                        workThread = threading.Thread(name="worker", target=self.configure, args=(pcaId,tag))
-                        workThread.start()
+                        self.configure(pcaId,tag)
+                        #workThread = threading.Thread(name="worker", target=self.configure, args=(pcaId,tag))
+                        #workThread.start()
                         continue
                 if command == FLESTransitions.abort:
                     if pcaId and pcaId in self.PCAs:
@@ -551,8 +556,30 @@ class FLESClient(GlobalSystemClient):
                 self.commandSocket.close()
                 break
 
+    def checkIfRunning(self,jobId,pcaId):
+        ret = "RUNNING"
+        while ret=="RUNNING":
+            time.sleep(2)
+            ret = subprocess.check_output(["scontrol show job "+jobId], shell=True)
+            ret = re.search("JobState=(\w+)",str(ret)).group(1)
+        self.abortFunction(pcaId)
+
+
+    def executeScript(self,scriptname):
+        #self.scriptProcess = subprocess.check_output(["exec ./"+scriptname], shell=True)
+        try:
+            ret = subprocess.check_output([scriptname], shell=True)
+            ret = re.search("job (\d+)",str(ret)).group(1)
+        except:
+            ret = False
+        return ret
+
     def configure(self,pcaId,tag):
-        ret = self.executeScript("detectorScript.sh")
+        ret = self.executeScript("bash -c 'cd ~/flesnet; ./start_readout readout.cfg'")
+        self.jobIds[pcaId] = ret
+        print(ret)
+        workThread = threading.Thread(name="worker", target=self.checkIfRunning, args=(ret,pcaId))
+        workThread.start()
         if ret:
             if self.abort:
                 self.abort = False
@@ -570,9 +597,11 @@ class FLESClient(GlobalSystemClient):
 
     def abortFunction(self,pcaId):
         #terminate Transition if active
+        if pcaId in self.jobIds:
+            subprocess.check_output(["scancel "+self.jobIds[pcaId]], shell=True)
         if self.isPCAinTransition[pcaId]:
             self.abort = True
-            self.scriptProcess.terminate()
+            #self.scriptProcess.terminate()
         else:
             self.transition(pcaId,FLESTransitions.abort)
             self.sendUpdate(pcaId)

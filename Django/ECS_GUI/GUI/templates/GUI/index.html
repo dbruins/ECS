@@ -108,7 +108,7 @@ ECS Dashboard
               var newState = stateObject["state"];
               var sequenceNumber = update['sequenceNumber'];
               var unmappedState = stateObject["unmappedState"];
-              var isGlobalSystem = stateObject["isGlobalSystem"];
+              var isGlobalSystem = update["isGlobalSystem"];
               var tag = (stateObject["configTag"] == undefined) ? "" : stateObject["configTag"];
               var comment = (stateObject["comment"] == undefined) ? "" : stateObject["comment"];
               updateState(id,newState,unmappedState,sequenceNumber,tag,comment,origin,isGlobalSystem);
@@ -123,14 +123,38 @@ ECS Dashboard
           else if (type == "permissionTimeout"){
             $('#alertBox').css('visibility', 'visible');
             $('#alertBox').html("<strong>Warning!</strong> Your permission timed out")
-            $('#controlLink').html("take control of {{view.pcaObject}}")
+            $('#controlLink').html("take control of ecs")
             $('#controlLink').attr("href", "{% url 'GUI:take_control' 'ecs' 'ecs'%}");
+            {% for pca,user in view.usersInPCAControl.items %}
+              $('#PCAcontrolLink{{pca}}').html("take control of {{pca}}")
+              $('#PCAcontrolLink{{pca}}').attr("href", "{% url 'GUI:take_control' pca 'ecs'%}");
+            {% endfor %}
           }
       };
   }
   createWebSocket()
 </script>
 {% endblock script %}
+
+{% block control %}
+  {{block.super}}
+  {% if perms.GUI.can_take_control %}
+    {% for pca,user in view.usersInPCAControl.items %}
+      {%if user == None %}
+        <a id="PCAcontrolLink{{pca}}" class="dropdown-item" href="{% url 'GUI:take_control' pca 'ecs'%}">take control of {{pca}}</a>
+      {% elif user != "You" %}
+        <h5 class="dropdown-header">Control of PCA {{pca}} already Taken by User : {{user}}</h5>
+      {%else%}
+        <h5 class="dropdown-header">You are currently controlling the Partition</h5>
+        <a id="PCAcontrolLink{{pca}}" class="dropdown-item" href="{% url 'GUI:giveup_control' pca 'ecs'%}">give up control of {{pca}}</a>
+      {% endif %}
+      <div class="dropdown-divider"></div>
+    {% endfor %}
+  {% endif %}
+  {% if view.userInControl and view.userInControl != "You" %}
+    <h5 class="dropdown-header">Control already Taken by User : {{view.userInControl}}</h5>
+  {% endif %}
+{% endblock %}
 
 {% block sideAndTopBar %}
   {{block.super}}

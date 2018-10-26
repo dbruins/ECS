@@ -1,0 +1,137 @@
+{% extends "GUI/base.html" %}
+
+{% block title %}
+ECS Clients
+{% endblock %}
+
+{% block script %}
+<script>
+$(document).ready(function() {
+  $('.start').click(start)
+  $('.stop').click(stop)
+});
+function start (e) {
+  id = e.target.id
+  type = $("#"+id).attr("componentType");
+  e.preventDefault();
+  $.ajax({
+      type: "POST",
+      url: "{% url 'GUI:clients'%}",
+      data:{csrfmiddlewaretoken: '{{ csrf_token }}',"id": id, "type":type, "action": "start"},
+      statusCode: {
+        200: function(){
+          $('#'+id).unbind();
+          $('#'+id).html('stop');
+          $('#'+id).click(stop);
+          $('#alertBox').css('visibility', 'hidden');
+        },
+        500: function(){
+          $('#alertBox').css('visibility', 'visible');
+          $('#alertBox').html("<strong>Error starting client for "+id+"</strong>");
+        },
+      },
+      "success": function(result) {
+        $('#pid'+id).html("Running with pid "+result["pid"]);
+      },
+  });
+}
+function stop (e) {
+  id = e.target.id;
+  type = $("#"+id).attr("componentType");
+  e.preventDefault();
+  $.ajax({
+      type: "POST",
+      url: "{% url 'GUI:clients'%}",
+      data:{csrfmiddlewaretoken: '{{ csrf_token }}',"id": id, "type":type, "action": "stop"},
+      statusCode: {
+        200: function(){
+          $('#'+id).unbind();
+          $('#'+id).html('start');
+          $('#'+id).click(start);
+          $('#alertBox').css('visibility', 'hidden');
+        },
+        500: function(){
+          $('#alertBox').css('visibility', 'visible');
+          $('#alertBox').html("<strong>Error stopping client for "+id+"</strong>");
+        },
+      },
+      "success": function() {
+          $('#pid'+id).html("Not Running");
+      },
+  });
+}
+</script>
+{% endblock script %}
+
+{% block sideAndTopBar %}
+  {{block.super}}
+{% endblock %}
+
+{% block breadcrumb %}
+  <li class="breadcrumb-item">
+    <a href="{% url 'GUI:index' %}">Overview</a>
+  </li>
+  <li class="breadcrumb-item active">Clients</li>
+{% endblock %}
+
+{% block content %}
+  <div class="alert alert-danger" id="alertBox" style="visibility: hidden"></div>
+  <table class="table table-bordered" id="pcaTable">
+    <tr>
+      <th class="col-md-3">Partition</th>
+      <th class="col-md-3">Status</th>
+      <th class="col-md-2">Action</th>
+    </tr>
+    {% for pca in view.pcas.items %}
+      <tr>
+        <td>{{pca.0}}</td>
+        {% if pca.1%}
+          <td id="pid{{pca.0}}">Running with pid {{pca.1}}</td>
+          <td><button id="{{pca.0}}" class="btn btn-primary stop" componentType="partition">stop</button></td>
+        {% else %}
+          <td id="pid{{pca.0}}">Not Running</td>
+          <td><button id="{{pca.0}}" class="btn btn-primary start" componentType="partition">start</button></td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+  </table>
+
+  <table class="table table-bordered" id="detectorTable">
+    <tr>
+      <th class="col-md-3">Detector</th>
+      <th class="col-md-3">Status</th>
+      <th class="col-md-2">Action</th>
+    </tr>
+    {% for det in view.detectors.items %}
+      <tr>
+        <td>{{det.0}}</td>
+        {% if det.1%}
+          <td id="pid{{det.0}}">Running with pid {{det.1}}</td>
+          <td><button id="{{det.0}}" class="btn btn-primary stop" componentType="detector">stop</button></td>
+        {% else %}
+          <td id="pid{{det.0}}">Not Running</td>
+          <td><button id="{{det.0}}" class="btn btn-primary start" componentType="detector">start</button></td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+  </table>
+  <table class="table table-bordered" id="detectorTable">
+    <tr>
+      <th class="col-md-3">Global System</th>
+      <th class="col-md-3">Status</th>
+      <th class="col-md-2">Action</th>
+    </tr>
+    {% for gs in view.globalSystems.items %}
+      <tr>
+        <td>{{gs.0}}</td>
+        {% if gs.1%}
+          <td id="pid{{gs.0}}">Running with pid {{gs.1}}</td>
+          <td><button id="{{gs.0}}" class="btn btn-primary stop" componentType="global">stop</button></td>
+        {% else %}
+          <td id="pid{{gs.0}}">Not Running</td>
+          <td><button id="{{gs.0}}" class="btn btn-primary start" componentType="global">start</button></td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+  </table>
+{% endblock content %}

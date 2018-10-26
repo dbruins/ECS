@@ -201,6 +201,19 @@ class DetectorA(Detector):
             return False
         return self.transitionRequest(DetectorTransitions.abort)
 
+class DetectorB(Detector):
+
+    def getReady(self,configTag):
+        if self.getMappedState() not in {DetectorStates.Unconfigured, DetectorStates.ConnectionProblem}:
+            self.logfunction("nothing to be done for Detector %s" % self.id)
+            return True
+        return self.transitionRequest(DetectorTransitions.configure,configTag)
+
+    def abort(self):
+        if not self.stateMachine.checkIfPossible(DetectorTransitions.abort):
+            return False
+        return self.transitionRequest(DetectorTransitions.abort)
+
 class GlobalSystemComponent(PartitionComponent):
     def __init__(self,pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
         self.pcaId = pcaId
@@ -374,25 +387,6 @@ class FLES(GlobalSystemComponent):
         if not self.stateMachine.checkIfPossible(FLESTransitions.abort):
             return False
         return self.transitionRequest(FLESTransitions.abort)
-
-
-class DetectorB(Detector):
-    def getReady(self):
-        self.powerOn()
-        self.configure()
-
-    def powerOn(self):
-        self.stateMachine.transition("poweron")
-    def start(self):
-        self.stateMachine.transition("start")
-    def stop(self):
-        self.stateMachine.transition("stop")
-    def powerOff(self):
-        self.stateMachine.transition("poweroff")
-    def configure(self):
-        self.stateMachine.transition("configure")
-    def reconfigure(self):
-        self.stateMachine.transition("reconfigure")
 
 class DetectorTypes:
     typeList = {

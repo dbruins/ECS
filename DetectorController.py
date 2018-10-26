@@ -17,51 +17,25 @@ import zc.lockfile
 
 class DetectorController:
 
-    def __init__(self,id,startState="Unconfigured"):
+    def __init__(self,detectorData,startState="Unconfigured"):
+        self.MyId = detectorData.id
         #create lock
         try:
-            self.lock = zc.lockfile.LockFile('/tmp/lock'+id, content_template='{pid}')
+            self.lock = zc.lockfile.LockFile('/tmp/lock'+self.MyId, content_template='{pid}')
         except zc.lockfile.LockError:
-            print("other Process is already Running "+id)
+            print("other Process is already Running "+self.MyId)
             exit(1)
-
         self.context = zmq.Context()
-        self.MyId = id
         self.scriptProcess = None
         self.abort = False
 
-        #get pca data from ECS
         config = configparser.ConfigParser()
         config.read("init.cfg")
         self.conf = config["Default"]
-        self.receive_timeout = int(self.conf['receive_timeout'])
-
-        #get Detector Information
-        detectorData = None
-        while detectorData == None:
-            try:
-                requestSocket = self.context.socket(zmq.REQ)
-                requestSocket.connect("tcp://%s:%s" % (self.conf['ECSAddress'],self.conf['ECSRequestPort']))
-                requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-                requestSocket.setsockopt(zmq.LINGER,0)
-
-                requestSocket.send_multipart([codes.getDetectorForId, self.MyId.encode()])
-                detectorDataJSON = requestSocket.recv()
-                if detectorDataJSON == codes.idUnknown:
-                    print("The ECS doesn't know who I am :(")
-                    sys.exit(1)
-                detectorDataJSON = json.loads(detectorDataJSON.decode())
-                detectorData = detectorDataObject(detectorDataJSON)
-            except zmq.Again:
-                print("timeout getting detector Data")
-                continue
-            except zmq.error.ContextTerminated:
-                pass
-            finally:
-                requestSocket.close()
 
         self.portTransition = detectorData.portTransition
         self.portCommand = detectorData.portCommand
+        self.receive_timeout = int(self.conf['receive_timeout'])
 
         #get PCA Information
         pcaData = None
@@ -332,16 +306,119 @@ class DetectorA(DetectorController):
             self.transition(DetectorTransitions.abort)
             self.sendUpdate()
 
+class DetectorB(DetectorController):
+    def waitForTransition(self):
+        while True:
+            try:
+                ret = self.socketReceiver.recv_multipart()
+                print(ret)
+                if len(ret)  == 2:
+                    command,tag = ret
+                    command = command.decode()
+                    tag = tag.decode()
+                else:
+                    command = ret[0].decode()
+                    tag=None
+                if self.stateMachine.currentState not in {DetectorStates.Active,DetectorStates.Unconfigured} and command != DetectorTransitions.abort:
+                    self.socketReceiver.send(codes.busy)
+                    print("busy")
+                    continue
+                elif not self.stateMachine.checkIfPossible(command):
+                    self.socketReceiver.send(codes.error)
+                    print("error")
+                    continue
+                else:
+                    self.socketReceiver.send(codes.ok)
+                self.abort = False
+                if command == DetectorTransitions.configure:
+                    self.transition(DetectorTransitions.configure,tag)
+                    self.inTransition = True
+                    self.sendUpdate()
+                    workThread = threading.Thread(name="worker", target=self.getReady, args=(tag,))
+                    workThread.start()
+                if command == DetectorTransitions.abort:
+                    self.abortFunction()
+            except zmq.error.ContextTerminated:
+                self.socketReceiver.close()
+                break
+
+    def getReady(self,tag):
+        for i in range(0,3):
+            ret = self.executeScript("detectorScript.sh")
+            if ret:
+                self.transition(DetectorTransitions.success,tag)
+                self.sendUpdate()
+            else:
+                if self.abort:
+                    self.abort = False
+                    self.transition(DetectorTransitions.abort)
+                    self.inTransition = False
+                    self.sendUpdate("transition aborted")
+                    break
+                self.transition(DetectorTransitions.error)
+                self.sendUpdate("transition failed")
+                self.inTransition = False
+                break
+        self.inTransition = False
+
+
+    def executeScript(self,scriptname):
+        self.scriptProcess = subprocess.Popen(["exec ./"+scriptname], shell=True)
+        ret = self.scriptProcess.wait()
+        if ret:
+            return False
+        else:
+            return True
+
+    def abortFunction(self):
+        #terminate Transition if active
+        if self.inTransition:
+            self.abort = True
+            if self.scriptProcess:
+                self.scriptProcess.terminate()
+        else:
+            self.transition(DetectorTransitions.abort)
+            self.sendUpdate()
+
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("please enter the detector id")
         sys.exit(1)
-    if len(sys.argv) == 3:
-        test = DetectorA(sys.argv[1],sys.argv[2])
     else:
-        test = DetectorA(sys.argv[1])
+        #get Detector Information
+        config = configparser.ConfigParser()
+        config.read("init.cfg")
+        conf = config["Default"]
+        detectorData = None
+        while detectorData == None:
+            try:
+                context = zmq.Context()
+                requestSocket = context.socket(zmq.REQ)
+                requestSocket.connect("tcp://%s:%s" % (conf['ECSAddress'],conf['ECSRequestPort']))
+                requestSocket.setsockopt(zmq.RCVTIMEO, int(conf['receive_timeout']))
+                requestSocket.setsockopt(zmq.LINGER,0)
+
+                requestSocket.send_multipart([codes.getDetectorForId, sys.argv[1].encode()])
+                detectorDataJSON = requestSocket.recv()
+                if detectorDataJSON == codes.idUnknown:
+                    print("The ECS doesn't know who I am :(")
+                    sys.exit(1)
+                detectorDataJSON = json.loads(detectorDataJSON.decode())
+                detectorData = detectorDataObject(detectorDataJSON)
+            except zmq.Again:
+                print("timeout getting detector Data")
+                continue
+            finally:
+                requestSocket.close()
+                context.term()
+        if detectorData.type == "DetectorA":
+            test = DetectorA(detectorData)
+        elif detectorData.type == "DetectorB":
+            test = DetectorB(detectorData)
+        else:
+            raise Exception("Detector Type unknown")
     while True:
         try:
             x = input()

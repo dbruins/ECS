@@ -9,7 +9,7 @@ PCA{{view.pcaId}} Monitor
 function createWebSocket(){
     var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/{{pcaId}}/');
 
-    function updateState(id,newState,unmappedState,sequenceNumber,tag,comment,isGlobalSystem){
+    function updateState(id,newState,unmappedState,sequenceNumber,tag,comment,isGlobalSystem,buttons){
       cssClass = newState;
       stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>';
       if (tag == ""){
@@ -18,6 +18,11 @@ function createWebSocket(){
       if (id == "{{view.pcaId}}"){
         $("#global").html(stateCircle+newState);
         $("#globalTag").html(tag);
+        if (buttons){
+          $("#ready").prop("disabled",!buttons["configure"]);
+          $("#start").prop("disabled",!buttons["start"]);
+          $("#stop").prop("disabled",!buttons["stop"]);
+        }
         return;
       }
       var stateObject = $('#dState'+id);
@@ -57,7 +62,8 @@ function createWebSocket(){
                 var unmappedState = stateObject["unmappedState"];
                 var tag = (stateObject["configTag"] == undefined) ? "" : stateObject["configTag"];
                 var comment = (stateObject["comment"] == undefined) ? "" : stateObject["comment"];
-                updateState(id,newState,unmappedState,sequenceNumber,tag,comment,isGlobalSystem);
+                var buttons = result["buttons"]
+                updateState(id,newState,unmappedState,sequenceNumber,tag,comment,isGlobalSystem,buttons);
               }
               if (log){
                 //empty log
@@ -98,10 +104,14 @@ function createWebSocket(){
             var newState = stateObject["state"];
             var sequenceNumber = update['sequenceNumber'];
             var unmappedState = stateObject["unmappedState"];
-            var isGlobalSystem = stateObject["isGlobalSystem"];
+            var isGlobalSystem = update["isGlobalSystem"];
             var tag = (stateObject["configTag"] == undefined) ? "" : stateObject["configTag"];
             var comment = (stateObject["comment"] == undefined) ? "" : stateObject["comment"];
-            updateState(id,newState,unmappedState,sequenceNumber,tag,comment,isGlobalSystem);
+            if ("buttons" in update)
+              var buttons = update["buttons"];
+            else
+              var buttons = undefined;
+            updateState(id,newState,unmappedState,sequenceNumber,tag,comment,isGlobalSystem,buttons);
           }
         }
         else if (type == "log"){
@@ -183,28 +193,31 @@ $(document).ready(function() {
 {% endblock %}
 
 {% block control %}
-  {% load guardian_tags %}
-  {% get_obj_perms request.user for view.pcaObject as "pcaPerms" %}
-  {% get_obj_perms request.user for view.ecsObject as "ecsPerms" %}
-  {% if view.userInControl and view.userInControl != "You" %}
-    <h5 class="dropdown-header">Control already Taken by User : {{view.userInControl}}</h5>
+  {% if perms.GUI.can_take_control %}
+    {% load guardian_tags %}
+    {% get_obj_perms request.user for view.pcaObject as "pcaPerms" %}
+    {% get_obj_perms request.user for view.ecsObject as "ecsPerms" %}
+    {% if view.userInControl and view.userInControl != "You" %}
+      <h5 class="dropdown-header">Control already Taken by User : {{view.userInControl}}</h5>
+    {% endif %}
+    {% if "has_control" in ecsPerms %}
+      <h5 class="dropdown-header">You are currently controlling the ECS</h5>
+      <a id="controlLink" class="dropdown-item" href="{% url 'GUI:giveup_control' 'ecs' pcaId%}">give up control of {{view.ecsObject}}</a>
+    {% elif not view.userInControl %}
+      <a id="controlLink" class="dropdown-item" href="{% url 'GUI:take_control' 'ecs' pcaId%}">take control of {{view.ecsObject}}</a>
+    {% endif %}
+    <div class="dropdown-divider"></div>
+    {% if view.userInPCAControl and view.userInPCAControl != "You" %}
+      <h5 class="dropdown-header">Control of PCA {{view.pcaId}} already Taken by User : {{view.userInControl}}</h5>
+    {% endif %}
+    {% if "has_control" in pcaPerms %}
+      <h5 class="dropdown-header">You are currently controlling the Partition</h5>
+      <a id="PCAcontrolLink" class="dropdown-item" href="{% url 'GUI:giveup_control' pcaId pcaId%}">give up control of {{view.pcaObject}}</a>
+    {% elif not view.userInPCAControl %}
+      <a id="PCAcontrolLink" class="dropdown-item" href="{% url 'GUI:take_control' pcaId pcaId%}">take control of {{view.pcaObject}}</a>
+    {% endif %}
+    <div class="dropdown-divider"></div>
   {% endif %}
-  {% if "has_control" in ecsPerms %}
-    <h5 class="dropdown-header">You are currently controlling the ECS</h5>
-    <a id="controlLink" class="dropdown-item" href="{% url 'GUI:giveup_control' 'ecs' pcaId%}">give up control of {{view.ecsObject}}</a>
-  {% elif not view.userInControl %}
-    <a id="controlLink" class="dropdown-item" href="{% url 'GUI:take_control' 'ecs' pcaId%}">take control of {{view.ecsObject}}</a>
-  {% endif %}
-  {% if view.userInPCAControl and view.userInPCAControl != "You" %}
-    <h5 class="dropdown-header">Control of PCA {{view.pcaId}} already Taken by User : {{view.userInControl}}</h5>
-  {% endif %}
-  {% if "has_control" in pcaPerms %}
-    <h5 class="dropdown-header">You are currently controlling the Partition</h5>
-    <a id="PCAcontrolLink" class="dropdown-item" href="{% url 'GUI:giveup_control' pcaId pcaId%}">give up control of {{view.pcaObject}}</a>
-  {% elif not view.userInPCAControl %}
-    <a id="PCAcontrolLink" class="dropdown-item" href="{% url 'GUI:take_control' pcaId pcaId%}">take control of {{view.pcaObject}}</a>
-  {% endif %}
-  <div class="dropdown-divider"></div>
 {% endblock %}
 
 {% block breadcrumb %}
