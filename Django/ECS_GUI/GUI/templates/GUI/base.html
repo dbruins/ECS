@@ -79,13 +79,13 @@
 
       <!-- Sidebar -->
       <ul class="sidebar navbar-nav">
-        <li class="nav-item active">
+        <li class="nav-item {% block index%}{% endblock %}">
           <a class="nav-link" href="{% url 'GUI:index' %}">
             <i class="fas fa-fw fa-tachometer-alt"></i>
             <span>Overview</span>
           </a>
         </li>
-        <li class="nav-item dropdown">
+        <li class="nav-item dropdown {% block pca%}{% endblock %}">
           <a class="nav-link dropdown-toggle" href="#" id="pcaDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
             <i class="fas fa-fw fa-desktop"></i>
             <span>PCAs</span>
@@ -100,7 +100,7 @@
           </div>
         </li>
         {% if "has_control" in ecsPerms %}
-        <li class="nav-item dropdown">
+        <li class="nav-item dropdown {% block detectorActivity%}{% endblock %}">
           <a class="nav-link dropdown-toggle" href="#" id="detectorActDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
             <i class="fas fa-fw fa-desktop"></i>
             <span>Detector Activities</span>
@@ -111,7 +111,7 @@
             <a class="dropdown-item" href="{% url 'GUI:move_detectors' %}">Move Detector</a>
           </div>
         </li>
-        <li class="nav-item dropdown">
+        <li class="nav-item dropdown {% block partitionActivity%}{% endblock %}">
           <a class="nav-link dropdown-toggle" href="#" id="partitionActDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
             <i class="fas fa-fw fa-desktop"></i>
             <span>Partition Activities</span>
@@ -121,7 +121,7 @@
             <a class="dropdown-item" href="{% url 'GUI:delete_pca' %}">Delete Partition</a>
           </div>
         </li>
-        <li class="nav-item">
+        <li class="nav-item {% block clients%}{% endblock %}">
           <a class="nav-link" href="{% url 'GUI:clients' %}"  role="button" >
             <i class="fas fa-fw fa-desktop"></i>
             <span>Clients</span>

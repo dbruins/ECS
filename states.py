@@ -10,7 +10,10 @@ class PCAStates:
     QA_Active = "QA_Active"
     Recording = "Recording"
 
+    #states in which PCA is configuring somethings
     configuringStates = {Configuring_TFC,Configuring_Detectors,Configuring_FLES_and_DCS,Configuring_QA}
+
+    #states in which configuring button should be enabled
     configuringEnabled = {Idle,TFC_Active,Detectors_Active,FLES_and_DCS_Active}
     startEnabled = {QA_Active}
     stopEnabled = {Recording}
@@ -19,6 +22,7 @@ class PCAStates:
         return state in self.configuringStates
 
     def isActiveState(self,state):
+        """checks wether PCA is in a configuring state or Recording State"""
         return state in self.configuringStates.union([self.Recording])
 
     def UIButtonsForState(self,state):

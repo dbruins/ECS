@@ -32,6 +32,7 @@ class GlobalSystemClient:
         self.receive_timeout = int(self.conf['receive_timeout'])
 
         self.context = zmq.Context()
+        self.context.setsockopt(zmq.LINGER,0)
         self.scriptProcess = None
         self.abort = False
 
@@ -42,7 +43,6 @@ class GlobalSystemClient:
                 requestSocket = self.context.socket(zmq.REQ)
                 requestSocket.connect("tcp://%s:%s" % (self.conf['ECSAddress'],self.conf['ECSRequestPort']))
                 requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-                requestSocket.setsockopt(zmq.LINGER,0)
 
                 requestSocket.send_multipart([codes.getAllPCAs])
                 partitions = requestSocket.recv()
@@ -63,6 +63,7 @@ class GlobalSystemClient:
             finally:
                 requestSocket.close()
 
+        #holds information which detector belongs to which Partition
         self.detectorMapping = {}
         for m in mapping:
             self.detectorMapping[m.detectorId] = m.partitionId
@@ -77,10 +78,14 @@ class GlobalSystemClient:
         self.PCAs = {}
         self.isPCAinTransition = {}
         self.pcaConfigTag = {}
+        self.pcaSequenceNumber = {}
+        self.pcaStatemachineLock = {}
         for p in partitions:
             self.PCAs[p.id] = p
             self.StateMachineForPca[p.id] = Statemachine(self.StateMachineFile,"Unconfigured")
             self.isPCAinTransition[p.id] = False
+            self.pcaSequenceNumber[p.id] = 0
+            self.pcaStatemachineLock[p.id] = threading.Lock()
 
         self.commandSocket = self.context.socket(zmq.REP)
         self.commandSocket.bind("tcp://*:%i" % globalSystemInfo.portCommand)
@@ -91,11 +96,13 @@ class GlobalSystemClient:
         t = threading.Thread(name="waitForCommands", target=self.waitForCommands)
         t.start()
 
-    def sendUpdate(self,pcaId,comment=None):
+    def sendUpdate(self,pcaId,sequenceNumber,comment=None):
+        """send current status update to a Parition with id pcaId"""
         partition = self.PCAs[pcaId]
         data = {
             "id": self.MyId,
-            "state": self.StateMachineForPca[partition.id].currentState
+            "state": self.StateMachineForPca[partition.id].currentState,
+            "sequenceNumber": sequenceNumber,
         }
         if pcaId in self.pcaConfigTag:
             data["tag"] = self.pcaConfigTag[pcaId]
@@ -104,14 +111,18 @@ class GlobalSystemClient:
         try:
             socketSendUpdateToPCA = self.context.socket(zmq.REQ)
             socketSendUpdateToPCA.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-            socketSendUpdateToPCA.setsockopt(zmq.LINGER,0)
             socketSendUpdateToPCA.connect("tcp://%s:%s" % (partition.address,partition.portUpdates))
             socketSendUpdateToPCA.send(json.dumps(data).encode())
             r = socketSendUpdateToPCA.recv()
             if r == codes.idUnknown:
                 print("Partition does not know %s bad,very bad" % self.MyId)
         except zmq.Again:
-            print("timeout sending status")
+            print("timeout sending status %s" % pcaId)
+            if sequenceNumber < self.pcaSequenceNumber[pcaId]:
+                #if there is already a new update give up
+                return
+            #resend update
+            self.sendUpdate(pcaId,sequenceNumber,comment)
         except zmq.error.ContextTerminated:
             pass
         except Exception as e:
@@ -172,19 +183,32 @@ class GlobalSystemClient:
 
     def sendUpdateToAll(self,comment=None):
         for pca in self.PCAs:
-            self.sendUpdate(pca)
+            t = threading.Thread(name='update'+str(0), target=self.sendUpdate, args=(pca,0,))
+            t.start()
+            #self.sendUpdate(pca,0)
 
     def abortAll(self):
         for partition in self.PCAs:
             self.abortFunction(partition.id)
 
-    def transition(self,pcaId,command,tag=None):
-        self.StateMachineForPca[pcaId].transition(command)
-        if tag:
-            self.pcaConfigTag[pcaId] = tag
-        else:
-            if pcaId in self.pcaConfigTag:
-                del self.pcaConfigTag[pcaId]
+    def transition(self,pcaId,transition,tag=None,comment=None):
+        try:
+            self.pcaStatemachineLock[pcaId].acquire()
+            if self.StateMachineForPca[pcaId].transition(transition):
+                if tag:
+                    self.pcaConfigTag[pcaId] = tag
+                else:
+                    if pcaId in self.pcaConfigTag:
+                        del self.pcaConfigTag[pcaId]
+                self.pcaSequenceNumber[pcaId] = self.pcaSequenceNumber[pcaId]+1
+                sequenceNumber = self.pcaSequenceNumber[pcaId]
+                self.pcaStatemachineLock[pcaId].release()
+                #self.sendUpdate(pcaId,sequenceNumber,comment)
+                t = threading.Thread(name='update'+str(0), target=self.sendUpdate, args=(pcaId,sequenceNumber,comment))
+                t.start()
+        finally:
+            if self.pcaStatemachineLock[pcaId].locked():
+                self.pcaStatemachineLock[pcaId].release()
 
     def executeScript(self,scriptname):
         self.scriptProcess = subprocess.Popen(["exec ./"+scriptname], shell=True)
@@ -208,6 +232,7 @@ class DCSClient(GlobalSystemClient):
 
 
     def waitForCommands(self):
+        """wait for command on the command socket"""
         while True:
             try:
                 message = self.commandSocket.recv_multipart()
@@ -232,7 +257,6 @@ class DCSClient(GlobalSystemClient):
                         self.commandSocket.send(codes.ok)
                         self.transition(pcaId,DCSTransitions.configure,tag)
                         self.isPCAinTransition[pcaId] = True
-                        self.sendUpdate(pcaId)
                         workThread = threading.Thread(name="worker", target=self.configure, args=(pcaId,tag))
                         workThread.start()
                         continue
@@ -253,16 +277,13 @@ class DCSClient(GlobalSystemClient):
         if ret:
             if self.abort:
                 self.abort = False
-                self.transition(pcaId,DCSTransitions.abort)
+                self.transition(pcaId,DCSTransitions.abort,comment="transition aborted")
                 self.isPCAinTransition[pcaId] = False
-                self.sendUpdate(pcaId,"transition aborted")
                 return
             self.transition(pcaId,DCSTransitions.success,tag)
             self.isPCAinTransition[pcaId] = False
-            self.sendUpdate(pcaId)
         else:
-            self.transition(pcaId,DCSTransitions.error)
-            self.sendUpdate(pcaId,"transition failed")
+            self.transition(pcaId,DCSTransitions.error,comment="transition failed")
             self.isPCAinTransition[pcaId] = False
 
     def abortFunction(self,pcaId):
@@ -272,7 +293,6 @@ class DCSClient(GlobalSystemClient):
             self.scriptProcess.terminate()
         else:
             self.transition(pcaId,DCSTransitions.abort)
-            self.sendUpdate(pcaId)
 
     def waitForDCSMessages(self,message):
         detId,message = message
@@ -333,7 +353,6 @@ class TFCClient(GlobalSystemClient):
                         self.commandSocket.send(codes.ok)
                         self.transition(pcaId,TFCTransitions.configure,tag)
                         self.isPCAinTransition[pcaId] = True
-                        self.sendUpdate(pcaId)
                         workThread = threading.Thread(name="worker", target=self.configure, args=(pcaId,tag))
                         workThread.start()
                         continue
@@ -354,16 +373,13 @@ class TFCClient(GlobalSystemClient):
         if ret:
             if self.abort:
                 self.abort = False
-                self.transition(pcaId,TFCTransitions.abort)
+                self.transition(pcaId,TFCTransitions.abort,comment="transition aborted")
                 self.isPCAinTransition[pcaId] = False
-                self.sendUpdate(pcaId,"transition aborted")
                 return
             self.transition(pcaId,TFCTransitions.success,tag)
             self.isPCAinTransition[pcaId] = False
-            self.sendUpdate(pcaId)
         else:
-            self.transition(pcaId,TFCTransitions.error)
-            self.sendUpdate(pcaId,"transition failed")
+            self.transition(pcaId,TFCTransitions.error,comment="transition failed")
             self.isPCAinTransition[pcaId] = False
 
     def abortFunction(self,pcaId):
@@ -373,7 +389,6 @@ class TFCClient(GlobalSystemClient):
             self.scriptProcess.terminate()
         else:
             self.transition(pcaId,TFCTransitions.abort)
-            self.sendUpdate(pcaId)
 
 class QAClient(GlobalSystemClient):
     def __init__(self):
@@ -381,6 +396,7 @@ class QAClient(GlobalSystemClient):
 
 
     def waitForCommands(self):
+        """wait for command on the command socket"""
         while True:
             try:
                 message = self.commandSocket.recv_multipart()
@@ -405,7 +421,6 @@ class QAClient(GlobalSystemClient):
                         self.commandSocket.send(codes.ok)
                         self.transition(pcaId,QATransitions.configure,tag)
                         self.isPCAinTransition[pcaId] = True
-                        self.sendUpdate(pcaId)
                         workThread = threading.Thread(name="worker", target=self.configure, args=(pcaId,tag))
                         workThread.start()
                         continue
@@ -420,7 +435,6 @@ class QAClient(GlobalSystemClient):
                     if pcaId and pcaId in self.PCAs:
                         self.commandSocket.send(codes.ok)
                         self.transition(pcaId,QATransitions.start,self.pcaConfigTag[pcaId])
-                        self.sendUpdate(pcaId)
                     else:
                         self.commandSocket.send(codes.error)
                     continue
@@ -428,7 +442,6 @@ class QAClient(GlobalSystemClient):
                     if pcaId and pcaId in self.PCAs:
                         self.commandSocket.send(codes.ok)
                         self.transition(pcaId,QATransitions.stop,self.pcaConfigTag[pcaId])
-                        self.sendUpdate(pcaId)
                     else:
                         self.commandSocket.send(codes.error)
                     continue
@@ -442,16 +455,13 @@ class QAClient(GlobalSystemClient):
         if ret:
             if self.abort:
                 self.abort = False
-                self.transition(pcaId,QATransitions.abort)
+                self.transition(pcaId,QATransitions.abort,comment="transition aborted")
                 self.isPCAinTransition[pcaId] = False
-                self.sendUpdate(pcaId,"transition aborted")
                 return
             self.transition(pcaId,QATransitions.success,tag)
             self.isPCAinTransition[pcaId] = False
-            self.sendUpdate(pcaId)
         else:
-            self.transition(pcaId,QATransitions.error)
-            self.sendUpdate(pcaId,"transition failed")
+            self.transition(pcaId,QATransitions.error,comment="transition failed")
             self.isPCAinTransition[pcaId] = False
 
     def abortFunction(self,pcaId):
@@ -461,7 +471,6 @@ class QAClient(GlobalSystemClient):
             self.scriptProcess.terminate()
         else:
             self.transition(pcaId,QATransitions.abort)
-            self.sendUpdate(pcaId)
 
     def waitForQAMessages(self,message):
         detId,message = message
@@ -499,6 +508,7 @@ class FLESClient(GlobalSystemClient):
 
 
     def waitForCommands(self):
+        """wait for command on the command socket"""
         while True:
             try:
                 message = self.commandSocket.recv_multipart()
@@ -523,7 +533,6 @@ class FLESClient(GlobalSystemClient):
                         self.commandSocket.send(codes.ok)
                         self.transition(pcaId,FLESTransitions.configure,tag)
                         self.isPCAinTransition[pcaId] = True
-                        self.sendUpdate(pcaId)
                         self.configure(pcaId,tag)
                         #workThread = threading.Thread(name="worker", target=self.configure, args=(pcaId,tag))
                         #workThread.start()
@@ -539,7 +548,6 @@ class FLESClient(GlobalSystemClient):
                     if pcaId and pcaId in self.PCAs:
                         self.commandSocket.send(codes.ok)
                         self.transition(pcaId,FLESTransitions.start,self.pcaConfigTag[pcaId])
-                        self.sendUpdate(pcaId)
                     else:
                         self.commandSocket.send(codes.error)
                     continue
@@ -547,7 +555,6 @@ class FLESClient(GlobalSystemClient):
                     if pcaId and pcaId in self.PCAs:
                         self.commandSocket.send(codes.ok)
                         self.transition(pcaId,FLESTransitions.stop,self.pcaConfigTag[pcaId])
-                        self.sendUpdate(pcaId)
                     else:
                         self.commandSocket.send(codes.error)
                     continue
@@ -555,7 +562,28 @@ class FLESClient(GlobalSystemClient):
             except zmq.error.ContextTerminated:
                 self.commandSocket.close()
                 break
+    def configure(self,pcaId,tag):
+        ret = self.executeScript("detectorScript.sh")
+        if ret:
+            if self.abort:
+                self.abort = False
+                self.transition(pcaId,QATransitions.abort,comment="transition aborted")
+                self.isPCAinTransition[pcaId] = False
+                return
+            self.transition(pcaId,QATransitions.success,tag)
+            self.isPCAinTransition[pcaId] = False
+        else:
+            self.transition(pcaId,QATransitions.error,comment="transition failed")
+            self.isPCAinTransition[pcaId] = False
 
+    def abortFunction(self,pcaId):
+        #terminate Transition if active
+        if self.isPCAinTransition[pcaId]:
+            self.abort = True
+            self.scriptProcess.terminate()
+        else:
+            self.transition(pcaId,QATransitions.abort)
+"""
     def checkIfRunning(self,jobId,pcaId):
         ret = "RUNNING"
         while ret=="RUNNING":
@@ -567,34 +595,29 @@ class FLESClient(GlobalSystemClient):
 
     def executeScript(self,scriptname):
         #self.scriptProcess = subprocess.check_output(["exec ./"+scriptname], shell=True)
-        try:
-            ret = subprocess.check_output([scriptname], shell=True)
-            ret = re.search("job (\d+)",str(ret)).group(1)
-        except:
-            ret = False
-        return ret
+        ret = subprocess.check_output([scriptname], shell=True)
+        ret = re.search("job (\d+)",str(ret))
+        if ret == None:
+            return False
+        return ret.group(1)
 
     def configure(self,pcaId,tag):
-        ret = self.executeScript("bash -c 'cd ~/flesnet; ./start_readout readout.cfg'")
-        self.jobIds[pcaId] = ret
+        ret = self.executeScript("bash -c 'cd ~/flesnet; ./startTest readoutTest.cfg'")
         print(ret)
-        workThread = threading.Thread(name="worker", target=self.checkIfRunning, args=(ret,pcaId))
-        workThread.start()
         if ret:
+            self.jobIds[pcaId] = ret
+            workThread = threading.Thread(name="worker", target=self.checkIfRunning, args=(ret,pcaId))
+            workThread.start()
             if self.abort:
                 self.abort = False
-                self.transition(pcaId,FLESTransitions.abort)
+                self.transition(pcaId,FLESTransitions.abort,comment="transition aborted")
                 self.isPCAinTransition[pcaId] = False
-                self.sendUpdate(pcaId,"transition aborted")
                 return
             self.transition(pcaId,FLESTransitions.success,tag)
             self.isPCAinTransition[pcaId] = False
-            self.sendUpdate(pcaId)
         else:
-            self.transition(pcaId,FLESTransitions.error)
-            self.sendUpdate(pcaId,"transition failed")
+            self.transition(pcaId,FLESTransitions.error,comment="transition failed")
             self.isPCAinTransition[pcaId] = False
-
     def abortFunction(self,pcaId):
         #terminate Transition if active
         if pcaId in self.jobIds:
@@ -604,9 +627,8 @@ class FLESClient(GlobalSystemClient):
             #self.scriptProcess.terminate()
         else:
             self.transition(pcaId,FLESTransitions.abort)
-            self.sendUpdate(pcaId)
 
-
+"""
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("please enter a SystemType (TFC,DCS,QA,FLES,all)")

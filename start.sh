@@ -1,6 +1,7 @@
 #!/bin/bash
 #start dummys
 for i in `seq 1 $1`
+#for i in `seq 50 $(($1+50))`
 do
  python3 DetectorController.py $i 1> /dev/null&
  arr[$i]=$!
@@ -16,15 +17,11 @@ if [ "$#" -gt "1" ]
     arr[$i]=$!
    done
 fi
-#python3 ./Django/ECS_GUI/manage.py runserver > /dev/null &
-#i=$((i+1))
-#arr[$i]=$!
 
-
-STR="press key to terminate\n"
 read -p "press key to terminate\n"
 
 for k in `seq 1 $i`
+#for k in `seq 50 $(($1+50))`
 do
     kill ${arr[$k]}
 done

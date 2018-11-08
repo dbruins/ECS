@@ -20,6 +20,7 @@ class PartitionComponent:
         self.logfunction = logfunction
         self.abort_bool = False
         self.currentStateObject = None
+        self.sequenceNumber = 0
 
         self.pcaReconnectFunction = pcaReconnectFunction
         self.pcaTimeoutFunction = pcaTimeoutFunction
@@ -81,7 +82,16 @@ class PartitionComponent:
                 pingSocket.close()
             time.sleep(self.pingInterval)
 
+    def checkSequence(self,sequenceNumber):
+        """returns True if given number bigger than the current one"""
+        #0 is the first client Message therefore reset sequencenumber when 0 is received
+        if sequenceNumber > self.sequenceNumber or sequenceNumber == 0:
+            self.sequenceNumber = sequenceNumber
+            return True
+        return False
+
     def setState(self,state,configTag,Comment):
+        """set the current State"""
         self.stateMachine.currentState = state
         self.currentStateObject = stateObject([self.getMappedState(),state,configTag,Comment])
 
@@ -197,7 +207,7 @@ class DetectorA(Detector):
         return self.transitionRequest(DetectorTransitions.configure,configTag)
 
     def abort(self):
-        if not self.stateMachine.checkIfPossible(DetectorTransitions.abort):
+        if self.getMappedState() == DetectorStates.ConnectionProblem or not self.stateMachine.checkIfPossible(DetectorTransitions.abort):
             return False
         return self.transitionRequest(DetectorTransitions.abort)
 
@@ -210,7 +220,7 @@ class DetectorB(Detector):
         return self.transitionRequest(DetectorTransitions.configure,configTag)
 
     def abort(self):
-        if not self.stateMachine.checkIfPossible(DetectorTransitions.abort):
+        if self.getMappedState() == DetectorStates.ConnectionProblem or not self.stateMachine.checkIfPossible(DetectorTransitions.abort):
             return False
         return self.transitionRequest(DetectorTransitions.abort)
 

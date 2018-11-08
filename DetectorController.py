@@ -14,6 +14,7 @@ from states import DetectorStates, DetectorTransitions
 import ECS_tools
 import subprocess
 import zc.lockfile
+from multiprocessing import Queue
 
 class DetectorController:
 
@@ -25,9 +26,11 @@ class DetectorController:
         except zc.lockfile.LockError:
             print("other Process is already Running "+self.MyId)
             exit(1)
-        self.context = zmq.Context()
+
         self.scriptProcess = None
         self.abort = False
+        #Lock to handle StateMachine Transition access
+        self.stateMachineLock = threading.Lock()
 
         config = configparser.ConfigParser()
         config.read("init.cfg")
@@ -35,7 +38,12 @@ class DetectorController:
 
         self.portTransition = detectorData.portTransition
         self.portCommand = detectorData.portCommand
+        #seuquence Number for sending Updates
+        self.sequenceNumber = 0
         self.receive_timeout = int(self.conf['receive_timeout'])
+
+        self.context = zmq.Context()
+        self.context.setsockopt(zmq.LINGER,0)
 
         #get PCA Information
         pcaData = None
@@ -67,7 +75,9 @@ class DetectorController:
         self.socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
 
         #send state to PCA
-        self.sendUpdate()
+        #self.sendUpdate(0)
+        t = threading.Thread(name='update'+str(0), target=self.sendUpdate, args=(0,))
+        t.start()
 
         self.inTransition = False
 
@@ -79,9 +89,8 @@ class DetectorController:
     def getPCAData(self):
         """get PCA Information from ECS"""
         requestSocket = self.context.socket(zmq.REQ)
-        requestSocket.connect("tcp://%s:%s" % (self.conf['ECSAddress'],self.conf['ECSRequestPort']))
         requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-        requestSocket.setsockopt(zmq.LINGER,0)
+        requestSocket.connect("tcp://%s:%s" % (self.conf['ECSAddress'],self.conf['ECSRequestPort']))
 
         requestSocket.send_multipart([codes.detectorAsksForPCA, self.MyId.encode()])
         try:
@@ -120,11 +129,12 @@ class DetectorController:
         ECS_tools.getStateSnapshot(self.stateMap,partition.address,partition.portCurrentState,timeout=self.receive_timeout)
 
 
-    def sendUpdate(self,comment=None):
+    def sendUpdate(self,sequenceNumber,comment=None):
         """send current state to PCA"""
         data = {
             "id": self.MyId,
-            "state": self.stateMachine.currentState
+            "state": self.stateMachine.currentState,
+            "sequenceNumber": sequenceNumber,
         }
         if self.configTag:
             data["tag"] = self.configTag
@@ -134,15 +144,21 @@ class DetectorController:
             socketSendUpdateToPCA = self.context.socket(zmq.REQ)
             socketSendUpdateToPCA.connect("tcp://%s:%s" % (self.pcaAddress,self.pcaUpdatePort))
             socketSendUpdateToPCA.send(json.dumps(data).encode())
+            #try to receive Ok from PCA
             r = socketSendUpdateToPCA.recv()
             if r == codes.idUnknown:
                 print("wrong PCA")
                 socketSendUpdateToPCA.close()
                 data = self.getPCAData()
                 self.changePCA(data)
-                self.sendUpdate(comment)
+                self.sendUpdate(sequenceNumber,comment)
         except zmq.Again:
             print("timeout sending status")
+            if sequenceNumber < self.sequenceNumber:
+                #if there is already a new update give up
+                return
+            #resend update
+            self.sendUpdate(sequenceNumber,comment)
         except zmq.error.ContextTerminated:
             pass
         except Exception as e:
@@ -227,9 +243,21 @@ class DetectorController:
     def abortFunction(self):
         pass
 
-    def transition(self,transition,tag=None):
-        self.stateMachine.transition(transition)
-        self.configTag = tag
+    def transition(self,transition,tag=None,comment=None):
+        try:
+            self.stateMachineLock.acquire()
+            if self.stateMachine.transition(transition):
+                self.configTag = tag
+                self.sequenceNumber = self.sequenceNumber+1
+                sequenceNumber = self.sequenceNumber
+                self.stateMachineLock.release()
+                t = threading.Thread(name='update'+str(sequenceNumber), target=self.sendUpdate, args=(sequenceNumber,comment))
+                t.start()
+                #self.sendUpdate(sequenceNumber,comment)
+        finally:
+            if self.stateMachineLock.locked():
+                self.stateMachineLock.release()
+
 
 class DetectorA(DetectorController):
 
@@ -259,7 +287,6 @@ class DetectorA(DetectorController):
                 if command == DetectorTransitions.configure:
                     self.transition(DetectorTransitions.configure,tag)
                     self.inTransition = True
-                    self.sendUpdate()
                     workThread = threading.Thread(name="worker", target=self.getReady, args=(tag,))
                     workThread.start()
                 if command == DetectorTransitions.abort:
@@ -273,16 +300,13 @@ class DetectorA(DetectorController):
             ret = self.executeScript("detectorScript.sh")
             if ret:
                 self.transition(DetectorTransitions.success,tag)
-                self.sendUpdate()
             else:
                 if self.abort:
                     self.abort = False
-                    self.transition(DetectorTransitions.abort)
+                    self.transition(DetectorTransitions.abort,comment="transition aborted")
                     self.inTransition = False
-                    self.sendUpdate("transition aborted")
                     break
-                self.transition(DetectorTransitions.error)
-                self.sendUpdate("transition failed")
+                self.transition(DetectorTransitions.error,comment="transition failed")
                 self.inTransition = False
                 break
         self.inTransition = False
@@ -304,7 +328,6 @@ class DetectorA(DetectorController):
                 self.scriptProcess.terminate()
         else:
             self.transition(DetectorTransitions.abort)
-            self.sendUpdate()
 
 class DetectorB(DetectorController):
     def waitForTransition(self):
@@ -333,7 +356,6 @@ class DetectorB(DetectorController):
                 if command == DetectorTransitions.configure:
                     self.transition(DetectorTransitions.configure,tag)
                     self.inTransition = True
-                    self.sendUpdate()
                     workThread = threading.Thread(name="worker", target=self.getReady, args=(tag,))
                     workThread.start()
                 if command == DetectorTransitions.abort:
@@ -347,16 +369,13 @@ class DetectorB(DetectorController):
             ret = self.executeScript("detectorScript.sh")
             if ret:
                 self.transition(DetectorTransitions.success,tag)
-                self.sendUpdate()
             else:
                 if self.abort:
                     self.abort = False
-                    self.transition(DetectorTransitions.abort)
+                    self.transition(DetectorTransitions.abort,comment="transition aborted")
                     self.inTransition = False
-                    self.sendUpdate("transition aborted")
                     break
-                self.transition(DetectorTransitions.error)
-                self.sendUpdate("transition failed")
+                self.transition(DetectorTransitions.error,comment="transition failed")
                 self.inTransition = False
                 break
         self.inTransition = False
@@ -378,7 +397,6 @@ class DetectorB(DetectorController):
                 self.scriptProcess.terminate()
         else:
             self.transition(DetectorTransitions.abort)
-            self.sendUpdate()
 
 
 

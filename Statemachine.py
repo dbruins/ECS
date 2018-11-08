@@ -4,7 +4,17 @@ import threading
 
 class Statemachine:
     def __init__(self,csvGraph,initState):
-        #currentState -> [command->newstate]
+        """
+        Graph Example
+        {
+         'Unconfigured': {'configure': 'Configuring_Step1'},
+         'Configuring_Step1': {'success': 'Configuring_Step2', 'abort': 'Unconfigured', 'error': 'Unconfigured'},
+         'Configuring_Step2': {'success': 'Active', 'abort': 'Unconfigured', 'error': 'Unconfigured'},
+         'Active': {'configure': 'Configuring', 'abort': 'Unconfigured', 'error': 'Unconfigured'}
+        }
+
+        Graph is Dictionary with States as Keys and values as other Dictionarys with Keys as Transitions and values as Followup States
+        """
         self.graph = dict({})
 
         self.currentState = initState
@@ -19,26 +29,17 @@ class Statemachine:
                         self.graph[row[0]] = dict({row[1]:row[2]})
 
     def transition(self,command):
-        lock = threading.Lock()
-        lock.acquire()
+        """transitions Statemachine with command returns True on success or False if command is not possible in current state"""
         #check if command ist valid in the current state
         if self.checkIfPossible(command):
             self.currentState = self.graph[self.currentState][command]
-            lock.release()
             return True
         else:
-            lock.release()
             return False
 
     def checkIfPossible(self,command):
+        """checks if command is possible in current state"""
         if command in self.graph[self.currentState]:
             return True
         else:
             return False
-
-    #returns next State for given command (no transition)
-    def getNextStateForCommand(self,command):
-        if not self.checkIfPossible(command):
-            return False
-        else:
-            return self.graph[self.currentState][command]

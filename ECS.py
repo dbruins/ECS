@@ -183,7 +183,7 @@ class DataBaseWrapper:
         c = self.connection.cursor()
         vals = (detId,newPcaId)
         try:
-            c.execute("DELETE FROM Mapping WHERE DetectorId = ?", (detId))
+            c.execute("DELETE FROM Mapping WHERE DetectorId = ?", (detId,))
             c.execute("INSERT INTO Mapping VALUES (?,?)", vals)
             self.connection.commit()
             return codes.ok
@@ -224,18 +224,6 @@ class DataBaseWrapper:
             return ports
         except Exception as e:
             self.log("error getting Ports for Address %s: %s " % (address,str(e)),True)
-            return e
-
-    def getDCSInfo(self):
-        """Get DCS Information"""
-        c = self.connection.cursor()
-        try:
-            res = c.execute("SELECT * From GlobalSystems Where id='DCS'").fetchone()
-            if not res:
-                return codes.idUnknown
-            return globalSystemDataObject(res)
-        except Exception as e:
-            self.log("error getting DCS Info: %s" % str(e),True)
             return e
 
     def getGlobalSystem(self,id):
@@ -754,6 +742,7 @@ class ECS:
             newPartition = self.partitions[partitionId]
 
         try:
+            lockedPartitions = []
             detector = db.getDetector(detectorId)
             #change Database
             if unused:
@@ -770,7 +759,6 @@ class ECS:
 
             #lock partitions(PCAs don't accept commands while locked)
             partitionsToLock = []
-            lockedPartitions = []
             if not unused:
                 partitionsToLock.append(oldPartition)
             if newPartition:
@@ -1316,7 +1304,7 @@ class PCAHandler:
         try:
             r = commandSocket.recv()
         except zmq.Again:
-            self.handleDisconnection()
+            self.log("timeout for sending command to PCA %s" % self.id)
             return False
         finally:
             commandSocket.close()
@@ -1372,7 +1360,6 @@ class PCAHandler:
                             }
             if id == self.id and isinstance(state,dict):
                 jsonWebUpdate["buttons"] = PCAStates.UIButtonsForState(state["state"])
-                print(jsonWebUpdate)
             jsonWebUpdate = json.dumps(jsonWebUpdate)
             self.sendUpdateToWebsockets("update",jsonWebUpdate)
 
@@ -1416,6 +1403,7 @@ class PCAHandler:
         asyncio.run(sendUpdate(self.id,type,message))
         if type != "logUpdate":
             #ecs page only needs state Updates
+            #print("ECS: ",json.loads(message)["id"],json.loads(message)["state"]["state"])
             asyncio.run(sendUpdate("ecs",type,message))
 
     def waitForLogUpdates(self):

@@ -1,8 +1,9 @@
 {% extends "GUI/base.html" %}
 
 {% block title %}
-PCA{{view.pcaId}} Monitor
+PCA {{view.pcaId}} Monitor
 {% endblock %}
+{% block pca%}active{% endblock %}
 
 {% block script %}
 <script>
@@ -10,6 +11,7 @@ function createWebSocket(){
     var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/{{pcaId}}/');
 
     function updateState(id,newState,unmappedState,sequenceNumber,tag,comment,isGlobalSystem,buttons){
+      //console.log(id,newState,sequenceNumber)
       cssClass = newState;
       stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>';
       if (tag == ""){
