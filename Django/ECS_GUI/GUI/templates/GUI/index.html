@@ -9,10 +9,10 @@ ECS Dashboard
 {% block script %}
 <script>
   function createWebSocket(){
-      var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/ecs/');
+      var updateSocket = new WebSocket("ws://"+ window.location.hostname+":{{view.webSocketPort}}/ecs/{{request.user}}");
 
       function updateState(id,newState,unmappedState,sequenceNumber,tag,comment,origin,isGlobalSystem){
-        cssClass = newState
+        cssClass = newState;
         stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>'
         if (tag == ""){
           tag = "No Configuration Tag"
@@ -22,15 +22,16 @@ ECS Dashboard
           $("#globalTag"+id).html(tag);
           return;
         }
-        var stateObject = $('#dState'+id+origin)
+
         //check if state already exists
-        if(stateObject.length){
+        if(id in states[origin]){
+            var stateObject = states[origin][id];
             if(parseInt(stateObject.attr("sequencenumber")) < sequenceNumber)
-              stateObject.attr("sequencenumber",sequenceNumber)
+              stateObject.attr("sequencenumber",sequenceNumber);
               stateObject.html(stateCircle+newState);
-              $('#detUnmappedState'+id+origin).html(unmappedState)
-              $('#detTagName'+id+origin).html(tag)
-              $('#detComment'+id+origin).html(comment)
+              unmappedStates[origin][id].html(unmappedState);
+              tags[origin][id].html(tag);
+              comments[origin][id].html(comment);
         }
         else{
           if (isGlobalSystem)
@@ -39,6 +40,10 @@ ECS Dashboard
             var table = $("#detectorStateTable"+origin);
           newRow = '<tr id="dRow'+id+'" class="tableRow'+origin+'"> <td>'+id+'</td><td id="dState'+id+origin+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+'</td><td id ="detUnmappedState'+id+origin+'">'+unmappedState+'</td><td id="detTagName'+id+origin+'">'+tag+'</td><td id="detComment'+id+origin+'">'+comment+'</td></tr>';
           table.append(newRow)
+          states[origin][id] = $("#dState"+id+origin)
+          unmappedStates[origin][id] = $("#detUnmappedState"+id+origin)
+          tags[origin][id] = $("#detTagName"+id+origin)
+          comments[origin][id] = $("#detComment"+id+origin)
         }
       }
 
@@ -53,6 +58,12 @@ ECS Dashboard
                 var log = result["log"]
                 for (var pca in partitions){
                   var stateTable = partitions[pca]
+                  if (!(pca in states)){
+                    states[pca] = {}
+                    unmappedStates[pca] = {}
+                    tags[pca] = {}
+                    comments[pca] = {}
+                  }
                   for (var id in stateTable){
                     var sequenceNumber = stateTable[id][0];
                     var stateObject = stateTable[id][1];
@@ -66,8 +77,8 @@ ECS Dashboard
                 }
                 if (log){
                   //empty log
-                  $('#log').html("")
-                  $('#log').append(log+"\n");
+                  logBox.html("")
+                  logBox.append(log+"\n");
                   //allways scroll directly to bottom
                   var textarea = document.getElementById('log');
                   textarea.scrollTop = textarea.scrollHeight;
@@ -94,6 +105,12 @@ ECS Dashboard
           var message = data['message'];
           var type = data['type'];
           var origin = data['origin']
+          if (!(origin in states)){
+            states[origin] = {}
+            unmappedStates[origin] = {}
+            tags[origin] = {}
+            comments[origin] = {}
+          }
           if (type == "state"){
             var update = JSON.parse(message);
             var id = update['id'];
@@ -101,6 +118,10 @@ ECS Dashboard
             if(stateObject == "reset"){
                 //clear Table
                 $(".tableRow"+origin).remove()
+                states[origin] = {}
+                unmappedStates[origin] = {}
+                tags[origin] = {}
+                comments[origin] = {}
             }
             else if (stateObject == "remove"){
                 //delete Row
@@ -117,7 +138,7 @@ ECS Dashboard
             }
           }
           else if (type == "log"){
-            $('#log').append(message+"\n");
+            logBox.append(message+"\n");
             //allways scroll directly to bottom
             var textarea = document.getElementById('log');
             textarea.scrollTop = textarea.scrollHeight;
@@ -135,6 +156,22 @@ ECS Dashboard
       };
   }
   createWebSocket()
+  $(document).ready(function() {
+      //cache jquery selections
+      detectorTables = {};
+      globalSystemTables = {};
+
+      globalStates = {};
+      globalTags = {};
+
+      logBox = $('#log')
+
+      //lookup tables for detectors and globalSystems
+      states = {}
+      unmappedStates = {}
+      tags = {}
+      comments= {}
+    });
 </script>
 {% endblock script %}
 

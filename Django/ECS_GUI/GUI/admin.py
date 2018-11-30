@@ -1,7 +1,7 @@
 from django.contrib import admin
 from guardian.admin import GuardedModelAdmin
 
-from .models import Question, Choice, pcaModel
+from .models import pcaModel
 
 
 class PCAAdmin(GuardedModelAdmin):
@@ -9,6 +9,4 @@ class PCAAdmin(GuardedModelAdmin):
     exclude = ('has_control',)
     ordering = ('-id',)
 
-admin.site.register(Question)
-admin.site.register(Choice)
 admin.site.register(pcaModel,PCAAdmin)

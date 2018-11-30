@@ -117,9 +117,9 @@ ECS Move Detectors
       <a>there had been errors while moving some Detectors. Move anyway?</a><br/>
       {% for d in view.failedDetectors %}
       <div class="form-check">
-        <input type="checkbox" class="form-check-input" name="selectedDetectors" value="{{d.0}}" id="check{{d.0}}">
-        <label class="form-check-label" for="check{{d.0}}">
-          Detector {{d.0}}
+        <input type="checkbox" class="form-check-input" name="selectedDetectors" value="{{d}}" id="check{{d}}">
+        <label class="form-check-label" for="check{{d}}">
+          Detector {{d}}
         </label>
       </div>
       {% endfor %}

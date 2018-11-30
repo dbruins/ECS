@@ -198,10 +198,16 @@ class Detector(PartitionComponent):
         self.zmqContext.term()
         self.logfunction("Detector "+str(self.id)+" was terminated",True)
 
+    def reset(self):
+        if self.getMappedState() not in {DetectorStates.Error}:
+            self.logfunction("nothing to be done for Detector %s" % self.id)
+            return True
+        return self.transitionRequest(DetectorTransitions.reset)
+
 class DetectorA(Detector):
 
     def getReady(self,configTag):
-        if self.getMappedState() not in {DetectorStates.Unconfigured, DetectorStates.ConnectionProblem}:
+        if self.getMappedState() not in {DetectorStates.Unconfigured, DetectorStates.ConnectionProblem,DetectorStates.Error}:
             self.logfunction("nothing to be done for Detector %s" % self.id)
             return True
         return self.transitionRequest(DetectorTransitions.configure,configTag)
@@ -214,7 +220,7 @@ class DetectorA(Detector):
 class DetectorB(Detector):
 
     def getReady(self,configTag):
-        if self.getMappedState() not in {DetectorStates.Unconfigured, DetectorStates.ConnectionProblem}:
+        if self.getMappedState() not in {DetectorStates.Unconfigured, DetectorStates.ConnectionProblem,DetectorStates.Error}:
             self.logfunction("nothing to be done for Detector %s" % self.id)
             return True
         return self.transitionRequest(DetectorTransitions.configure,configTag)
@@ -231,11 +237,9 @@ class GlobalSystemComponent(PartitionComponent):
         super().__init__(address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction)
 
     def reconnectFunction(self):
-        print("%s connected" % self.name)
         self.pcaReconnectFunction(self.name)
 
     def timeoutFunction(self):
-        print("%s disconnected" % self.name)
         self.pcaTimeoutFunction(self.name)
 
     def getState(self):

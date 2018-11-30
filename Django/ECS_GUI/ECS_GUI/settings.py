@@ -156,6 +156,8 @@ CHECK_IF_RUNNING_SCRIPT = "checkIfRunning.py"
 LOG_PATH_ECS = "./logECS"
 PYTHON_VIRTENV_ACTIVATE_FILE = "virtenv"
 
+WEB_SOCKET_PORT = 5678
+
 ASGI_APPLICATION = 'ECS_GUI.routing.application'
 CHANNEL_LAYERS = {
     'default': {

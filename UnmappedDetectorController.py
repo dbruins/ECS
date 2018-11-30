@@ -15,13 +15,14 @@ from states import DetectorStates
 
 class UnmappedDetectorController:
 
-    def __init__(self,detectorData,publishPort,updatePort,currentStatePort,logfunction):
+    def __init__(self,detectorData,publishPort,updatePort,currentStatePort,logfunction,webSocket):
         self.detectors = ECS_tools.MapWrapper()
         self.statusMap = ECS_tools.MapWrapper()
         self.log=logfunction
         self.terminate = threading.Event()
         self.id = "unmapped"
         self.context = zmq.Context()
+        self.webSocket = webSocket
 
         #ZMQ Socket to publish new state Updates
         self.socketPublish = self.context.socket(zmq.PUB)
@@ -88,6 +89,8 @@ class UnmappedDetectorController:
                              "sequenceNumber" : self.sequence
                             }
             jsonWebUpdate = json.dumps(jsonWebUpdate)
+            self.webSocket.sendUpdate(jsonWebUpdate,"unmapped")
+            continue
             channel_layer = get_channel_layer()
             async_to_sync(channel_layer.group_send)(
                 #the group name

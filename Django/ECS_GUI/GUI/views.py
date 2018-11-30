@@ -28,7 +28,6 @@ from ECS import ECS,DataBaseWrapper
 ecs = ECS()
 
 gui = apps.get_app_config('GUI')
-print(gui.test)
 #
 from django.contrib.auth import user_logged_out
 from django.dispatch import receiver
@@ -61,6 +60,8 @@ def permission_timeout():
                         remove_perm('has_control', user, pcaObject)
                         channel_layer = get_channel_layer()
                         #inform over websocket
+                        ecs.webSocket.permissionTimeout(str(user))
+                        """
                         async_to_sync(channel_layer.group_send)(
                             #the group name
                             str(user),
@@ -69,6 +70,7 @@ def permission_timeout():
                                 'type': "permissionTimeout",
                             }
                         )
+                        """
 t = threading.Thread(name="permission_timeout", target=permission_timeout)
 t.start()
 
@@ -115,6 +117,7 @@ class index(ecsMixin,TemplateView):
     template_name = "GUI/index.html"
     ecsMap = {}
     userInControl = None
+    webSocketPort = settings.WEB_SOCKET_PORT
 
     def dispatch(self, request, *args, **kwargs):
         self.ecsMap = {}
@@ -146,6 +149,7 @@ class index(ecsMixin,TemplateView):
 
 class pcaView(ecsMixin,TemplateView):
     template_name = "GUI/monitor.html"
+    webSocketPort = settings.WEB_SOCKET_PORT
 
     def dispatch(self, request, *args, **kwargs):
         self.pcaId = self.kwargs['pcaId']
@@ -419,6 +423,18 @@ class abort(ecsMixin,pcaPermissionMixin,View):
         pca.sendCommand(codes.abort)
         return HttpResponse(status=200)
 
+class reset(ecsMixin,pcaPermissionMixin,View):
+    raise_exception = True
+    def post(self, request, *args, **kwargs):
+        pcaId = self.kwargs['pcaId']
+        detId = request.POST['detectorId']
+        pca = ecs.getPCAHandler(pcaId)
+        arg = {
+            "detectorId" : detId,
+        }
+        pca.sendCommand(codes.reset,json.dumps(arg))
+        return HttpResponse(status=200)
+
 @login_required
 def getDetectorListForPCA(request):
     """Ask ECS for DetectorList from Database"""
@@ -467,7 +483,10 @@ def currentTableAndLogRequest(request,pcaId):
             #send buffered log entries
             if len(handler.logQueue) > 0:
                 bufferdLog = "\n".join(list(handler.logQueue))
-            buttons = PCAStates.UIButtonsForState(handler.stateMap.map[pcaId][1].state)
+            if pcaId in handler.stateMap.map:
+                buttons = PCAStates.UIButtonsForState(handler.stateMap.map[pcaId][1].state)
+            else:
+                buttons = {}
         else:
             bufferdLog = ""
             map = {}

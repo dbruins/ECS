@@ -231,13 +231,13 @@ class PCA:
         #thread stuff
         start_new_thread(self.waitForUpdates,())
         start_new_thread(self.waitForRequests,())
-        start_new_thread(self.waitForRemoteCommand,())
+        start_new_thread(self.waitForCommands,())
         self.initdone.set()
 
     def getCurrentConfigTag(self):
         return self.configTag
 
-    def waitForRemoteCommand(self):
+    def waitForCommands(self):
         """wait for an external(start,stop etc.) command e.g. from that gorgeous WebGUI
         sends an Ok for received command"""
         while True:
@@ -275,6 +275,7 @@ class PCA:
                         codes.check: checkConsistencyRequest,
                         codes.lock: self.lockPartition,
                         codes.unlock: self.unlockPartition,
+                        codes.reset: self.resetDetector,
                     }
                     #returns function for Code or None if the received code is unknown
                     f = dbFunctionDictionary.get(code,None)
@@ -584,7 +585,7 @@ class PCA:
                     if self.autoConfigure:
                         self.configure()
             #detector is not active
-            elif det.getMappedState() == MappedStates.Unconfigured or det.getMappedState() == DetectorStates.ConnectionProblem:
+            elif det.getMappedState() == MappedStates.Unconfigured or det.getMappedState() == DetectorStates.ConnectionProblem or det.getMappedState() == DetectorStates.Error:
                 if self.stateMachine.currentState == PCAStates.Configuring_Detectors:
                     self.transition(PCATransitions.failure)
                 else:
@@ -700,10 +701,18 @@ class PCA:
             return False
         return True
 
+    def resetDetector(self,arg):
+        arg = json.loads(arg)
+        print(arg)
+        detectorId = arg["detectorId"]
+        if detectorId in self.detectors:
+            det = self.detectors[detectorId]
+        else:
+            return codes.idUnknown
 
-    def error(self):
-        """make an error transition"""
-        self.transition("error")
+        if det.reset():
+            return codes.ok
+        return codes.error
 
     def threadFunctionCall(self,id,function,configTag,retq):
         """calls a function from Detector(id) und puts result in a given Queue"""

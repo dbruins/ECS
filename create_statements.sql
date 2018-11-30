@@ -48,3 +48,23 @@ BEGIN
       RAISE (ABORT,'Duplicate Port for Address')
     END;
 END;
+
+DROP TRIGGER assertIdsExist;
+CREATE TRIGGER assertIdsExist
+  BEFORE INSERT ON Mapping
+    BEGIN
+	  SELECT CASE
+      WHEN
+        Not EXISTS (SELECT * FROM Detector WHERE id = NEW.DetectorId)
+      then
+        RAISE (ABORT,'detector id does not exist')
+	  WHEN
+        Not EXISTS (SELECT * FROM Partition WHERE id = NEW.PartitionId)
+	  then
+        RAISE (ABORT,'pca id does not exist')
+     END;
+	END;
+
+SELECT * FROM Detector ORDER BY (CAST(id AS int));
+UPDATE Detector SET address="pn03" WHERE (CAST (id AS int)) > 5;
+UPDATE Detector SET address="pn02" WHERE (CAST (id AS int)) <= 5;

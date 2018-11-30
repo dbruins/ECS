@@ -41,8 +41,7 @@ class updateConsumer(WebsocketConsumer):
         )
 
     def update(self,event):
-        #message = event["text"]
-        #print("Consumer: ",json.loads(message)["id"],json.loads(message)["state"]["state"])
+        #print("Consumer: ",json.loads(event["text"])["id"],json.loads(event["text"])["state"])
         message = {
             "type": "state",
             "message": event["text"]

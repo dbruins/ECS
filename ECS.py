@@ -1,245 +1,4 @@
 #!/usr/bin/python3
-import threading
-import copy
-
-import sqlite3
-from DataObjects import DataObjectCollection, DataObject, detectorDataObject, partitionDataObject, globalSystemDataObject, mappingDataObject
-class DataBaseWrapper:
-    """Handler for the ECS Database"""
-    connection = None
-
-    def __init__(self,logfunction):
-        self.connection = sqlite3.connect("ECS_database.db")
-        self.log = logfunction
-
-    def close(self):
-        """closes the database Connection"""
-        self.connection.close()
-
-    def getAllDetectors(self):
-        """Get All Detectors in Detector Table; returns empty DataObjectCollection if there are now Detectors"""
-        c = self.connection.cursor()
-        try:
-            c.execute("SELECT * FROM Detector")
-            res = c.fetchall()
-            return DataObjectCollection(res,detectorDataObject)
-        except Exception as e:
-            self.log("error getting detectors: %s" % str(e),True)
-            return e
-
-    def getDetector(self,id):
-        """get Detector with given id; returns ErrorCode if it does not exist"""
-        c = self.connection.cursor()
-        val = (id,)
-        try:
-            res = c.execute("SELECT * FROM Detector WHERE id = ?", val).fetchone()
-            if not res:
-                return codes.idUnknown
-            return detectorDataObject(res)
-        except Exception as e:
-            self.log("error getting detector: %s %s" % (str(id),str(e)),True)
-            return e
-
-    def getAllUnmappedDetectors(self):
-        """gets all Detectors which are currently unmmaped"""
-        c = self.connection.cursor()
-        try:
-            res = c.execute("SELECT * FROM Detector Where Detector.id not in (select DetectorId From Mapping)").fetchall()
-            return DataObjectCollection(res,detectorDataObject)
-        except Exception as e:
-            self.log("error getting unmapped detectors: %s" % str(e),True)
-            return e
-
-    def addDetector(self,dataObject):
-        """add a Detector to Database;accepts json String or DataObject"""
-        if not isinstance(dataObject,detectorDataObject):
-            dataObject = detectorDataObject(json.loads(dataObject))
-        c = self.connection.cursor()
-        try:
-            c.execute("INSERT INTO Detector VALUES (?,?,?,?,?)", dataObject.asArray())
-            self.connection.commit()
-            return codes.ok
-        except Exception as e:
-            self.log("error inserting values into Detector Table: %s" % str(e),True)
-            self.connection.rollback()
-            return e
-
-
-    def removeDetector(self,id):
-        """delete a Detector from Database"""
-        c = self.connection.cursor()
-        val = (id,)
-        try:
-            c.execute("DELETE FROM Detector WHERE id = ?", val)
-            self.connection.commit()
-            return codes.ok
-        except Exception as e:
-            self.log("error removing values from Detector Table: %s" % str(e),True)
-            return e
-
-    def getPartition(self,id):
-        """Get Partition with given id from Database; returns None if it does not exist"""
-        c = self.connection.cursor()
-        val = (id,)
-        try:
-            res = c.execute("SELECT * FROM Partition WHERE id = ?", val).fetchone()
-            if not res:
-                return codes.idUnknown
-            return partitionDataObject(res)
-        except Exception as e:
-            self.log("error getting partition %s: %s" % (str(id),str(e)),True)
-            return e
-
-    def getPartitionForDetector(self,id):
-        """gets the Partition of a Detector; returns DataObject or ErrorCode"""
-        c = self.connection.cursor()
-        val = (id,)
-        try:
-            res = c.execute("SELECT * FROM Partition WHERE Partition.id IN (SELECT PartitionId FROM (Mapping JOIN Partition ON Mapping.PartitionId = Partition.id) WHERE DetectorId = ?)", val).fetchone()
-            if not res:
-                return codes.idUnknown
-            return partitionDataObject(res)
-        except Exception as e:
-            self.log("error getting partition for Detector %s: %s" % (str(id),str(e)),True)
-            return e
-
-    def getAllPartitions(self):
-        """Get All Detectors in Detector Table"""
-        c = self.connection.cursor()
-        try:
-            c.execute("SELECT * FROM Partition")
-            res = c.fetchall()
-            return DataObjectCollection(res, partitionDataObject)
-        except Exception as e:
-            self.log("error getting all partitions: %s" % str(e),True)
-            return e
-
-    def getDetectorsForPartition(self,pcaId):
-        """get all Mapped Detectors for a given PCA Id"""
-        c = self.connection.cursor()
-        val = (pcaId,)
-        try:
-            c.execute("SELECT * From Detector WHERE Detector.id in (SELECT d.id FROM Detector d JOIN Mapping m ON d.id = m.DetectorId WHERE PartitionId=?)",val)
-            res = c.fetchall()
-            return DataObjectCollection(res, detectorDataObject)
-        except Exception as e:
-            self.log("error getting all detectors for Partition %s: %s" % str(pcaId), str(e),True)
-            return e
-
-    def addPartition(self,dataObject):
-        """create new Partition"""
-        c = self.connection.cursor()
-        data = dataObject.asArray()
-        try:
-            c.execute("INSERT INTO Partition VALUES (?,?,?,?,?,?,?,?)", data)
-            self.connection.commit()
-            return codes.ok
-        except Exception as e:
-            self.log("error inserting values into Partition Table: %s" % str(e),True)
-            self.connection.rollback()
-            return e
-
-    def removePartition(self,id):
-        """delete a Partition with given id"""
-        c = self.connection.cursor()
-        val = (id,)
-        try:
-            c.execute("DELETE FROM Partition WHERE id = ?", val)
-            #Free the Detectors
-            c.execute("DELETE FROM Mapping WHERE PartitionId = ?", val)
-            self.connection.commit()
-            return codes.ok
-        except Exception as e:
-            self.connection.rollback()
-            self.log("error removing values from Detector Table: %s" % str(e),True)
-            return e
-
-    def getDetectorMapping(self):
-        """get entire PCA Detector Mapping Table"""
-        c = self.connection.cursor()
-        try:
-            c.execute("SELECT * From Mapping")
-            res = c.fetchall()
-            return DataObjectCollection(res, mappingDataObject)
-        except Exception as e:
-            self.log("error getting all detectors for Partition %s: %s" % str(pcaId), str(e),True)
-            return e
-
-    def mapDetectorToPCA(self,detId,pcaId):
-        """map a Detector to a Partition"""
-        c = self.connection.cursor()
-        vals = (detId,pcaId)
-        try:
-            c.execute("INSERT INTO Mapping VALUES (?,?)", vals)
-            self.connection.commit()
-            return codes.ok
-        except Exception as e:
-            self.connection.rollback()
-            self.log("error mapping %s to %s: %s" % (str(detId),str(pcaId),str(e)),True)
-            return e
-
-    def remapDetector(self,detId,newPcaId,oldPcaID):
-        """assign Detector to a different Partition"""
-        c = self.connection.cursor()
-        vals = (detId,newPcaId)
-        try:
-            c.execute("DELETE FROM Mapping WHERE DetectorId = ?", (detId,))
-            c.execute("INSERT INTO Mapping VALUES (?,?)", vals)
-            self.connection.commit()
-            return codes.ok
-        except Exception as e:
-            self.connection.rollback()
-            self.log("error remapping %s from %s to %s: %s" % (str(detId),str(oldPcaID),str(newPcaId),str(e)),True)
-            return e
-
-    def unmapDetectorFromPCA(self,detId):
-        """unmap a Detector from a Partition"""
-        c = self.connection.cursor()
-        val = (detId,)
-        try:
-            c.execute("DELETE FROM Mapping WHERE DetectorId = ?", val)
-            self.connection.commit()
-            return codes.ok
-        except Exception as e:
-            self.connection.rollback()
-            self.log("error unmapping %s: %s " % (str(detId),str(e)),True)
-            return e
-
-    def usedPortsForAddress(self,address):
-        """get all used Ports for an Ip-Address returns List of Ports or ErrorCode """
-        c = self.connection.cursor()
-        val = (address,)
-        try:
-            ports = []
-            c.execute("SELECT Port,PingPort FROM Detector WHERE address=?",val)
-            ret = c.fetchall()
-            for row in ret:
-                for val in row:
-                    ports.append(val)
-            c.execute("SELECT portPublish,portLog,portUpdates,portCurrentState,portCommand FROM Partition WHERE address=? ",val)
-            ret = c.fetchall()
-            for row in ret:
-                for val in row:
-                    ports.append(val)
-            return ports
-        except Exception as e:
-            self.log("error getting Ports for Address %s: %s " % (address,str(e)),True)
-            return e
-
-    def getGlobalSystem(self,id):
-        """get global System for Id"""
-        c = self.connection.cursor()
-        val = (id,)
-        try:
-            res = c.execute("SELECT * From GlobalSystems Where id=?",val).fetchone()
-            if not res:
-                return codes.idUnknown
-            return globalSystemDataObject(res)
-        except Exception as e:
-            self.log("error getting DCS Info: %s" % str(e),True)
-            return e
-
-
 import zmq
 import logging
 import threading
@@ -256,15 +15,17 @@ import paramiko
 from  UnmappedDetectorController import UnmappedDetectorController
 
 from channels.layers import get_channel_layer
-from GUI.models import Question, Choice, pcaModel
+from GUI.models import pcaModel
 from django.conf import settings
 from collections import deque
 from django.utils import timezone
-from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject
+from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject, globalSystemDataObject, DataObject
 import asyncio
 import signal
 from states import PCAStates
 PCAStates = PCAStates()
+from DataBaseWrapper import DataBaseWrapper
+from WebSocket import WebSocket
 
 class ECS:
     """The Experiment Control System"""
@@ -329,6 +90,8 @@ class ECS:
         else:
             logging.getLogger().handlers[1].setLevel(logging.CRITICAL)
 
+        self.webSocket = WebSocket(settings.ECS_ADDRESS,settings.WEB_SOCKET_PORT)
+
         #Information for UnmappedDetectorController
         data = {
             "id" : "unmapped",
@@ -370,7 +133,7 @@ class ECS:
         self.pcaHandlers = {}
         #create Handlers for PCAs
         for p in self.partitions:
-            self.pcaHandlers[p.id] = PCAHandler(p,self.log,self.globalSystems)
+            self.pcaHandlers[p.id] = PCAHandler(p,self.log,self.globalSystems,self.webSocket)
             #add database object for storing user permissions
             pcaModel.objects.create(id=p.id,permissionTimestamp=timezone.now())
         #user Permissions ecs
@@ -381,7 +144,7 @@ class ECS:
         #create Controller for Unmapped Detectors
         self.unmappedStateTable = ECS_tools.MapWrapper()
         unmappedDetectors = self.database.getAllUnmappedDetectors()
-        self.unmappedDetectorController = UnmappedDetectorController(unmappedDetectors,self.unmappedDetectorControllerData.portPublish,self.unmappedDetectorControllerData.portUpdates,self.unmappedDetectorControllerData.portCurrentState,self.log)
+        self.unmappedDetectorController = UnmappedDetectorController(unmappedDetectors,self.unmappedDetectorControllerData.portPublish,self.unmappedDetectorControllerData.portUpdates,self.unmappedDetectorControllerData.portCurrentState,self.log,self.webSocket)
 
         #todo obsolete?
         t = threading.Thread(name="consistencyCheckThread", target=self.consistencyCheckThread)
@@ -463,7 +226,7 @@ class ECS:
                 pid = pid.strip()
                 ssh.close()
             else:
-                self.log("Detector Client %s is already Running with PID %s" % (id,pid))
+                self.log("Client %s is already Running with PID %s" % (id,pid))
             return pid
         except Exception as e:
             if ssh:
@@ -549,7 +312,7 @@ class ECS:
                 self.log("PCA Client for %s could not be startet" % partition.id,True)
             #connect to pca
             self.partitions[partition.id] = partition
-            self.pcaHandlers[partition.id] = PCAHandler(partition,self.log,self.globalSystems)
+            self.pcaHandlers[partition.id] = PCAHandler(partition,self.log,self.globalSystems,self.webSocket)
             #add database object for storing user permissions
             pcaModel.objects.create(id=partition.id,permissionTimestamp=timezone.now())
             return True
@@ -1173,6 +936,8 @@ class ECS:
         channel_layer = get_channel_layer()
         message = origin+": "+str
         self.logQueue.append(message)
+        self.webSocket.sendLogUpdate(message,"ecs")
+        """
         async def sendUpdate(recipient,type,message):
             await channel_layer.group_send(
                 #group name
@@ -1184,12 +949,12 @@ class ECS:
                     'origin': origin,
                 }
             )
+        #run only exists in python3.7
+        #asyncio.run(sendUpdate("ecs",type,message))
         #python < 3.7
-        """loop = asyncio.new_event_loop()
+        loop = asyncio.new_event_loop()
         task = loop.create_task(sendU(type,message))
         result = loop.run_until_complete(task)"""
-        #run only exists in python3.7
-        asyncio.run(sendUpdate("ecs",type,message))
         """
         async_to_sync(channel_layer.group_send)(
             #group name
@@ -1218,7 +983,7 @@ class ECS:
 
 class PCAHandler:
     """Handler Object for Partition Agents"""
-    def __init__(self,partitionInfo,ecsLogfunction,globalSystems):
+    def __init__(self,partitionInfo,ecsLogfunction,globalSystems,webSocket):
         self.id = partitionInfo.id
         self.address = partitionInfo.address
         self.portLog = partitionInfo.portLog
@@ -1227,6 +992,7 @@ class PCAHandler:
         self.portCurrentState = partitionInfo.portCurrentState
         self.ecsLogfunction = ecsLogfunction
         self.globalSystems = globalSystems
+        self.webSocket = webSocket
 
         self.context = zmq.Context()
         self.stateMap = ECS_tools.MapWrapper()
@@ -1276,6 +1042,13 @@ class PCAHandler:
             try:
                 socket.send(codes.ping)
                 r = socket.recv()
+                if not self.PCAConnection:
+                    r = ECS_tools.getStateSnapshot(self.stateMap,self.address,self.portCurrentState,timeout=self.receive_timeout,pcaid=self.id)
+                    if r:
+                        self.log("PCA %s connected" % self.id)
+                        self.PCAConnection = True
+                    else:
+                        self.handleDisconnection()
             except zmq.error.ContextTerminated:
                 break
             except zmq.Again:
@@ -1293,6 +1066,11 @@ class PCAHandler:
                 nextPing = time.time() + self.pingInterval
             else:
                 time.sleep(self.pingInterval)
+
+    def handleDisconnection(self):
+        if self.PCAConnection:
+            self.log("PCA %s Connection Lost" % self.id)
+        self.PCAConnection = False
 
     def sendCommand(self,command,arg=None):
         """send command to pca return True on Success"""
@@ -1313,14 +1091,6 @@ class PCAHandler:
             return False
         return True
 
-    def handleDisconnection(self):
-        if self.PCAConnection:
-            self.log("PCA %s Connection Lost" % self.id)
-        self.PCAConnection = False
-        r = ECS_tools.getStateSnapshot(self.stateMap,self.address,self.portCurrentState,timeout=self.receive_timeout,pcaid=self.id)
-        if r:
-            self.log("PCA %s connected" % self.id)
-            self.PCAConnection = True
 
     def waitForUpdates(self):
         """wait for updates on subscription socket"""
@@ -1338,7 +1108,6 @@ class PCAHandler:
 
             id = id.decode()
             sequence = ECS_tools.intFromBytes(sequence)
-
             if state == codes.reset:
                 self.stateMap.reset()
                 #reset code for Web Browser
@@ -1361,13 +1130,15 @@ class PCAHandler:
             if id == self.id and isinstance(state,dict):
                 jsonWebUpdate["buttons"] = PCAStates.UIButtonsForState(state["state"])
             jsonWebUpdate = json.dumps(jsonWebUpdate)
-            self.sendUpdateToWebsockets("update",jsonWebUpdate)
+            self.webSocket.sendUpdate(jsonWebUpdate,self.id)
+            #self.sendUpdateToWebsockets("update",jsonWebUpdate)
 
     def log(self,message):
         """spread log message through websocket(channel)"""
         self.logQueue.append(message)
         self.ecsLogfunction(message,origin=self.id)
-        self.sendUpdateToWebsockets("logUpdate",message)
+        self.webSocket.sendLogUpdate(message,self.id)
+        #self.sendUpdateToWebsockets("logUpdate",message)
 
     def sendUpdateToWebsockets(self,type,message):
         """send state Updates to the Websocket"""

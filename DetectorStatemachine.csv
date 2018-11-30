@@ -1,10 +1,13 @@
 Unconfigured,configure,Configuring_Step1
+Unconfigured,error,Error
 Configuring_Step1,success,Configuring_Step2
 Configuring_Step1,abort,Unconfigured
-Configuring_Step1,error,Unconfigured
+Configuring_Step1,error,Error
 Configuring_Step2,success,Active
 Configuring_Step2,abort,Unconfigured
-Configuring_Step2,error,Unconfigured
+Configuring_Step2,error,Error
 Active,configure,Configuring
 Active,abort,Unconfigured
-Active,error,Unconfigured
+Active,error,Error
+Error,resolved,Unconfigured
+Error,reset,Unconfigured

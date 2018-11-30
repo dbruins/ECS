@@ -7,52 +7,74 @@ PCA {{view.pcaId}} Monitor
 
 {% block script %}
 <script>
+function resetDetector (detectorId){
+  $.ajax({
+      type: "POST",
+      url: "{% url 'GUI:reset' pcaId%}",
+      data:{
+        csrfmiddlewaretoken: '{{ csrf_token }}',
+        detectorId: detectorId,
+      },
+      statusCode: returnCodeCases
+  });
+}
 function createWebSocket(){
-    var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/{{pcaId}}/');
-
+    //var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/{{pcaId}}/');
+    var updateSocket = new WebSocket("ws://"+ window.location.hostname+":{{view.webSocketPort}}/{{pcaId}}/{{request.user}}");
     function updateState(id,newState,unmappedState,sequenceNumber,tag,comment,isGlobalSystem,buttons){
       //console.log(id,newState,sequenceNumber)
       cssClass = newState;
       stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>';
+      //reset Button
+      if (newState == "Error")
+        newState = newState + "<button style='margin-left: 0.5em;' id='reset"+id+"' class='btn btn-primary' onclick='resetDetector("+id+")' >reset</button>";
       if (tag == ""){
         tag = "No Configuration Tag";
       }
       if (id == "{{view.pcaId}}"){
-        $("#global").html(stateCircle+newState);
-        $("#globalTag").html(tag);
+        globalState.html(stateCircle+newState);
+        globalTag.html(tag);
         if (buttons){
-          $("#ready").prop("disabled",!buttons["configure"]);
-          $("#start").prop("disabled",!buttons["start"]);
-          $("#stop").prop("disabled",!buttons["stop"]);
+          readyButton.prop("disabled",!buttons["configure"]);
+          startButton.prop("disabled",!buttons["start"]);
+          stopButton.prop("disabled",!buttons["stop"]);
         }
         return;
       }
-      var stateObject = $('#dState'+id);
       //check if state already exists
-      if(stateObject.length){
+      if(id in states){
+          var stateObject = states[id];
           if(parseInt(stateObject.attr("sequencenumber")) < sequenceNumber)
             stateObject.attr("sequencenumber",sequenceNumber);
             stateObject.html(stateCircle+newState);
-            $('#detUnmappedState'+id).html(unmappedState);
-            $('#detTagName'+id).html(tag);
-            $('#detComment'+id).html(comment);
+            unmappedStates[id].html(unmappedState);
+            tags[id].html(tag);
+            comments[id].html(comment);
       }
       else{
           if (isGlobalSystem)
-            var table = $("#globalSystemStateTable");
+            var table = globalSystemTable;
           else
-            var table = $("#detectorStateTable");
+            var table = detectorTable;
           newRow = '<tr id="dRow'+id+'" class="tableRow"> <td>'+id+'</td><td id="dState'+id+'" sequencenumber="'+sequenceNumber+'">'+stateCircle+newState+'</td><td id ="detUnmappedState'+id+'">'+unmappedState+'</td><td id="detTagName'+id+'">'+tag+'</td><td id="detComment'+id+'">'+comment+'</td></tr>';
           table.append(newRow);
+          states[id] = $("#dState"+id)
+          unmappedStates[id] = $("#detUnmappedState"+id)
+          tags[id] = $("#detTagName"+id)
+          comments[id] = $("#detComment"+id)
       }
     }
 
     updateSocket.onopen = function(e){
       $(".tableRow").remove()
       //get stateTables
+      console.log("reconnect")
       $.ajax({
           type: "GET",
           url: "{% url 'GUI:currentTableAndLogRequest' pcaId %}",
+          error: function(jqXHR, textStatus, errorThrown) {
+              console.log(jqXHR.status);
+          },
           "success": function(result) {
               var stateTable = result["table"];
               var log = result["log"];
@@ -69,8 +91,8 @@ function createWebSocket(){
               }
               if (log){
                 //empty log
-                $('#log').html("");
-                $('#log').append(log+"\n");
+                logBox.html("");
+                logBox.append(log+"\n");
                 //allways scroll directly to bottom
                 var textarea = document.getElementById('log');
                 textarea.scrollTop = textarea.scrollHeight;
@@ -88,6 +110,7 @@ function createWebSocket(){
 
     updateSocket.onmessage = function(e) {
         var data = JSON.parse(e.data);
+        //console.log(data)
         var message = data['message'];
         var type = data['type'];
         if (type == "state"){
@@ -97,6 +120,10 @@ function createWebSocket(){
           if(stateObject == "reset"){
               //clear Table
               $(".tableRow").remove();
+              states = {};
+              unmappedStates = {};
+              tags = {};
+              comments= {};
           }
           else if (stateObject == "remove"){
               //delete Row
@@ -117,7 +144,7 @@ function createWebSocket(){
           }
         }
         else if (type == "log"){
-          $('#log').append(message+"\n");
+          logBox.append(message+"\n");
           //allways scroll directly to bottom
           var textarea = document.getElementById('log');
           textarea.scrollTop = textarea.scrollHeight;
@@ -144,6 +171,25 @@ returnCodeCases = {
   },
 };
 $(document).ready(function() {
+    //cache jquery selections
+    detectorTable = $("#detectorStateTable");
+    globalSystemTable = $("#globalSystemStateTable");
+
+    globalState = $("#global");
+    globalTag = $("#globalTag");
+
+    readyButton = $("#ready")
+    startButton = $("#start")
+    stopButton = $("#stop")
+
+    logBox = $('#log')
+
+    //lookup tables for detectors and globalSystems
+    states = {}
+    unmappedStates = {}
+    tags = {}
+    comments= {}
+
     $("#ready").click(function(e) {
         e.preventDefault();
         form = $("#configure_form")[0]

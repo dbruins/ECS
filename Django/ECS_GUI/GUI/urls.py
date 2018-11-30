@@ -20,6 +20,7 @@ urlpatterns = [
     path('start/<str:pcaId>', views.start.as_view(), name='start'),
     path('stop/<str:pcaId>', views.stop.as_view(), name='stop'),
     path('abort/<str:pcaId>', views.abort.as_view(), name='abort'),
+    path('reset/<str:pcaId>', views.reset.as_view(), name='reset'),
     path('getDetectorListForPca/',views.getDetectorListForPCA,name='getDetectorListForPCA'),
     path('currentTableAndLogRequest/<str:pcaId>',views.currentTableAndLogRequest,name='currentTableAndLogRequest'),
     path('take_control/<str:pcaId>/<str:targetPage>', views.takeControl, name='take_control'),

@@ -15,6 +15,8 @@ import ECS_tools
 import subprocess
 import zc.lockfile
 from multiprocessing import Queue
+import os
+import errno
 
 class DetectorController:
 
@@ -81,10 +83,32 @@ class DetectorController:
 
         self.inTransition = False
 
+        try:
+            os.mkfifo("pipeDetector"+self.MyId)
+        except OSError as oe:
+            if oe.errno != errno.EEXIST:
+                raise
+
         _thread.start_new_thread(self.waitForUpdates,())
         ECS_tools.getStateSnapshot(self.stateMap,pcaData.address,pcaData.portCurrentState,timeout=self.receive_timeout)
         _thread.start_new_thread(self.waitForCommands,())
         _thread.start_new_thread(self.waitForTransition,())
+        _thread.start_new_thread(self.watchPipe,())
+
+    def watchPipe(self):
+        while True:
+            with open("pipeDetector"+self.MyId) as fifo:
+                while True:
+                    message = fifo.read().replace('\n', '')
+                    if len(message) == 0:
+                        #pipe closed
+                        break
+                    if message == "error":
+                        test.error()
+                    elif message == "resolved":
+                        test.resolved()
+                    else:
+                        print('received unknown message via pipe: %s' % (message,))
 
     def getPCAData(self):
         """get PCA Information from ECS"""
@@ -243,6 +267,19 @@ class DetectorController:
     def abortFunction(self):
         pass
 
+    def error(self):
+        self.transition(DetectorTransitions.error)
+        if self.inTransition:
+            self.abort = True
+            if self.scriptProcess:
+                self.scriptProcess.terminate()
+
+    def resolved(self):
+        self.transition(DetectorTransitions.resolved)
+
+    def reset(self):
+        self.transition(DetectorTransitions.reset)
+
     def transition(self,transition,tag=None,comment=None):
         try:
             self.stateMachineLock.acquire()
@@ -273,7 +310,7 @@ class DetectorA(DetectorController):
                 else:
                     command = ret[0].decode()
                     tag=None
-                if self.stateMachine.currentState not in {DetectorStates.Active,DetectorStates.Unconfigured} and command != DetectorTransitions.abort:
+                if self.stateMachine.currentState not in {DetectorStates.Active,DetectorStates.Unconfigured} and command not in {DetectorTransitions.abort,DetectorTransitions.reset}:
                     self.socketReceiver.send(codes.busy)
                     print("busy")
                     continue
@@ -289,8 +326,10 @@ class DetectorA(DetectorController):
                     self.inTransition = True
                     workThread = threading.Thread(name="worker", target=self.getReady, args=(tag,))
                     workThread.start()
-                if command == DetectorTransitions.abort:
+                elif command == DetectorTransitions.abort:
                     self.abortFunction()
+                elif command == DetectorTransitions.reset:
+                    self.reset()
             except zmq.error.ContextTerminated:
                 self.socketReceiver.close()
                 break
@@ -342,7 +381,7 @@ class DetectorB(DetectorController):
                 else:
                     command = ret[0].decode()
                     tag=None
-                if self.stateMachine.currentState not in {DetectorStates.Active,DetectorStates.Unconfigured} and command != DetectorTransitions.abort:
+                if self.stateMachine.currentState not in {DetectorStates.Active,DetectorStates.Unconfigured}  and command not in {DetectorTransitions.abort,DetectorTransitions.reset}:
                     self.socketReceiver.send(codes.busy)
                     print("busy")
                     continue
@@ -358,8 +397,10 @@ class DetectorB(DetectorController):
                     self.inTransition = True
                     workThread = threading.Thread(name="worker", target=self.getReady, args=(tag,))
                     workThread.start()
-                if command == DetectorTransitions.abort:
+                elif command == DetectorTransitions.abort:
                     self.abortFunction()
+                elif command == DetectorTransitions.reset:
+                    self.reset()
             except zmq.error.ContextTerminated:
                 self.socketReceiver.close()
                 break
@@ -440,9 +481,13 @@ if __name__ == "__main__":
     while True:
         try:
             x = input()
+            if x == "error":
+                test.error()
+            if x == "resolved":
+                test.resolved()
         except KeyboardInterrupt:
             test.terminate()
             break
         except EOFError:
-            time.sleep(500000)
+            time.sleep(50000000)
             continue

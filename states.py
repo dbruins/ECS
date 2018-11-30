@@ -57,12 +57,15 @@ class DetectorStates:
     Configuring_Step2 = "Configuring_Step2"
     Active = "Active"
     ConnectionProblem = "Connection Problem"
+    Error = "Error"
 
 class DetectorTransitions:
     success = "success"
     abort = "abort"
     configure = "configure"
     error = "error"
+    resolved = "resolved"
+    reset = "reset"
 
 class GlobalSystemStates:
     Unconfigured = "Unconfigured"
