@@ -77,25 +77,23 @@ class DetectorController:
         self.socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
 
         #send state to PCA
-        #self.sendUpdate(0)
         t = threading.Thread(name='update'+str(0), target=self.sendUpdate, args=(0,))
         t.start()
 
         self.inTransition = False
 
+        _thread.start_new_thread(self.waitForUpdates,())
+        ECS_tools.getStateSnapshot(self.stateMap,pcaData.address,pcaData.portCurrentState,timeout=self.receive_timeout)
+        _thread.start_new_thread(self.waitForCommands,())
+        _thread.start_new_thread(self.waitForTransition,())
+        _thread.start_new_thread(self.waitForPipeMessages,())
+
+    def waitForPipeMessages(self):
         try:
             os.mkfifo("pipeDetector"+self.MyId)
         except OSError as oe:
             if oe.errno != errno.EEXIST:
                 raise
-
-        _thread.start_new_thread(self.waitForUpdates,())
-        ECS_tools.getStateSnapshot(self.stateMap,pcaData.address,pcaData.portCurrentState,timeout=self.receive_timeout)
-        _thread.start_new_thread(self.waitForCommands,())
-        _thread.start_new_thread(self.waitForTransition,())
-        _thread.start_new_thread(self.watchPipe,())
-
-    def watchPipe(self):
         while True:
             with open("pipeDetector"+self.MyId) as fifo:
                 while True:
@@ -104,9 +102,9 @@ class DetectorController:
                         #pipe closed
                         break
                     if message == "error":
-                        test.error()
+                        self.error()
                     elif message == "resolved":
-                        test.resolved()
+                        self.resolved()
                     else:
                         print('received unknown message via pipe: %s' % (message,))
 
@@ -164,31 +162,37 @@ class DetectorController:
             data["tag"] = self.configTag
         if comment:
             data["comment"] = comment
-        try:
-            socketSendUpdateToPCA = self.context.socket(zmq.REQ)
-            socketSendUpdateToPCA.connect("tcp://%s:%s" % (self.pcaAddress,self.pcaUpdatePort))
-            socketSendUpdateToPCA.send(json.dumps(data).encode())
-            #try to receive Ok from PCA
-            r = socketSendUpdateToPCA.recv()
-            if r == codes.idUnknown:
-                print("wrong PCA")
-                socketSendUpdateToPCA.close()
-                data = self.getPCAData()
-                self.changePCA(data)
-                self.sendUpdate(sequenceNumber,comment)
-        except zmq.Again:
-            print("timeout sending status")
-            if sequenceNumber < self.sequenceNumber:
-                #if there is already a new update give up
+        #repeat until update is received
+        while True:
+            try:
+                print(data)
+                socketSendUpdateToPCA = self.context.socket(zmq.REQ)
+                socketSendUpdateToPCA.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+                socketSendUpdateToPCA.connect("tcp://%s:%s" % (self.pcaAddress,self.pcaUpdatePort))
+                socketSendUpdateToPCA.send(json.dumps(data).encode())
+                #try to receive Ok from PCA
+                r = socketSendUpdateToPCA.recv()
+                if r == codes.idUnknown:
+                    print("wrong PCA")
+                    socketSendUpdateToPCA.close()
+                    dataPCA = self.getPCAData()
+                    self.changePCA(dataPCA)
+                else:
+                    #success
+                    return
+            except zmq.Again:
+                print("timeout sending status")
+                if sequenceNumber < self.sequenceNumber:
+                    #if there is already a new update give up
+                    return
+            except zmq.error.ContextTerminated:
+                #Agent is being terminated
                 return
-            #resend update
-            self.sendUpdate(sequenceNumber,comment)
-        except zmq.error.ContextTerminated:
-            pass
-        except Exception as e:
-            print("error sending status: %s" % str(e))
-        finally:
-            socketSendUpdateToPCA.close()
+            except Exception as e:
+                print("error sending status: %s" % str(e))
+                raise Exception("error sending status")
+            finally:
+                socketSendUpdateToPCA.close()
 
 
     def waitForUpdates(self):
@@ -219,7 +223,42 @@ class DetectorController:
             self.stateMap[id] = (sequence, state)
 
     def waitForTransition(self):
-        pass
+        while True:
+            try:
+                ret = self.socketReceiver.recv_multipart()
+                print(ret)
+                if len(ret)  == 2:
+                    command,tag = ret
+                    command = command.decode()
+                    tag = tag.decode()
+                else:
+                    command = ret[0].decode()
+                    tag=None
+                if self.stateMachine.currentState not in {DetectorStates.Active,DetectorStates.Unconfigured}  and command not in {DetectorTransitions.abort,DetectorTransitions.reset}:
+                    self.socketReceiver.send(codes.busy)
+                    print("busy")
+                    continue
+                elif not self.stateMachine.checkIfPossible(command):
+                    self.socketReceiver.send(codes.error)
+                    print("error")
+                    continue
+                else:
+                    self.socketReceiver.send(codes.ok)
+                self.abort = False
+                if command == DetectorTransitions.configure:
+                    self.transition(DetectorTransitions.configure,tag)
+                    self.inTransition = True
+                    workThread = threading.Thread(name="worker", target=self.configure, args=(tag,))
+                    workThread.start()
+                elif command == DetectorTransitions.abort:
+                    self.abortFunction()
+                elif command == DetectorTransitions.reset:
+                    self.reset()
+                elif command == DetectorTransitions.error:
+                    self.error()
+            except zmq.error.ContextTerminated:
+                self.socketReceiver.close()
+                break
 
     def waitForCommands(self):
         while True:
@@ -290,51 +329,21 @@ class DetectorController:
                 self.stateMachineLock.release()
                 t = threading.Thread(name='update'+str(sequenceNumber), target=self.sendUpdate, args=(sequenceNumber,comment))
                 t.start()
-                #self.sendUpdate(sequenceNumber,comment)
         finally:
             if self.stateMachineLock.locked():
                 self.stateMachineLock.release()
 
+    def executeScript(self,scriptname):
+        self.scriptProcess = subprocess.Popen(["exec ./"+scriptname], shell=True)
+        ret = self.scriptProcess.wait()
+        if ret:
+            return False
+        else:
+            return True
 
 class DetectorA(DetectorController):
 
-    def waitForTransition(self):
-        while True:
-            try:
-                ret = self.socketReceiver.recv_multipart()
-                print(ret)
-                if len(ret)  == 2:
-                    command,tag = ret
-                    command = command.decode()
-                    tag = tag.decode()
-                else:
-                    command = ret[0].decode()
-                    tag=None
-                if self.stateMachine.currentState not in {DetectorStates.Active,DetectorStates.Unconfigured} and command not in {DetectorTransitions.abort,DetectorTransitions.reset}:
-                    self.socketReceiver.send(codes.busy)
-                    print("busy")
-                    continue
-                elif not self.stateMachine.checkIfPossible(command):
-                    self.socketReceiver.send(codes.error)
-                    print("error")
-                    continue
-                else:
-                    self.socketReceiver.send(codes.ok)
-                self.abort = False
-                if command == DetectorTransitions.configure:
-                    self.transition(DetectorTransitions.configure,tag)
-                    self.inTransition = True
-                    workThread = threading.Thread(name="worker", target=self.getReady, args=(tag,))
-                    workThread.start()
-                elif command == DetectorTransitions.abort:
-                    self.abortFunction()
-                elif command == DetectorTransitions.reset:
-                    self.reset()
-            except zmq.error.ContextTerminated:
-                self.socketReceiver.close()
-                break
-
-    def getReady(self,tag):
+    def configure(self,tag):
         for i in range(0,2):
             ret = self.executeScript("detectorScript.sh")
             if ret:
@@ -350,15 +359,6 @@ class DetectorA(DetectorController):
                 break
         self.inTransition = False
 
-
-    def executeScript(self,scriptname):
-        self.scriptProcess = subprocess.Popen(["exec ./"+scriptname], shell=True)
-        ret = self.scriptProcess.wait()
-        if ret:
-            return False
-        else:
-            return True
-
     def abortFunction(self):
         #terminate Transition if active
         if self.inTransition:
@@ -369,43 +369,8 @@ class DetectorA(DetectorController):
             self.transition(DetectorTransitions.abort)
 
 class DetectorB(DetectorController):
-    def waitForTransition(self):
-        while True:
-            try:
-                ret = self.socketReceiver.recv_multipart()
-                print(ret)
-                if len(ret)  == 2:
-                    command,tag = ret
-                    command = command.decode()
-                    tag = tag.decode()
-                else:
-                    command = ret[0].decode()
-                    tag=None
-                if self.stateMachine.currentState not in {DetectorStates.Active,DetectorStates.Unconfigured}  and command not in {DetectorTransitions.abort,DetectorTransitions.reset}:
-                    self.socketReceiver.send(codes.busy)
-                    print("busy")
-                    continue
-                elif not self.stateMachine.checkIfPossible(command):
-                    self.socketReceiver.send(codes.error)
-                    print("error")
-                    continue
-                else:
-                    self.socketReceiver.send(codes.ok)
-                self.abort = False
-                if command == DetectorTransitions.configure:
-                    self.transition(DetectorTransitions.configure,tag)
-                    self.inTransition = True
-                    workThread = threading.Thread(name="worker", target=self.getReady, args=(tag,))
-                    workThread.start()
-                elif command == DetectorTransitions.abort:
-                    self.abortFunction()
-                elif command == DetectorTransitions.reset:
-                    self.reset()
-            except zmq.error.ContextTerminated:
-                self.socketReceiver.close()
-                break
 
-    def getReady(self,tag):
+    def configure(self,tag):
         for i in range(0,3):
             ret = self.executeScript("detectorScript.sh")
             if ret:
@@ -420,15 +385,6 @@ class DetectorB(DetectorController):
                 self.inTransition = False
                 break
         self.inTransition = False
-
-
-    def executeScript(self,scriptname):
-        self.scriptProcess = subprocess.Popen(["exec ./"+scriptname], shell=True)
-        ret = self.scriptProcess.wait()
-        if ret:
-            return False
-        else:
-            return True
 
     def abortFunction(self):
         #terminate Transition if active

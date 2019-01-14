@@ -4,8 +4,6 @@ from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from GUI.models import pcaModel
 from django.urls import reverse
 from django.conf import settings
-from channels.layers import get_channel_layer
-from asgiref.sync import async_to_sync
 import json
 from django.contrib.auth.decorators import login_required, permission_required
 from django.contrib.auth.models import Permission
@@ -22,7 +20,7 @@ projectPath = settings.PATH_TO_PROJECT
 sys.path.append(projectPath)
 from ECSCodes import ECSCodes
 codes = ECSCodes()
-from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject
+from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject, configObject
 from ECS import ECS,DataBaseWrapper
 
 ecs = ECS()
@@ -58,19 +56,9 @@ def permission_timeout():
                     if timedelta.total_seconds() > settings.PERMISSION_TIMEOUT:
                         print(str(timedelta.total_seconds()) +" timeout user: "+str(user) )
                         remove_perm('has_control', user, pcaObject)
-                        channel_layer = get_channel_layer()
                         #inform over websocket
                         ecs.webSocket.permissionTimeout(str(user))
-                        """
-                        async_to_sync(channel_layer.group_send)(
-                            #the group name
-                            str(user),
-                            {
-                                #calls method update in the consumer which is registered to channel layer
-                                'type': "permissionTimeout",
-                            }
-                        )
-                        """
+
 t = threading.Thread(name="permission_timeout", target=permission_timeout)
 t.start()
 
@@ -427,14 +415,60 @@ class reset(ecsMixin,pcaPermissionMixin,View):
     raise_exception = True
     def post(self, request, *args, **kwargs):
         pcaId = self.kwargs['pcaId']
-        detId = request.POST['detectorId']
+        systemId = request.POST['systemId']
         pca = ecs.getPCAHandler(pcaId)
         arg = {
-            "detectorId" : detId,
+            "systemId" : systemId,
         }
         pca.sendCommand(codes.reset,json.dumps(arg))
         return HttpResponse(status=200)
 
+class configTagModalView(ecsMixin,pcaPermissionMixin,TemplateView):
+    template_name = "GUI/config_modal.html"
+    raise_exception = True
+
+    def dispatch(self, request, *args, **kwargs):
+        pcaId = self.kwargs['pcaId']
+        handler = ecs.getPCAHandler(pcaId)
+        tag = handler.stateMap[pcaId][1].configTag
+        configList = ecs.getConfigsForPCA(pcaId)
+        if isinstance(configList,str):
+            self.error = configList
+            return super().dispatch(request, *args, **kwargs)
+
+        if not tag:
+            systemConfigForTag = {}
+        else:
+            self.currentTag=tag
+            systemConfigForTag = ecs.getConfigsForTag(tag)
+            if configList == codes.idUnknown:
+                systemConfigForTag = {}
+            elif isinstance(systemConfigForTag,str):
+                self.error = configList
+                return super().dispatch(request, *args, **kwargs)
+
+        #config for currently selected tag
+        self.systemConfigs = {}
+        for c in systemConfigForTag:
+            self.systemConfigs[c.systemId] =  {c.configId:c.parameters}
+
+        #all avaiable configs
+        for c in configList:
+            if c.systemId not in self.systemConfigs:
+                self.systemConfigs[c.systemId] = {}
+            if c.configId not in self.systemConfigs[c.systemId]:
+                self.systemConfigs[c.systemId][c.configId] = c.parameters
+
+        print(self.systemConfigs)
+        tagList = ecs.getTagsForPCA(pcaId)
+        if isinstance(tagList,str):
+            self.error = tagList
+        else:
+            if tag:
+                tagList.remove(tag)
+            self.tagList = tagList
+
+        return super().dispatch(request, *args, **kwargs)
 @login_required
 def getDetectorListForPCA(request):
     """Ask ECS for DetectorList from Database"""
@@ -444,6 +478,29 @@ def getDetectorListForPCA(request):
         return HttpResponse(status=404)
     else:
         return JsonResponse(detList.asDictionary())
+
+@login_required
+def getConfigsForSystem(request):
+    """Ask ECS for DetectorList from Database"""
+    id = request.POST['id']
+    configList = ecs.getConfigsForSystem(id)
+    if configList == codes.idUnknown:
+        return HttpResponse(status=404)
+    else:
+        return JsonResponse(configList.asDictionary())
+
+@login_required
+def getConfigsForTag(request):
+    """Ask ECS for DetectorList from Database"""
+    tag = request.POST['tag']
+    configList = ecs.getConfigsForTag(tag)
+    if configList == codes.idUnknown:
+        configList = {}
+
+    if isinstance(configList,str):
+        return JsonResponse({"error":configList})
+
+    return JsonResponse(configList.asDictionary())
 
 @login_required
 def getUnmappedDetectors(request):
@@ -478,7 +535,6 @@ def currentTableAndLogRequest(request,pcaId):
         #single pca
         if pcaId in ecs.pcaHandlers:
             handler = ecs.pcaHandlers[pcaId]
-            #f = lambda x:[x[0],x[1].asJson()].append(k in ecs.globalSystems)
             map = dict((k,(v[0],v[1].asJson(),k in ecs.globalSystems)) for k,v in handler.stateMap.map.items())
             #send buffered log entries
             if len(handler.logQueue) > 0:

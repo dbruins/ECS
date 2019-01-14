@@ -1,0 +1,94 @@
+{% extends "GUI/modal_base.html" %}
+
+{%block title%}Configuration{%endblock%}
+
+{%block body%}
+  <div class="container">
+  {%for system in view.systemConfigs.items%}
+  <div class="row">
+    <div class="col">
+      {{system.0}}
+    </div>
+    <div class="col">
+      <select class="form-control" id="selConf{{system.0}}">
+        {%for config in system.1.items%}
+          <option id="config{{config.0}}" details="{%for k,v in config.1.items%} {{k}} = {{v}} <br/>{%endfor%}" value="{{config.0}}">{{config.0}}</option>
+        {%endfor%}
+      </select>
+    </div>
+    <div class="col">
+      <a tabindex="0" id="detailsConfig{{system.0}}" class="btn btn-primary btn-sm" role="button" data-toggle="popover" data-trigger="focus" title="Details For {{system.0}}" data-html="true" data-content="dsad">Details</a>
+      <script>
+          $('#selConf{{system.0}}').change(function(event){
+             $('#detailsConfig{{system.0}}').attr("data-content",event.target.selectedOptions[0].attributes["details"].textContent)
+          });
+         var detailContent = $("#selConf{{system.0}} option:selected").attr("details")
+         $('#detailsConfig{{system.0}}').attr("data-content",detailContent)
+         $('[data-toggle="popover"]').popover()
+         $('.popover-dismiss').popover({
+            trigger: 'focus'
+          })
+      </script>
+    </div>
+  </div>
+  {%endfor%}
+  <div class="row">
+    {%if view.error%}
+      <p>Error getting TagList {{view.error}}</p>
+    {%else%}
+      <div class="form-group">
+       <label for="selTag">Select Config Tag:</label>
+       {%if view.tagList%}
+         <select class="form-control" id="selTag">
+           {% if view.currentTag%}
+              <option>{{view.currentTag}}</option>
+           {%endif%}
+           {%for t in view.tagList%}
+              <option>{{t}}</option>
+           {%endfor%}
+         </select>
+         <script>
+            $("#selTag").change(function(event){
+              var tag = event.target.selectedOptions[0].textContent;
+              $.ajax({
+                  type: "POST",
+                  url: "{% url 'GUI:getConfigsForTag'%}",
+                  data:{
+                    csrfmiddlewaretoken: '{{ csrf_token }}',
+                    tag: tag,
+                  },
+                  error: function(jqXHR, textStatus, errorThrown) {
+                      console.log(jqXHR.status);
+                  },
+                  "success": function(result) {
+                      for (config in result){
+                          system = result[config][0];
+                          $("#selConf"+system).val(config);
+                          $("#selConf"+system).change();
+                      }
+                  },
+              });
+            });
+         </script>
+       {%else%}
+         <p>No Config Tags for this Detector Assignment</p>
+       {%endif%}
+      </div>
+    {%endif%}
+  </div>
+  <div cass="form-row"
+    <form id="configureSave_form">
+        <input  id="configureTagSave_input" class="form-control" type="text" placeholder="Tagname" required>
+        <div class="invalid-feedback">
+          Please enter a Name
+        </div>
+        <button id="ready" class="btn btn-primary">Save as new Configtag</button>
+    </form>
+  </div>
+  </div>
+{%endblock body%}
+
+{%block footer%}
+  <button type="button" class="btn btn-primary" data-dismiss="modal">Select</button>
+  <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+{%endblock footer%}

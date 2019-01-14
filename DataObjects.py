@@ -121,9 +121,6 @@ class stateObject(DataObject):
     def asJsonString(self):
         return json.dumps(self.asJson())
 
-    def asJson(self):
-        return self.__dict__
-
     def __init__(self,data):
         if isinstance(data,dict):
             #from json
@@ -142,3 +139,14 @@ class stateObject(DataObject):
             self.state = data
         else:
             raise TypeError("Expected dictionary or list")
+
+class configObject(DataObject):
+    def __init__(self,queryResult):
+        if isinstance(queryResult,dict):
+            self.configId = queryResult["configId"]
+            self.systemId = queryResult["systemId"]
+            self.parameters = queryResult["parameters"]
+        else:
+            self.configId = queryResult[0]
+            self.systemId = queryResult[1]
+            self.parameters = queryResult[2]

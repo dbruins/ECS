@@ -47,7 +47,7 @@ class WebSocket:
         l.run_until_complete(self.__async_sendUpdate(update,pcaId))
 
     @asyncio.coroutine
-    async def __my_send(self,user,message,lock):
+    async def __async_send(self,user,message,lock):
         try:
             lock.acquire()
             await user.send(json.dumps(message))
@@ -62,10 +62,10 @@ class WebSocket:
         }
         if pcaId in self.openConnections and self.openConnections[pcaId]:
             #await asyncio.wait([user.send(json.dumps(message)) for user in self.openConnections[pcaId]])
-            await asyncio.wait([self.__my_send(user,message,self.webSocketLocks[user]) for user in self.openConnections[pcaId]])
+            await asyncio.wait([self.__async_send(user,message,self.webSocketLocks[user]) for user in self.openConnections[pcaId]])
 
         if "ecs" in self.openConnections and self.openConnections["ecs"]:
-            await asyncio.wait([self.__my_send(user,message,self.webSocketLocks[user]) for user in self.openConnections["ecs"]])
+            await asyncio.wait([self.__async_send(user,message,self.webSocketLocks[user]) for user in self.openConnections["ecs"]])
 
     def sendLogUpdate(self,update,pcaId):
         l = asyncio.new_event_loop()
@@ -78,7 +78,7 @@ class WebSocket:
             "origin": pcaId
         }
         if pcaId in self.openConnections and self.openConnections[pcaId]:
-            await asyncio.wait([self.__my_send(user,message,self.webSocketLocks[user]) for user in self.openConnections[pcaId]])
+            await asyncio.wait([self.__async_send(user,message,self.webSocketLocks[user]) for user in self.openConnections[pcaId]])
 
     def permissionTimeout(self,user):
         l = asyncio.new_event_loop()

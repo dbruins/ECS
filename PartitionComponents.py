@@ -5,7 +5,7 @@ import zmq
 import logging
 from ECSCodes import ECSCodes
 codes = ECSCodes()
-from states import DCSStates,DCSTransitions, DetectorStates, DetectorTransitions, FLESStates, FLESTransitions, QAStates, QATransitions, TFCStates, TFCTransitions, GlobalSystemStates, GlobalSystemStatesTransitions
+from states import CommonStates,DCSStates,DCSTransitions, DetectorStates, DetectorTransitions, FLESStates, FLESTransitions, QAStates, QATransitions, TFCStates, TFCTransitions, GlobalSystemStates, GlobalSystemTransitions
 import configparser
 import time
 import ECS_tools
@@ -62,7 +62,7 @@ class PartitionComponent:
                 pingSocket.recv()
                 if self.connected != True:
                     self.logfunction("%s is connected" % self.name)
-                    ret = self.getStateFromDetector()
+                    ret = self.getStateFromSystem()
                     if not ret:
                         #sometimes when PCA and DC start both at once there is a timeout from getting state(maybe the socket isn't ready idk)
                         continue
@@ -95,6 +95,22 @@ class PartitionComponent:
         self.stateMachine.currentState = state
         self.currentStateObject = stateObject([self.getMappedState(),state,configTag,Comment])
 
+    def getStateObject(self):
+        """gets current state + transition for Publishing"""
+        if not self.connected:
+            return stateObject(self.getMappedState())
+        else:
+            return self.currentStateObject
+
+    def getState(self):
+        if not self.connected:
+            return CommonStates.ConnectionProblem
+        return self.stateMachine.currentState
+
+    def getMappedState(self):
+        if not self.connected:
+            return CommonStates.ConnectionProblem
+        return self.mapper[self.stateMachine.currentState]
 
 class Detector(PartitionComponent):
 
@@ -112,23 +128,6 @@ class Detector(PartitionComponent):
 
     def getId(self):
         return self.id
-
-    def getState(self):
-        if not self.connected:
-            return DetectorStates.ConnectionProblem
-        return self.stateMachine.currentState
-
-    def getMappedState(self):
-        if not self.connected:
-            return DetectorStates.ConnectionProblem
-        return self.mapper[self.stateMachine.currentState]
-
-    def getStateObject(self):
-        """gets current state + transition for Publishing"""
-        if not self.connected:
-            return stateObject(self.getMappedState())
-        else:
-            return self.currentStateObject
 
     def createSendSocket(self):
         """init or reset the send Socket"""
@@ -169,7 +168,7 @@ class Detector(PartitionComponent):
             socketSender.close()
         return True
 
-    def getStateFromDetector(self):
+    def getStateFromSystem(self):
         """get's the state from the DetectorController eturns False when a Problem occurs. Use on startup or if there has been a crash or a connection Problem"""
         state = False
         try:
@@ -198,6 +197,12 @@ class Detector(PartitionComponent):
         self.zmqContext.term()
         self.logfunction("Detector "+str(self.id)+" was terminated",True)
 
+    def error(self):
+        if self.getMappedState() in {DetectorStates.Error}:
+            self.logfunction("nothing to be done for Detector %s" % self.id)
+            return True
+        return self.transitionRequest(DetectorTransitions.error)
+
     def reset(self):
         if self.getMappedState() not in {DetectorStates.Error}:
             self.logfunction("nothing to be done for Detector %s" % self.id)
@@ -207,26 +212,26 @@ class Detector(PartitionComponent):
 class DetectorA(Detector):
 
     def getReady(self,configTag):
-        if self.getMappedState() not in {DetectorStates.Unconfigured, DetectorStates.ConnectionProblem,DetectorStates.Error}:
+        if self.getMappedState() not in {DetectorStates.Unconfigured, CommonStates.ConnectionProblem,DetectorStates.Error}:
             self.logfunction("nothing to be done for Detector %s" % self.id)
             return True
         return self.transitionRequest(DetectorTransitions.configure,configTag)
 
     def abort(self):
-        if self.getMappedState() == DetectorStates.ConnectionProblem or not self.stateMachine.checkIfPossible(DetectorTransitions.abort):
+        if self.getMappedState() == CommonStates.ConnectionProblem or not self.stateMachine.checkIfPossible(DetectorTransitions.abort):
             return False
         return self.transitionRequest(DetectorTransitions.abort)
 
 class DetectorB(Detector):
 
     def getReady(self,configTag):
-        if self.getMappedState() not in {DetectorStates.Unconfigured, DetectorStates.ConnectionProblem,DetectorStates.Error}:
+        if self.getMappedState() not in {DetectorStates.Unconfigured, CommonStates.ConnectionProblem,DetectorStates.Error}:
             self.logfunction("nothing to be done for Detector %s" % self.id)
             return True
         return self.transitionRequest(DetectorTransitions.configure,configTag)
 
     def abort(self):
-        if self.getMappedState() == DetectorStates.ConnectionProblem or not self.stateMachine.checkIfPossible(DetectorTransitions.abort):
+        if self.getMappedState() == CommonStates.ConnectionProblem or not self.stateMachine.checkIfPossible(DetectorTransitions.abort):
             return False
         return self.transitionRequest(DetectorTransitions.abort)
 
@@ -241,23 +246,6 @@ class GlobalSystemComponent(PartitionComponent):
 
     def timeoutFunction(self):
         self.pcaTimeoutFunction(self.name)
-
-    def getState(self):
-        if not self.connected:
-            return GlobalSystemStates.ConnectionProblem
-        return self.stateMachine.currentState
-
-    def getMappedState(self):
-        if not self.connected:
-            return GlobalSystemStates.ConnectionProblem
-        return self.mapper[self.stateMachine.currentState]
-
-    def getStateObject(self):
-        """gets current state + transition for Publishing"""
-        if not self.connected:
-            return stateObject(self.getMappedState())
-        else:
-            return self.currentStateObject
 
     def transitionRequest(self,command,configTag=None):
         self.abort_bool = False
@@ -294,7 +282,7 @@ class GlobalSystemComponent(PartitionComponent):
             socketSender.close()
         return True
 
-    def getStateFromDetector(self):
+    def getStateFromSystem(self):
         state = False
         try:
             requestSocket = self.zmqContext.socket(zmq.REQ)
@@ -317,6 +305,12 @@ class GlobalSystemComponent(PartitionComponent):
             raise e
         finally:
             requestSocket.close()
+
+    def reset(self):
+        if self.getMappedState() not in {GlobalSystemStates.Error}:
+            self.logfunction("nothing to be done for %s" % self.id)
+            return True
+        return self.transitionRequest(GlobalSystemTransitions.reset)
 
 class DCS(GlobalSystemComponent):
     def __init__(self,pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):

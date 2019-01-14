@@ -10,7 +10,7 @@ class PCAStates:
     QA_Active = "QA_Active"
     Recording = "Recording"
 
-    #states in which PCA is configuring somethings
+    #states in which PCA is configuring something
     configuringStates = {Configuring_TFC,Configuring_Detectors,Configuring_FLES_and_DCS,Configuring_QA}
 
     #states in which configuring button should be enabled
@@ -51,12 +51,14 @@ class MappedStates:
     Configuring = "Configuring"
     Unconfigured = "Unconfigured"
 
+class CommonStates:
+    ConnectionProblem = "Connection Problem"
+
 class DetectorStates:
     Unconfigured = "Unconfigured"
     Configuring_Step1 = "Configuring_Step1"
     Configuring_Step2 = "Configuring_Step2"
     Active = "Active"
-    ConnectionProblem = "Connection Problem"
     Error = "Error"
 
 class DetectorTransitions:
@@ -71,36 +73,38 @@ class GlobalSystemStates:
     Unconfigured = "Unconfigured"
     Configuring = "Configuring"
     Active = "Active"
-    ConnectionProblem = "Connection Problem"
+    Error = "Error"
 
-class GlobalSystemStatesTransitions:
+class GlobalSystemTransitions:
     success = "success"
     abort = "abort"
     configure = "configure"
     error = "error"
+    resolved = "resolved"
+    reset = "reset"
 
 class TFCStates(GlobalSystemStates):
     pass
 
-class TFCTransitions(GlobalSystemStatesTransitions):
+class TFCTransitions(GlobalSystemTransitions):
     pass
 
 class DCSStates(GlobalSystemStates):
     pass
 
-class DCSTransitions(GlobalSystemStatesTransitions):
+class DCSTransitions(GlobalSystemTransitions):
     pass
 
 class QAStates(GlobalSystemStates):
     Recording = "Recording"
 
-class QATransitions(GlobalSystemStatesTransitions):
+class QATransitions(GlobalSystemTransitions):
     start = "start"
     stop = "stop"
 
 class FLESStates(GlobalSystemStates):
     Recording = "Recording"
 
-class FLESTransitions(GlobalSystemStatesTransitions):
+class FLESTransitions(GlobalSystemTransitions):
     start = "start"
     stop = "stop"

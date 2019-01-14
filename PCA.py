@@ -11,7 +11,7 @@ import struct # for packing integers
 import logging
 from ECSCodes import ECSCodes
 codes = ECSCodes()
-from states import PCAStates, PCATransitions, MappedStates, DCSStates,DCSTransitions, DetectorStates, DetectorTransitions, FLESStates, FLESTransitions, QAStates, QATransitions, TFCStates, TFCTransitions, GlobalSystemStates, GlobalSystemStatesTransitions
+from states import PCAStates, PCATransitions, MappedStates, CommonStates, DCSStates,DCSTransitions, DetectorStates, DetectorTransitions, FLESStates, FLESTransitions, QAStates, QATransitions, TFCStates, TFCTransitions, GlobalSystemStates, GlobalSystemTransitions
 pcaStates = PCAStates()
 import configparser
 import copy
@@ -133,6 +133,7 @@ class PCA:
         else:
             logging.getLogger().handlers[1].setLevel(logging.CRITICAL)
 
+        self.readyDetectorCount = 0
         #get your Detectorlist
         detList = None
         while detList == None:
@@ -171,6 +172,9 @@ class PCA:
         #create global System objects
         systemList = ["TFC","DCS","QA","FLES"]
         res = []
+        self.messageHandlerFunctionForSystem = {
+            "DCS" : self.handleDCSMessage,
+        }
         #get info from ECS
         for s in systemList:
             requestSocket = self.context.socket(zmq.REQ)
@@ -230,7 +234,7 @@ class PCA:
         self.publishQueue.put((self.id,stateObject([self.stateMachine.currentState,self.stateMachine.currentState,self.configTag,None])))
         #thread stuff
         start_new_thread(self.waitForUpdates,())
-        start_new_thread(self.waitForRequests,())
+        start_new_thread(self.waitForStateTableRequests,())
         start_new_thread(self.waitForCommands,())
         self.initdone.set()
 
@@ -275,7 +279,8 @@ class PCA:
                         codes.check: checkConsistencyRequest,
                         codes.lock: self.lockPartition,
                         codes.unlock: self.unlockPartition,
-                        codes.reset: self.resetDetector,
+                        codes.reset: self.resetSystem,
+                        codes.subsystemMessage: self.handleSystemMessage
                     }
                     #returns function for Code or None if the received code is unknown
                     f = dbFunctionDictionary.get(code,None)
@@ -336,11 +341,6 @@ class PCA:
                     #update is obsolete
                     continue
 
-                #handle Message from DCS todo: this is not the right place to do this
-                if id == "DCS" and "detectorId" in message:
-                    self.handleDCSMessage(message["detectorId"],message["message"])
-                    continue
-
                 state = message["state"]
                 configTag = None
                 comment = None
@@ -360,8 +360,8 @@ class PCA:
                 self.socketDetectorUpdates.close()
                 break
 
-    def waitForRequests(self):
-        """waits for messages from detectors/ECS/WebServer"""
+    def waitForStateTableRequests(self):
+        """waits for requests for entire State-Table"""
         while True:
             #request for entire statusMap e.g. if a new Detector/Client connects
             try:
@@ -403,7 +403,7 @@ class PCA:
         for detId in self.detectors.keyIterator():
             if detId in self.detectors:
                 d = self.detectors[detId]
-                ret = d.getStateFromDetector()
+                ret = d.getStateFromSystem()
                 if not ret:
                     #timeout getting State let the pingThread handle it
                     continue
@@ -478,12 +478,29 @@ class PCA:
         if stateObj.configTag and self.getCurrentConfigTag() != stateObj.configTag:
             gs.abort()
 
-    def handleDCSMessage(self,detId,message):
+    def handleSystemMessage(self,arg):
+        message = json.loads(arg)
+
+        if "id" not in message:
+            self.log("received malformed system message: %s" % str(message),True)
+            return codes.error
+        id = message["id"]
+        if id in self.messageHandlerFunctionForSystem:
+            self.messageHandlerFunctionForSystem[id](message)
+        else:
+            self.log("received system message from %s but not message handler found" % id,True)
+            return codes.idUnknown
+        return codes.ok
+
+    def handleDCSMessage(self,message):
         """handle messages from the DCS"""
+        detId = message["detectorId"]
+        message = message["message"]
+        print(message)
         det = self.detectors[detId]
         self.log("received message %s from DCS for Detector %s" % (message,detId))
-        if message == "critical":
-            det.abort()
+        if message == "detectorError":
+            det.error()
 
     def handleDetectorTimeout(self,id):
         """this function is triggered if a Detector timesout"""
@@ -536,13 +553,12 @@ class PCA:
                         self.configure()
             #check if all Detectors are configured
             elif self.stateMachine.currentState == PCAStates.Configuring_Detectors:
-                ready = True
+                self.readyDetectorCount = 0
                 for id in self.detectors.keyIterator():
                     d = self.detectors[id]
-                    if d.getMappedState() != MappedStates.Active:
-                        ready = False
-                        break
-                if ready:
+                    if d.getMappedState() == MappedStates.Active:
+                        self.readyDetectorCount += 1
+                if self.readyDetectorCount == len(self.detectors):
                     self.transition(PCATransitions.success)
                     if self.autoConfigure:
                         self.configure()
@@ -565,27 +581,21 @@ class PCA:
                 elif self.TFC.getMappedState() == MappedStates.Unconfigured:
                     self.transition(PCATransitions.failure)
             #TFC is not active
-            elif self.TFC.getMappedState() == MappedStates.Unconfigured or self.TFC.getMappedState() == TFCStates.ConnectionProblem:
+            elif self.TFC.getMappedState() == MappedStates.Unconfigured or self.TFC.getMappedState() == CommonStates.ConnectionProblem:
                 self.error_transition(PCATransitions.error_TFC)
         #Detector State changed
         elif id in self.detectors:
             det = self.detectors[id]
             #if configuring
             if self.stateMachine.currentState == PCAStates.Configuring_Detectors and det.getMappedState() == MappedStates.Active :
-                ready = True
-                #check if all detectors are Ready
-                for id in self.detectors.keyIterator():
-                    d = self.detectors[id]
-                    if d.getMappedState() != MappedStates.Active:
-                        ready = False
-                        break
-                if ready:
+                self.readyDetectorCount += 1
+                if self.readyDetectorCount == len(self.detectors):
                     self.transition(PCATransitions.success)
                     self.log("detector configure time"+str(time.time()-self.detector_configure_time_start))
                     if self.autoConfigure:
                         self.configure()
             #detector is not active
-            elif det.getMappedState() == MappedStates.Unconfigured or det.getMappedState() == DetectorStates.ConnectionProblem or det.getMappedState() == DetectorStates.Error:
+            elif det.getMappedState() == MappedStates.Unconfigured or det.getMappedState() == CommonStates.ConnectionProblem or det.getMappedState() == DetectorStates.Error:
                 if self.stateMachine.currentState == PCAStates.Configuring_Detectors:
                     self.transition(PCATransitions.failure)
                 else:
@@ -602,7 +612,7 @@ class PCA:
                 elif (id == "FLES" and self.FLES.getMappedState() == MappedStates.Unconfigured) or (id == "DCS" and self.DCS.getMappedState() == MappedStates.Unconfigured):
                         self.transition(PCATransitions.failure)
             #FLES OR DCS is not ready anymore
-            elif self.FLES.getMappedState() == MappedStates.Unconfigured or self.FLES.getMappedState() == FLESStates.ConnectionProblem or self.DCS.getMappedState() == MappedStates.Unconfigured or self.DCS.getMappedState() == DCSStates.ConnectionProblem:
+            elif self.FLES.getMappedState() == MappedStates.Unconfigured or self.FLES.getMappedState() == CommonStates.ConnectionProblem or self.DCS.getMappedState() == MappedStates.Unconfigured or self.DCS.getMappedState() == CommonStates.ConnectionProblem:
                 self.error_transition(PCATransitions.error_FLES_OR_DCS)
             if id == "FLES":
                 #FLES should only be recording if PCA is in recording State
@@ -622,7 +632,7 @@ class PCA:
                 elif self.QA.getMappedState() == MappedStates.Unconfigured:
                     self.transition(PCATransitions.failure)
             #QA is not active anymore
-            elif self.QA.getMappedState() == MappedStates.Unconfigured or self.QA.getMappedState() == QAStates.ConnectionProblem:
+            elif self.QA.getMappedState() == MappedStates.Unconfigured or self.QA.getMappedState() == CommonStates.ConnectionProblem:
                 self.error_transition(PCATransitions.error_QA)
             #QA shoudn't record if PCA is not in recording State
             elif self.QA.stateMachine.currentState == QAStates.Recording and self.stateMachine.currentState != PCAStates.Recording:
@@ -701,16 +711,17 @@ class PCA:
             return False
         return True
 
-    def resetDetector(self,arg):
+    def resetSystem(self,arg):
         arg = json.loads(arg)
-        print(arg)
-        detectorId = arg["detectorId"]
-        if detectorId in self.detectors:
-            det = self.detectors[detectorId]
+        systemId = arg["systemId"]
+        if systemId in self.detectors:
+            sys = self.detectors[systemId]
+        elif systemId in self.globalSystems:
+            sys = self.globalSystems[systemId]
         else:
             return codes.idUnknown
 
-        if det.reset():
+        if sys.reset():
             return codes.ok
         return codes.error
 

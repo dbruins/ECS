@@ -8,8 +8,6 @@ from multiprocessing import Queue
 import time
 from _thread import start_new_thread
 from DataObjects import stateObject
-from channels.layers import get_channel_layer
-from asgiref.sync import async_to_sync
 import json
 from states import DetectorStates
 
@@ -90,20 +88,6 @@ class UnmappedDetectorController:
                             }
             jsonWebUpdate = json.dumps(jsonWebUpdate)
             self.webSocket.sendUpdate(jsonWebUpdate,"unmapped")
-            continue
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                #the group name
-                "ecs",
-                {
-                    #calls method update in the consumer which is registered to channel layer
-                    'type': "update",
-                    #argument(s) with which update is called
-                    'text': jsonWebUpdate,
-                    #ecs page needs to know where the update came from
-                    'origin': "unmapped"
-                }
-            )
 
     def waitForUpdates(self):
         while True:

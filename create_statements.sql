@@ -68,3 +68,23 @@ CREATE TRIGGER assertIdsExist
 SELECT * FROM Detector ORDER BY (CAST(id AS int));
 UPDATE Detector SET address="pn03" WHERE (CAST (id AS int)) > 5;
 UPDATE Detector SET address="pn02" WHERE (CAST (id AS int)) <= 5;
+
+
+INSERT INto Configurations (configId,systemId,Parameters) values ("test1", "1", json('{"testparam1":"test", "testparam2":"test2"}'));
+SELECT * FROM ConfigurationTag Join Configurations on ConfigurationTag.configId=Configurations.configId;
+
+
+SELECT distinct tagname FROM ConfigurationTag as x WHERE
+  NOT EXISTS
+   (SELECT detectorId FROM
+					  (SELECT detectorId FROM Partition join Mapping on Partition.id = Mapping.PartitionId WHERE partitionId = "pca2"
+						union
+					  SELECT id FROM GlobalSystems)
+    WHERE detectorId NOT in (SELECT systemId FROM ConfigurationTag WHERE tagname=x.tagname))
+  and NOT EXISTS
+    (SELECT systemId FROM
+          ConfigurationTag
+     WHERE tagname=x.tagname and systemId NOT in
+    (SELECT detectorId FROM ( SELECT detectorId FROM Partition join Mapping on Partition.id = Mapping.PartitionId WHERE partitionId = "pca2"
+     union
+	   SELECT id FROM GlobalSystems)))

@@ -1,7 +1,8 @@
 import sqlite3
-from DataObjects import DataObjectCollection, DataObject, detectorDataObject, partitionDataObject, globalSystemDataObject, mappingDataObject
+from DataObjects import DataObjectCollection, DataObject, detectorDataObject, partitionDataObject, globalSystemDataObject, mappingDataObject, configObject
 from ECSCodes import ECSCodes
 codes = ECSCodes()
+import json
 class DataBaseWrapper:
     """Handler for the ECS Database"""
     connection = None
@@ -235,4 +236,77 @@ class DataBaseWrapper:
             return globalSystemDataObject(res)
         except Exception as e:
             self.log("error getting DCS Info: %s" % str(e),True)
+            return e
+
+    def getPcaCompatibleTags(self,pcaId):
+        """get all tags for a pca which are compatible with the current Detector Assignment"""
+        c = self.connection.cursor()
+        val = (pcaId,pcaId)
+        try:
+            res =c.execute("""
+            SELECT distinct tagname FROM ConfigurationTag as x WHERE
+              NOT EXISTS
+               (SELECT detectorId FROM
+            					  (SELECT detectorId FROM Partition join Mapping on Partition.id = Mapping.PartitionId WHERE partitionId = ?
+            						union
+            					  SELECT id FROM GlobalSystems)
+                WHERE detectorId NOT in (SELECT systemId FROM ConfigurationTag WHERE tagname=x.tagname))
+              and NOT EXISTS
+                (SELECT systemId FROM
+                      ConfigurationTag
+                 WHERE tagname=x.tagname and systemId NOT in
+                (SELECT detectorId FROM ( SELECT detectorId FROM Partition join Mapping on Partition.id = Mapping.PartitionId WHERE partitionId = ?
+                 union
+            	   SELECT id FROM GlobalSystems)))
+            """.replace("\n",""),val).fetchall()
+            if not res:
+                return None
+            #result elements have only one entry so no need for nestet arrays
+            return set(map(lambda x:x[0],res))
+        except Exception as e:
+            self.log("error getting pca %s tags: %s" % (pcaId,str(e)),True)
+            return e
+
+    def getConfigsForTag(self,tag):
+        """get the subsystem configurations for a tag"""
+        c = self.connection.cursor()
+        val = (tag,)
+        try:
+            res =c.execute("SELECT Configurations.configId,Configurations.systemId,parameters FROM Configurations join ConfigurationTag on Configurations.configId = ConfigurationTag.configId where tagname = ?",val).fetchall()
+            if not res:
+                return codes.idUnknown
+            res = list(map(lambda x:x[:2]+(json.loads(x[2]),),res))
+            return DataObjectCollection(res, configObject)
+        except Exception as e:
+            self.log("error getting configurations for tag %s: %s" % (tag,str(e)),True)
+            return e
+
+    def getConfigsForSystem(self,detectorId):
+        """get all possible Configurations for a System"""
+        c = self.connection.cursor()
+        val = (detectorId,)
+        try:
+            res =c.execute("SELECT * FROM Configurations WHERE systemId=?",val).fetchall()
+            if not res:
+                return codes.idUnknown
+            res = list(map(lambda x:x[:2]+(json.loads(x[2]),),res))
+            return DataObjectCollection(res, configObject)
+        except Exception as e:
+            self.log("error getting Configurations for %s: %s" % (detectorId,str(e)),True)
+            return e
+
+    def getConfigsForPCA(self,pcaId):
+        """get all possible Configs for Partition Systems"""
+        c = self.connection.cursor()
+        val = (pcaId,)
+        try:
+            res =c.execute("""SELECT configid,detectorid,parameters FROM ((Partition Join Mapping on Partition.id = Mapping.PartitionId) join Detector on detectorId=Detector.id) join Configurations on detectorid = Configurations.systemId  Where Partitionid=?
+                              union
+                              select configid,id,parameters FROM GlobalSystems join Configurations on GlobalSystems.id = Configurations.systemId""".replace("\n",""),val).fetchall()
+            if not res:
+                return codes.idUnknown
+            res = list(map(lambda x:x[:2]+(json.loads(x[2]),),res))
+            return DataObjectCollection(res, configObject)
+        except Exception as e:
+            self.log("error getting Configurations for %s: %s" % (detectorId,str(e)),True)
             return e

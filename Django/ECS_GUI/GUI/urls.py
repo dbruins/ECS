@@ -25,5 +25,7 @@ urlpatterns = [
     path('currentTableAndLogRequest/<str:pcaId>',views.currentTableAndLogRequest,name='currentTableAndLogRequest'),
     path('take_control/<str:pcaId>/<str:targetPage>', views.takeControl, name='take_control'),
     path('giveup_control/<str:pcaId>/<str:targetPage>', views.giveUpControl, name='giveup_control'),
+    path('configureTagModal/<str:pcaId>', views.configTagModalView.as_view(), name="configureTagModal"),
+    path('getConfigsForTag/', views.getConfigsForTag, name="getConfigsForTag"),
     path('clients/',views.clientPage.as_view(), name='clients')
 ]

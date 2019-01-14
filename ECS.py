@@ -13,13 +13,11 @@ from datetime import datetime
 import paramiko
 #import DataObjects
 from  UnmappedDetectorController import UnmappedDetectorController
-
-from channels.layers import get_channel_layer
 from GUI.models import pcaModel
 from django.conf import settings
 from collections import deque
 from django.utils import timezone
-from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject, globalSystemDataObject, DataObject
+from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject, globalSystemDataObject, DataObject, configObject
 import asyncio
 import signal
 from states import PCAStates
@@ -32,9 +30,6 @@ class ECS:
     def __init__(self):
         self.database = DataBaseWrapper(self.log)
         self.partitions = ECS_tools.MapWrapper()
-        partitions = self.database.getAllPartitions()
-        for p in partitions:
-            self.partitions[p.id] = p
         self.disconnectedDetectors = ECS_tools.MapWrapper()
         self.stateMap = ECS_tools.MapWrapper()
         self.logQueue = deque(maxlen=settings.BUFFERED_LOG_ENTRIES)
@@ -59,7 +54,7 @@ class ECS:
         self.zmqContextNoTimeout = zmq.Context()
         self.zmqContextNoTimeout.setsockopt(zmq.LINGER,0)
 
-        #socket for receiving requests from WebUI
+        #socket for receiving requests
         self.replySocket = self.zmqContextNoTimeout.socket(zmq.REP)
         self.replySocket.bind("tcp://*:%s" % settings.ECS_REQUEST_PORT)
 
@@ -123,6 +118,11 @@ class ECS:
         t = threading.Thread(name="requestHandler", target=self.waitForRequests)
         t.start()
 
+        partitions = self.database.getAllPartitions()
+        if isinstance(partitions,Exception):
+            raise partitions
+        for p in partitions:
+            self.partitions[p.id] = p
         #start PCA clients via ssh
         for p in self.partitions:
             ret = self.startClient(p)
@@ -462,6 +462,42 @@ class ECS:
     def getUnmappedDetectors(self):
         db = DataBaseWrapper(self.log)
         ret = db.getAllUnmappedDetectors()
+        db.close()
+        if isinstance(ret,Exception):
+            return str(ret)
+        else:
+            return ret
+
+    def getTagsForPCA(self,pcaId):
+        db = DataBaseWrapper(self.log)
+        ret = db.getPcaCompatibleTags(pcaId)
+        db.close()
+        if isinstance(ret,Exception):
+            return str(ret)
+        else:
+            return ret
+
+    def getConfigsForSystem(self,id):
+        db = DataBaseWrapper(self.log)
+        ret = db.getConfigsForSystem(id)
+        db.close()
+        if isinstance(ret,Exception):
+            return str(ret)
+        else:
+            return ret
+
+    def getConfigsForTag(self,tag):
+        db = DataBaseWrapper(self.log)
+        ret = db.getConfigsForTag(tag)
+        db.close()
+        if isinstance(ret,Exception):
+            return str(ret)
+        else:
+            return ret
+
+    def getConfigsForPCA(self,pcaId):
+        db = DataBaseWrapper(self.log)
+        ret = db.getConfigsForPCA(pcaId)
         db.close()
         if isinstance(ret,Exception):
             return str(ret)
@@ -932,41 +968,10 @@ class ECS:
             logging.critical(message)
         else:
             logging.info(message)
-        """spread log message through websocket(channel)"""
-        channel_layer = get_channel_layer()
+        """spread log message through websocket"""
         message = origin+": "+str
         self.logQueue.append(message)
         self.webSocket.sendLogUpdate(message,"ecs")
-        """
-        async def sendUpdate(recipient,type,message):
-            await channel_layer.group_send(
-                #group name
-                "ecs",
-                {
-                    #method called in consumer
-                    'type': 'logUpdate',
-                    'text': message,
-                    'origin': origin,
-                }
-            )
-        #run only exists in python3.7
-        #asyncio.run(sendUpdate("ecs",type,message))
-        #python < 3.7
-        loop = asyncio.new_event_loop()
-        task = loop.create_task(sendU(type,message))
-        result = loop.run_until_complete(task)"""
-        """
-        async_to_sync(channel_layer.group_send)(
-            #group name
-            "ecs",
-            {
-                #method called in consumer
-                'type': 'logUpdate',
-                'text': message,
-                'origin': origin,
-            }
-        )
-        """
 
     def terminateECS(self):
         """cleanup on shutdown"""
@@ -1139,43 +1144,6 @@ class PCAHandler:
         self.ecsLogfunction(message,origin=self.id)
         self.webSocket.sendLogUpdate(message,self.id)
         #self.sendUpdateToWebsockets("logUpdate",message)
-
-    def sendUpdateToWebsockets(self,type,message):
-        """send state Updates to the Websocket"""
-        channel_layer = get_channel_layer()
-        async def sendUpdate(recipient,type,message):
-            if recipient != "ecs":
-                await channel_layer.group_send(
-                    recipient,
-                    {
-                        #calls method update in the consumer which is registered to channel layer
-                        'type': type,
-                        #argument(s) with which update is called
-                        'text': message,
-                    }
-                )
-            else:
-                await channel_layer.group_send(
-                    recipient,
-                    {
-                        #calls method update in the consumer which is registered to channel layer
-                        'type': type,
-                        #argument(s) with which update is called
-                        'text': message,
-                        #ecs page needs to know where the update came from
-                        'origin': self.id,
-                    }
-                )
-        #python < 3.7
-        """loop = asyncio.new_event_loop()
-        task = loop.create_task(sendU(type,message))
-        result = loop.run_until_complete(task)"""
-        #run only exists in python3.7
-        asyncio.run(sendUpdate(self.id,type,message))
-        if type != "logUpdate":
-            #ecs page only needs state Updates
-            #print("ECS: ",json.loads(message)["id"],json.loads(message)["state"]["state"])
-            asyncio.run(sendUpdate("ecs",type,message))
 
     def waitForLogUpdates(self):
         """wait for new log messages from PCA"""

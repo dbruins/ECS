@@ -1,6 +1,4 @@
 class ECSCodes:
-
-
     ok = b'\x00'
     error = b'\x01'
     errorCreatingPartition = b'\x14'
@@ -58,6 +56,8 @@ class ECSCodes:
     stop = b'\x19'
     abort = b'\x37'
     toggleAutoConfigure = b'\x21'
+
+    subsystemMessage = b'\x55'
 
     def stringForCode(self,code):
         if code in self.stringForStatusCode:

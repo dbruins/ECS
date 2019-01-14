@@ -32,7 +32,6 @@ ALLOWED_HOSTS = []
 
 INSTALLED_APPS = [
     'guardian',
-    'channels',
     'widget_tweaks',
     'GUI.apps.GuiConfig',
     'django.contrib.admin',
@@ -157,16 +156,6 @@ LOG_PATH_ECS = "./logECS"
 PYTHON_VIRTENV_ACTIVATE_FILE = "virtenv"
 
 WEB_SOCKET_PORT = 5678
-
-ASGI_APPLICATION = 'ECS_GUI.routing.application'
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            "hosts": [('127.0.0.1', 6379)],
-        },
-    },
-}
 
 # Redirect to home URL after login (Default redirects to /accounts/profile/)
 LOGIN_REDIRECT_URL = '/'

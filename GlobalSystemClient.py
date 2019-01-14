@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 from DataObjects import DataObjectCollection, globalSystemDataObject, mappingDataObject, partitionDataObject
-from states import DCSStates,DCSTransitions, FLESStates, FLESTransitions, QAStates, QATransitions, TFCStates, TFCTransitions
+from states import GlobalSystemTransitions,DCSStates,DCSTransitions, FLESStates, FLESTransitions, QAStates, QATransitions, TFCStates, TFCTransitions
 import subprocess
 import zc.lockfile
 import time
@@ -15,8 +15,10 @@ import _thread
 import sys
 import re
 import time
+import os
+import errno
 
-class GlobalSystemClient:
+class GlobalSystemControler:
     def __init__(self,type):
         #create lock
         try:
@@ -96,6 +98,24 @@ class GlobalSystemClient:
         t = threading.Thread(name="waitForCommands", target=self.waitForCommands)
         t.start()
 
+        t = threading.Thread(name="waitForPipeMessages", target=self.waitForPipeMessages)
+        t.start()
+
+    def waitForPipeMessages(self):
+        try:
+            os.mkfifo("pipe"+self.MyId)
+        except OSError as oe:
+            if oe.errno != errno.EEXIST:
+                raise
+        while True:
+            with open("pipe"+self.MyId) as fifo:
+                while True:
+                    message = fifo.read().replace('\n', '')
+                    if len(message) == 0:
+                        #pipe closed
+                        break
+                    self.handleSystemMessage(message)
+
     def sendUpdate(self,pcaId,sequenceNumber,comment=None):
         """send current status update to a Parition with id pcaId"""
         partition = self.PCAs[pcaId]
@@ -108,27 +128,27 @@ class GlobalSystemClient:
             data["tag"] = self.pcaConfigTag[pcaId]
         if comment:
             data["comment"] = comment
-        try:
-            socketSendUpdateToPCA = self.context.socket(zmq.REQ)
-            socketSendUpdateToPCA.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-            socketSendUpdateToPCA.connect("tcp://%s:%s" % (partition.address,partition.portUpdates))
-            socketSendUpdateToPCA.send(json.dumps(data).encode())
-            r = socketSendUpdateToPCA.recv()
-            if r == codes.idUnknown:
-                print("Partition does not know %s bad,very bad" % self.MyId)
-        except zmq.Again:
-            print("timeout sending status %s" % pcaId)
-            if sequenceNumber < self.pcaSequenceNumber[pcaId]:
-                #if there is already a new update give up
+        #repeat until update is received
+        while True:
+            try:
+                socketSendUpdateToPCA = self.context.socket(zmq.REQ)
+                socketSendUpdateToPCA.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+                socketSendUpdateToPCA.connect("tcp://%s:%s" % (partition.address,partition.portUpdates))
+                socketSendUpdateToPCA.send(json.dumps(data).encode())
+                r = socketSendUpdateToPCA.recv()
+                #success
                 return
-            #resend update
-            self.sendUpdate(pcaId,sequenceNumber,comment)
-        except zmq.error.ContextTerminated:
-            pass
-        except Exception as e:
-            print("error sending status: %s" % str(e))
-        finally:
-            socketSendUpdateToPCA.close()
+            except zmq.Again:
+                print("timeout sending status %s" % pcaId)
+                if sequenceNumber < self.pcaSequenceNumber[pcaId]:
+                    #if there is already a new update give up
+                    return
+            except zmq.error.ContextTerminated:
+                return
+            except Exception as e:
+                print("error sending status: %s" % str(e))
+            finally:
+                socketSendUpdateToPCA.close()
 
     def addPartition(self,partitionData):
         self.PCAs[partitionData.id] = partitionData
@@ -147,7 +167,6 @@ class GlobalSystemClient:
         command = message[0]
         if command == codes.ping:
             self.commandSocket.send(codes.ok)
-            return True
         elif command == codes.pcaAsksForDetectorStatus:
             pcaId = message[1].decode()
             if pcaId and pcaId in self.PCAs:
@@ -155,17 +174,14 @@ class GlobalSystemClient:
                     self.commandSocket.send_multipart([self.StateMachineForPca[pcaId].currentState.encode(),self.pcaConfigTag[pcaId].encode()])
                 else:
                     self.commandSocket.send_multipart([self.StateMachineForPca[pcaId].currentState.encode()])
-            return True
         elif command == codes.addPartition:
             data = partitionDataObject(json.loads(message[1].decode()))
             self.addPartition(data)
             self.commandSocket.send(codes.ok)
-            return True
         elif command == codes.deletePartition:
             pcaId = message[1].decode()
             self.deletePartition(pcaId)
             self.commandSocket.send(codes.ok)
-            return True
         elif command == codes.remapDetector:
             detectorId = message[2].decode()
             if message[1] == codes.removed:
@@ -178,8 +194,14 @@ class GlobalSystemClient:
                     self.abortFunction(self.detectorMapping[detectorId])
                 self.detectorMapping[detectorId] = pcaId
             self.commandSocket.send(codes.ok)
-            return True
-        return False
+        elif command.decode() == GlobalSystemTransitions.reset:
+            pcaId = message[1].decode()
+            self.reset(pcaId)
+            self.commandSocket.send(codes.ok)
+        else:
+            #command unknown
+            return False
+        return True
 
     def sendUpdateToAll(self,comment=None):
         for pca in self.PCAs:
@@ -220,16 +242,48 @@ class GlobalSystemClient:
         else:
             return True
 
+
+    def error(self,pcaId=None):
+        if pcaId:
+            self.transition(pcaId,GlobalSystemTransitions.error)
+        else:
+            for partition in self.PCAs:
+                self.transition(partition,GlobalSystemTransitions.error)
+                if self.isPCAinTransition[partition]:
+                    self.abort = True
+                    self.scriptProcess.terminate()
+
+    def resolved(self,pcaId=None):
+        if pcaId:
+            self.transition(pcaId,GlobalSystemTransitions.resolved)
+        else:
+            for partition in self.PCAs:
+                self.transition(partition,GlobalSystemTransitions.resolved)
+
+    def reset(self,pcaId=None):
+        if pcaId:
+            self.transition(pcaId,GlobalSystemTransitions.reset)
+        else:
+            for partition in self.PCAs:
+                self.transition(partition,GlobalSystemTransitions.reset)
+
+    def handleSystemMessage(self,message):
+        if message == "error":
+            self.error()
+        elif message == "resolved":
+            self.resolved()
+        else:
+            print('received unknown message via pipe: %s' % (message,))
+
     def terminate(self):
         self.context.term()
         self.abort = True
         if self.scriptProcess:
             self.scriptProcess.terminate()
-class DCSClient(GlobalSystemClient):
+class DCSControler(GlobalSystemControler):
 
     def __init__(self):
         super().__init__("DCS")
-
 
     def waitForCommands(self):
         """wait for command on the command socket"""
@@ -294,35 +348,40 @@ class DCSClient(GlobalSystemClient):
         else:
             self.transition(pcaId,DCSTransitions.abort)
 
-    def waitForDCSMessages(self,message):
-        detId,message = message
-        if detId not in self.detectorMapping:
-            print("id unknown")
-            return
-        pcaId = self.detectorMapping[detId]
-        partition = self.PCAs[pcaId]
-        data = {
-            "id": "DCS",
-            "detectorId": detId,
-            "message": message,
-        }
+    def handleSystemMessage(self,data):
+        message = data.split()[0]
+        if message == "detectorError":
+            message,detId = data.split()
+            pcaId = self.detectorMapping[detId]
+            partition = self.PCAs[pcaId]
+            data = {
+                "id": "DCS",
+                "detectorId": detId,
+                "message": message,
+            }
+            self.sendDCSMessage(data,partition)
+        else:
+            super().handleSystemMessage(message)
+
+    def sendDCSMessage(self,data,partition):
         data=json.dumps(data).encode()
         try:
             socketSendUpdateToPCA = self.context.socket(zmq.REQ)
-            socketSendUpdateToPCA.connect("tcp://%s:%s" % (partition.address,partition.portUpdates))
-            socketSendUpdateToPCA.send(data)
+            socketSendUpdateToPCA.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+            socketSendUpdateToPCA.connect("tcp://%s:%s" % (partition.address,partition.portCommand))
+            socketSendUpdateToPCA.send_multipart([codes.subsystemMessage,data])
             r = socketSendUpdateToPCA.recv()
             if r == codes.idUnknown:
-                print("Partition does not know DCS bad,very bad")
+                print("Partition does not know DCS")
         except zmq.Again:
-            print("timeout sending status")
+            print("timeout sending DCS message")
         except zmq.error.ContextTerminated:
             pass
         except Exception as e:
             print("error sending DCS message: %s" % str(e))
         finally:
             socketSendUpdateToPCA.close()
-class TFCClient(GlobalSystemClient):
+class TFCControler(GlobalSystemControler):
 
     def __init__(self):
         super().__init__("TFC")
@@ -390,7 +449,7 @@ class TFCClient(GlobalSystemClient):
         else:
             self.transition(pcaId,TFCTransitions.abort)
 
-class QAClient(GlobalSystemClient):
+class QAControler(GlobalSystemControler):
     def __init__(self):
         super().__init__("QA")
 
@@ -472,28 +531,33 @@ class QAClient(GlobalSystemClient):
         else:
             self.transition(pcaId,QATransitions.abort)
 
-    def waitForQAMessages(self,message):
-        detId,message = message
-        if detId not in self.detectorMapping:
-            print("id unknown")
-            return
-        pcaId = self.detectorMapping[detId]
-        partition = self.PCAs[pcaId]
-        data = {
-            "id": "QA",
-            "detectorId": detId,
-            "message": message,
-        }
-        data=json.dumps(data).encode()
+    def handleSystemMessage(self,data):
+        message = data.split()[0]
+        if message == "QAError":
+            message,detID = data.split()
+            pcaId = self.detectorMapping[detId]
+            partition = self.PCAs[pcaId]
+            data = {
+                "id": "DCS",
+                "detectorId": detId,
+                "message": message,
+            }
+            self.sendQAMessage(data,partition)
+        else:
+            super().handleSystemMessage(message)
+
+    def sendQAMessage(self,message,partition):
         try:
+            data=json.dumps(data).encode()
             socketSendUpdateToPCA = self.context.socket(zmq.REQ)
+            socketSendUpdateToPCA.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
             socketSendUpdateToPCA.connect("tcp://%s:%s" % (partition.address,partition.portUpdates))
             socketSendUpdateToPCA.send(data)
             r = socketSendUpdateToPCA.recv()
             if r == codes.idUnknown:
-                print("Partition does not know QA bad,very bad")
+                print("Partition does not know QA")
         except zmq.Again:
-            print("timeout sending status")
+            print("timeout sending QA message")
         except zmq.error.ContextTerminated:
             pass
         except Exception as e:
@@ -501,7 +565,7 @@ class QAClient(GlobalSystemClient):
         finally:
             socketSendUpdateToPCA.close()
 
-class FLESClient(GlobalSystemClient):
+class FLESControler(GlobalSystemControler):
     def __init__(self):
         self.jobIds = {}
         super().__init__("FLES")
@@ -634,21 +698,21 @@ if __name__ == "__main__":
         print("please enter a SystemType (TFC,DCS,QA,FLES,all)")
         sys.exit(1)
     elif "all" in sys.argv:
-        TFCClient()
-        DCSClient()
-        QAClient()
-        FLESClient()
+        TFCControler()
+        DCSControler()
+        QAControler()
+        FLESControler()
         x = input()
         sys.exit(0)
     dcs = None
     if "TFC" in sys.argv:
-        test = TFCClient()
+        test = TFCControler()
     if "DCS" in sys.argv:
-        dcs = DCSClient()
+        dcs = DCSControler()
     if "QA" in sys.argv:
-        test = QAClient()
+        test = QAControler()
     if "FLES" in sys.argv:
-        test = FLESClient()
+        test = FLESControler()
     if dcs:
         while True:
             try:
