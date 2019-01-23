@@ -12,15 +12,24 @@ import ECS_tools
 import threading
 from DataObjects import stateObject
 import json
+from django.core.exceptions import ImproperlyConfigured
+try:
+    #when executed from Django(e.g. in case of Unmmaped Detector Controller)
+    from django.conf import settings
+    systemPath = settings.PATH_TO_PROJECT+"/"
+except ImproperlyConfigured:
+    systemPath = ""
+
 class PartitionComponent:
     def __init__(self,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
         configParser = configparser.ConfigParser()
-        configParser.read("detector.cfg")
+        configParser.read(systemPath+"detector.cfg")
         conf = configParser[confSection]
         self.logfunction = logfunction
         self.abort_bool = False
         self.currentStateObject = None
         self.sequenceNumber = 0
+        self.config = None
 
         self.pcaReconnectFunction = pcaReconnectFunction
         self.pcaTimeoutFunction = pcaTimeoutFunction
@@ -35,10 +44,10 @@ class PartitionComponent:
 
         #ping Thread will set Statemachine on connection
         self.connected = None
-        self.stateMachine = Statemachine(conf["stateFile"],False)
+        self.stateMachine = Statemachine(systemPath+conf["stateFile"],False)
 
         self.mapper = {}
-        with open(conf["mapFile"], 'r') as file:
+        with open(systemPath+conf["mapFile"], 'r') as file:
             reader = csv.reader(file, delimiter=',')
             for row in reader:
                 if len(row) == 2:
@@ -112,6 +121,12 @@ class PartitionComponent:
             return CommonStates.ConnectionProblem
         return self.mapper[self.stateMachine.currentState]
 
+    def getSystemConfig(self):
+        return self.config
+
+    def setSystemConfig(self,config):
+        self.config = config
+
 class Detector(PartitionComponent):
 
     def __init__(self,id,address,portTransition,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
@@ -137,7 +152,7 @@ class Detector(PartitionComponent):
         socketSender.setsockopt(zmq.LINGER,0)
         return socketSender
 
-    def transitionRequest(self,command,configTag=None):
+    def transitionRequest(self,command,sendConfig=False):
         """request a transition from a Detector"""
         self.abort_bool = False
         if not self.connected:
@@ -148,8 +163,8 @@ class Detector(PartitionComponent):
             return False
         try:
             socketSender = self.createSendSocket()
-            if configTag != None:
-                socketSender.send_multipart([command.encode(),configTag.encode()])
+            if sendConfig:
+                socketSender.send_multipart([command.encode(),self.config.asJsonString().encode()])
             else:
                 socketSender.send_multipart([command.encode()])
             #check if the command has arrived
@@ -211,11 +226,12 @@ class Detector(PartitionComponent):
 
 class DetectorA(Detector):
 
-    def getReady(self,configTag):
+    def getReady(self):
         if self.getMappedState() not in {DetectorStates.Unconfigured, CommonStates.ConnectionProblem,DetectorStates.Error}:
-            self.logfunction("nothing to be done for Detector %s" % self.id)
-            return True
-        return self.transitionRequest(DetectorTransitions.configure,configTag)
+            if self.config.configId == self.currentStateObject.configTag:
+                self.logfunction("nothing to be done for Detector %s" % self.id)
+                return True
+        return self.transitionRequest(DetectorTransitions.configure,sendConfig=True)
 
     def abort(self):
         if self.getMappedState() == CommonStates.ConnectionProblem or not self.stateMachine.checkIfPossible(DetectorTransitions.abort):
@@ -224,11 +240,11 @@ class DetectorA(Detector):
 
 class DetectorB(Detector):
 
-    def getReady(self,configTag):
+    def getReady(self):
         if self.getMappedState() not in {DetectorStates.Unconfigured, CommonStates.ConnectionProblem,DetectorStates.Error}:
             self.logfunction("nothing to be done for Detector %s" % self.id)
             return True
-        return self.transitionRequest(DetectorTransitions.configure,configTag)
+        return self.transitionRequest(DetectorTransitions.configure,sendConfig=True)
 
     def abort(self):
         if self.getMappedState() == CommonStates.ConnectionProblem or not self.stateMachine.checkIfPossible(DetectorTransitions.abort):
@@ -247,7 +263,7 @@ class GlobalSystemComponent(PartitionComponent):
     def timeoutFunction(self):
         self.pcaTimeoutFunction(self.name)
 
-    def transitionRequest(self,command,configTag=None):
+    def transitionRequest(self,command,sendConfig=False):
         self.abort_bool = False
         if not self.connected:
             self.logfunction("Can't transition because %s isn't connected" % self.name)
@@ -262,8 +278,8 @@ class GlobalSystemComponent(PartitionComponent):
             socketSender.connect(self.commandAddress)
             socketSender.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
             socketSender.setsockopt(zmq.LINGER,0)
-            if configTag != None:
-                socketSender.send_multipart([command.encode(),self.pcaId.encode(),configTag.encode()])
+            if sendConfig:
+                socketSender.send_multipart([command.encode(),self.pcaId.encode(),self.config.asJsonString().encode()])
             else:
                 socketSender.send_multipart([command.encode(),self.pcaId.encode()])
             #check if the command has arrived
@@ -317,11 +333,11 @@ class DCS(GlobalSystemComponent):
         super().__init__(pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction)
         self.name = "DCS"
 
-    def getReady(self,configTag):
+    def getReady(self):
         if not (self.stateMachine.currentState == DCSStates.Unconfigured) and self.connected:
             self.logfunction("nothing to be done for %s" % self.name)
             return True
-        return self.transitionRequest(DCSTransitions.configure,configTag)
+        return self.transitionRequest(DCSTransitions.configure,sendConfig=True)
 
     def abort(self):
         if not self.stateMachine.checkIfPossible(DCSTransitions.abort):
@@ -333,11 +349,11 @@ class TFC(GlobalSystemComponent):
         super().__init__(pcaId,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction)
         self.name = "TFC"
 
-    def getReady(self,configTag):
+    def getReady(self):
         if not (self.stateMachine.currentState == TFCStates.Unconfigured) and self.connected:
             self.logfunction("nothing to be done for %s" % self.name)
             return True
-        return self.transitionRequest(TFCTransitions.configure,configTag)
+        return self.transitionRequest(TFCTransitions.configure,sendConfig=True)
 
     def abort(self):
         if not self.stateMachine.checkIfPossible(TFCTransitions.abort):
@@ -359,11 +375,11 @@ class QA(GlobalSystemComponent):
             return self.transitionRequest(QATransitions.stop)
         return False
 
-    def getReady(self,configTag):
+    def getReady(self):
         if not (self.stateMachine.currentState == QAStates.Unconfigured) and self.connected:
             self.logfunction("nothing to be done for %s" % self.name)
             return True
-        return self.transitionRequest(QATransitions.configure,configTag)
+        return self.transitionRequest(QATransitions.configure,sendConfig=True)
 
     def abort(self):
         if not self.stateMachine.checkIfPossible(QATransitions.abort):
@@ -385,11 +401,11 @@ class FLES(GlobalSystemComponent):
             return self.transitionRequest(FLESTransitions.stop)
         return False
 
-    def getReady(self,configTag):
+    def getReady(self):
         if not (self.stateMachine.currentState == FLESStates.Unconfigured) and self.connected:
             self.logfunction("nothing to be done for %s" % self.name)
             return True
-        return self.transitionRequest(FLESTransitions.configure,configTag)
+        return self.transitionRequest(FLESTransitions.configure,sendConfig=True)
 
     def abort(self):
         if not self.stateMachine.checkIfPossible(FLESTransitions.abort):

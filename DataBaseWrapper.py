@@ -250,10 +250,10 @@ class DataBaseWrapper:
             					  (SELECT detectorId FROM Partition join Mapping on Partition.id = Mapping.PartitionId WHERE partitionId = ?
             						union
             					  SELECT id FROM GlobalSystems)
-                WHERE detectorId NOT in (SELECT systemId FROM ConfigurationTag WHERE tagname=x.tagname))
+                WHERE detectorId NOT in (SELECT systemId FROM ConfigurationTag Join Configurations on ConfigurationTag.configId = Configurations.configId WHERE tagname=x.tagname))
               and NOT EXISTS
                 (SELECT systemId FROM
-                      ConfigurationTag
+                      ConfigurationTag Join Configurations on ConfigurationTag.configId = Configurations.configId
                  WHERE tagname=x.tagname and systemId NOT in
                 (SELECT detectorId FROM ( SELECT detectorId FROM Partition join Mapping on Partition.id = Mapping.PartitionId WHERE partitionId = ?
                  union
@@ -272,8 +272,8 @@ class DataBaseWrapper:
         c = self.connection.cursor()
         val = (tag,)
         try:
-            res =c.execute("SELECT Configurations.configId,Configurations.systemId,parameters FROM Configurations join ConfigurationTag on Configurations.configId = ConfigurationTag.configId where tagname = ?",val).fetchall()
-            if not res:
+            res = c.execute("SELECT Configurations.configId,Configurations.systemId,parameters FROM Configurations join ConfigurationTag on Configurations.configId = ConfigurationTag.configId where tagname = ?",val).fetchall()
+            if not res or len(res) == 0:
                 return codes.idUnknown
             res = list(map(lambda x:x[:2]+(json.loads(x[2]),),res))
             return DataObjectCollection(res, configObject)
@@ -302,11 +302,26 @@ class DataBaseWrapper:
         try:
             res =c.execute("""SELECT configid,detectorid,parameters FROM ((Partition Join Mapping on Partition.id = Mapping.PartitionId) join Detector on detectorId=Detector.id) join Configurations on detectorid = Configurations.systemId  Where Partitionid=?
                               union
-                              select configid,id,parameters FROM GlobalSystems join Configurations on GlobalSystems.id = Configurations.systemId""".replace("\n",""),val).fetchall()
+                              select configid,id,parameters FROM GlobalSystems join Configurations on GlobalSystems.id = Configurations.systemId
+                           """.replace("\n",""),val).fetchall()
             if not res:
+                return codes.idUnknown
+            #parameters(res[2]) are stored as a string in the database
+            res = list(map(lambda x:x[:2]+(json.loads(x[2]),),res))
+            return DataObjectCollection(res, configObject)
+        except Exception as e:
+            self.log("error getting Configurations for %s: %s" % (pcaId,str(e)),True)
+            return e
+
+    def getCustomConfig(self,configList):
+        """get Configs for a list of ConfigIds"""
+        c = self.connection.cursor()
+        try:
+            res =c.execute("SELECT * from Configurations where Configurations.configId in (%s)" % " ,".join(list(map(lambda x:"?",configList))),configList).fetchall()
+            if not len(res) == len(configList):
                 return codes.idUnknown
             res = list(map(lambda x:x[:2]+(json.loads(x[2]),),res))
             return DataObjectCollection(res, configObject)
         except Exception as e:
-            self.log("error getting Configurations for %s: %s" % (detectorId,str(e)),True)
+            self.log("error getting All Costum Configurations: %s" % str(e),True)
             return e

@@ -34,6 +34,7 @@ function createWebSocket(){
       if (id == "{{view.pcaId}}"){
         globalState.html(stateCircle+newState);
         globalTag.html(tag);
+        selectedTag.html(tag)
         if (buttons){
           readyButton.prop("disabled",!buttons["configure"]);
           startButton.prop("disabled",!buttons["start"]);
@@ -67,6 +68,7 @@ function createWebSocket(){
 
     updateSocket.onopen = function(e){
       $(".tableRow").remove()
+      updateSocket.send("{{view.sessionId}}")
       //get stateTables
       $.ajax({
           type: "GET",
@@ -102,9 +104,14 @@ function createWebSocket(){
     }
 
     updateSocket.onclose = function(e){
+      if (e.code == 1000)
+        //normal shutdown
+        return
+      else{
        setTimeout(function(){
       		createWebSocket();
   	   },2000);
+     }
     }
 
     updateSocket.onmessage = function(e) {
@@ -168,6 +175,11 @@ returnCodeCases = {
     $('#alertBox').css('visibility', 'visible');
     $('#alertBox').html("<strong>Warning!</strong> Your permission timed out")
   },
+  500: function(){
+    $('#alertBox').css('visibility', 'visible');
+    $('#alertBox').html("<strong>Warning!</strong> Something went wrong")
+  },
+
 };
 $(document).ready(function() {
     //cache jquery selections
@@ -176,6 +188,7 @@ $(document).ready(function() {
 
     globalState = $("#global");
     globalTag = $("#globalTag");
+    selectedTag = $("#selectedTag")
 
     readyButton = $("#ready")
     startButton = $("#start")
@@ -191,12 +204,19 @@ $(document).ready(function() {
 
     $("#ready").click(function(e) {
         e.preventDefault();
-        form = $("#configure_form")[0]
+        var form = $("#configure_form")[0];
+        console.log(customConfiguration);
+        if (typeof(customConfiguration)!= "undefined" && customConfiguration != false){
+          var req_data = {csrfmiddlewaretoken: '{{ csrf_token }}', autoConfigure: $("#autoConfigureCheckBox").prop("checked"), globalTag: $("#selectedTag").html(), "customConfiguration[]" : customConfiguration};
+        }
+        else{
+          var req_data = {csrfmiddlewaretoken: '{{ csrf_token }}', autoConfigure: $("#autoConfigureCheckBox").prop("checked"), globalTag: $("#selectedTag").html()};
+        }
         if (form.checkValidity()){
           $.ajax({
               type: "POST",
               url: "{% url 'GUI:ready' pcaId%}",
-              data:{csrfmiddlewaretoken: '{{ csrf_token }}', autoConfigure: $("#autoConfigureCheckBox").prop("checked"), configTag: $("#configureTag_input").val()},
+              data: req_data,
               statusCode: returnCodeCases
           });
         }
@@ -233,16 +253,6 @@ $(document).ready(function() {
     });
 
     //modal stuff
-    $('#details-modal').on('show.bs.modal', function (event) {
-      var button = $(event.relatedTarget) // Button that triggered the modal
-      var config = button.data('config') // Extract info from data-* attributes
-      // If necessary, you could initiate an AJAX request here (and then do the updating in a callback).
-      // Update the modal's content. We'll use jQuery here, but you could use a data binding library or other methods instead.
-      var modal = $(this)
-      modal.find('.modal-title').text('Details about ' + config)
-      //modal.find('.modal-body input').val(recipient)
-    })
-
     $('#configuration-modal').on('show.bs.modal', function (event) {
       var button = $(event.relatedTarget) // Button that triggered the modal
       var modal = $(this)
@@ -258,6 +268,10 @@ $(document).ready(function() {
       });
     })
 });
+
+function clearConfigModal(){
+  $("#configuration-modal-content").html("")
+}
 
 </script>
 {% endblock script %}
@@ -349,13 +363,10 @@ $(document).ready(function() {
   {% if "has_control" in pcaPerms %}
     <div class="form-row">
       <form id="configure_form" class="form-group col-2">
-          <input  id="configureTag_input" class="form-control" type="text" placeholder="configure Tag" required>
-          <div class="invalid-feedback">
-            Please enter a Configuration Tag
-          </div>
+          <label>Currently Selected Tag: </label><label id="selectedTag"></label>
       </form>
       <div class="form-group col-2">
-      <button class="btn btn-primary" data-toggle="modal" data-target="#configuration-modal">
+      <button class="btn btn-primary" data-toggle="modal" data-target="#configuration-modal" onclick="clearConfigModal()">
         Select Configuration
       </button>
     </div>
@@ -376,24 +387,7 @@ $(document).ready(function() {
   {% endif %}
   <textarea class="form-control log" rows="10" readonly id="log"></textarea>
   <div class="modal fade" id="configuration-modal" tabindex="-1" role="dialog" aria-labelledby="exampleModalCenterTitle" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered" role="document">
-    </div>
-  </div>
-  <div class="modal fade" id="details-modal" tabindex="-1" role="dialog" aria-labelledby="exampleModalCenterTitle" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered" role="document">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h5 class="modal-title" id="titleConfigDetailModal">Details</h5>
-          <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-            <span aria-hidden="true">&times;</span>
-          </button>
-        </div>
-        <div class="modal-body">
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
-        </div>
-      </div>
+    <div  id="configuration-modal-content" class="modal-dialog modal-dialog-centered" role="document">
     </div>
   </div>
 {% endblock content %}

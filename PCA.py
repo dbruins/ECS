@@ -13,10 +13,11 @@ from ECSCodes import ECSCodes
 codes = ECSCodes()
 from states import PCAStates, PCATransitions, MappedStates, CommonStates, DCSStates,DCSTransitions, DetectorStates, DetectorTransitions, FLESStates, FLESTransitions, QAStates, QATransitions, TFCStates, TFCTransitions, GlobalSystemStates, GlobalSystemTransitions
 pcaStates = PCAStates()
+pcaTransitions = PCATransitions()
 import configparser
 import copy
 import json
-from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject, globalSystemDataObject
+from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject, globalSystemDataObject, configObject
 import sys
 import PartitionComponents
 from PartitionComponents import DCS,TFC,QA,FLES
@@ -54,6 +55,31 @@ class PCA:
         self.ECSAdress = conf['ECSAddress']
         self.ECSRequestPort = conf['ECSRequestPort']
 
+        def checkConsistencyRequest(detectorList):
+            detectorList = DataObjectCollection(json.loads(detectorList),detectorDataObject)
+            start_new_thread(self.checkSystemConsistency,(detectorList,))
+            return codes.ok
+
+        def measureConfigureTime(arg=None):
+            self.start_time = time.time()
+            return self.configure(arg)
+
+        #lookup table for recieved commands
+        self.functionForCodeDictionary = {
+            #codes.getReady: self.configure,
+            codes.getReady: measureConfigureTime,
+            codes.start: self.startRecording,
+            codes.stop: self.stopRecording,
+            codes.removeDetector: self.removeDetector,
+            codes.addDetector: self.addDetector,
+            codes.abort: self.abort,
+            codes.check: checkConsistencyRequest,
+            codes.lock: self.lockPartition,
+            codes.unlock: self.unlockPartition,
+            codes.reset: self.resetSystem,
+            codes.subsystemMessage: self.handleSystemMessage
+        }
+
         #get your config
         configECS = None
         while configECS == None:
@@ -89,12 +115,11 @@ class PCA:
         self.sem = threading.Semaphore()
         self.publishQueue = Queue()
         self.autoConfigure = False
-        self.configTag = False
+        self.globalTag = False
         self.partitionLocked = False
 
         #ZMQ Socket to publish new state Updates
         self.socketPublish = self.context.socket(zmq.PUB)
-        #todo the connect takes a little time messages until then will be lost
         self.socketPublish.bind("tcp://*:%s" % configECS.portPublish)
 
         #publish logmessages
@@ -164,7 +189,7 @@ class PCA:
 
         start_new_thread(self.publisher,())
 
-        #Subscribers need some time to subscribe (todo there has to be a better way)
+        #Subscribers need some time to subscribe
         time.sleep(1)
         #tell subscribers to reset their state Table
         self.publishQueue.put((self.id,codes.reset))
@@ -231,19 +256,18 @@ class PCA:
             t.start()
         for t in threadArray:
             t.join()
-        self.publishQueue.put((self.id,stateObject([self.stateMachine.currentState,self.stateMachine.currentState,self.configTag,None])))
+        self.publishQueue.put((self.id,stateObject([self.stateMachine.currentState,self.stateMachine.currentState,self.globalTag,None])))
         #thread stuff
         start_new_thread(self.waitForUpdates,())
         start_new_thread(self.waitForStateTableRequests,())
         start_new_thread(self.waitForCommands,())
         self.initdone.set()
 
-    def getCurrentConfigTag(self):
-        return self.configTag
+    def getCurrentglobalTag(self):
+        return self.globalTag
 
     def waitForCommands(self):
-        """wait for an external(start,stop etc.) command e.g. from that gorgeous WebGUI
-        sends an Ok for received command"""
+        """wait for an external(start,stop etc.) command e.g.from the WebGUI"""
         while True:
             try:
                 command = self.remoteCommandSocket.recv_multipart()
@@ -257,45 +281,15 @@ class PCA:
                     #it's just a ping
                     continue
 
-                def checkConsistencyRequest(detectorList):
-                    detectorList = DataObjectCollection(json.loads(detectorList),detectorDataObject)
-                    start_new_thread(self.checkSystemConsistency,(detectorList,))
-                    return codes.ok
-
-                def measureConfigureTime(arg=None):
-                    self.start_time = time.time()
-                    return self.configure(arg)
-
-                def switcher(code,arg=None):
-                    #functions for codes
-                    dbFunctionDictionary = {
-                        #codes.getReady: self.configure,
-                        codes.getReady: measureConfigureTime,
-                        codes.start: self.startRecording,
-                        codes.stop: self.stopRecording,
-                        codes.removeDetector: self.removeDetector,
-                        codes.addDetector: self.addDetector,
-                        codes.abort: self.abort,
-                        codes.check: checkConsistencyRequest,
-                        codes.lock: self.lockPartition,
-                        codes.unlock: self.unlockPartition,
-                        codes.reset: self.resetSystem,
-                        codes.subsystemMessage: self.handleSystemMessage
-                    }
-                    #returns function for Code or None if the received code is unknown
-                    f = dbFunctionDictionary.get(code,None)
-                    if not f:
-                        self.remoteCommandSocket.send(codes.unknownCommand)
-                        return
-                    if arg:
-                        ret = f(arg)
-                    else:
-                        ret = f()
-                    self.remoteCommandSocket.send(ret)
+                #returns function for Code or None if the received code is unknown
+                f = self.functionForCodeDictionary.get(command,None)
+                if not f:
+                    self.remoteCommandSocket.send(codes.unknownCommand)
+                    continue
                 if arg:
-                    switcher(command,arg)
+                    self.remoteCommandSocket.send(f(arg))
                 else:
-                    switcher(command)
+                    self.remoteCommandSocket.send(f())
             except zmq.error.ContextTerminated:
                 self.remoteCommandSocket.close()
                 break
@@ -419,7 +413,6 @@ class PCA:
         """add Detector to Dictionary and pubish it's state"""
         #detector list can only be changed in Idle State
         if pcaStates.isActiveState(self.stateMachine.currentState):
-            print(self.stateMachine.currentState)
             return codes.busy
         self.sem.acquire()
         try:
@@ -446,7 +439,6 @@ class PCA:
     def removeDetector(self,id):
         """remove Detector from Dictionary"""
         if pcaStates.isActiveState(self.stateMachine.currentState):
-            print(self.stateMachine.currentState)
             return codes.busy
         self.sem.acquire()
         try:
@@ -454,7 +446,6 @@ class PCA:
                 self.log("Detector with id %s is unknown" % id,True)
                 return codes.idUnknown
             det = self.detectors[id]
-            #todo add possibility to cancel transitions?
             self.publishQueue.put((id,codes.removed))
             del self.detectors[id]
             #this might take a few seconds dending on ping interval
@@ -475,7 +466,7 @@ class PCA:
         gs = self.globalSystems[id]
         stateObj = gs.getStateObject()
         self.publishQueue.put((id,stateObj))
-        if stateObj.configTag and self.getCurrentConfigTag() != stateObj.configTag:
+        if stateObj.configTag and self.getCurrentglobalTag() != stateObj.configTag:
             gs.abort()
 
     def handleSystemMessage(self,arg):
@@ -496,7 +487,6 @@ class PCA:
         """handle messages from the DCS"""
         detId = message["detectorId"]
         message = message["message"]
-        print(message)
         det = self.detectors[detId]
         self.log("received message %s from DCS for Detector %s" % (message,detId))
         if message == "detectorError":
@@ -512,7 +502,7 @@ class PCA:
         if id in self.detectors:
             self.publishQueue.put((id,stateObj))
             #abort Detector if it has a different config Tag than the PCA
-            if stateObj.configTag and self.getCurrentConfigTag() != stateObj.configTag:
+            if stateObj.configTag and self.getCurrentglobalTag() != stateObj.configTag:
                 det = self.detectors[id]
                 det.abort()
             self.transitionDetectorIntoGlobalState(id)
@@ -626,8 +616,6 @@ class PCA:
                     self.transition(PCATransitions.success)
                     self.end_time = time.time()
                     self.log("configure Time:"+str(self.end_time-self.start_time))
-                    #if self.autoConfigure:
-                    #    self.configure()
                 #configure failure
                 elif self.QA.getMappedState() == MappedStates.Unconfigured:
                     self.transition(PCATransitions.failure)
@@ -638,13 +626,12 @@ class PCA:
             elif self.QA.stateMachine.currentState == QAStates.Recording and self.stateMachine.currentState != PCAStates.Recording:
                 self.QA.stopRecording()
 
-    #todo Lock?
     def transition(self,command):
         """try to transition the own Statemachine"""
         oldstate = self.stateMachine.currentState
         if self.stateMachine.transition(command):
             #self.publishQueue.put((self.id,stateObject(self.stateMachine.currentState)))
-            self.publishQueue.put((self.id,stateObject([self.stateMachine.currentState,self.stateMachine.currentState,self.configTag,None])))
+            self.publishQueue.put((self.id,stateObject([self.stateMachine.currentState,self.stateMachine.currentState,self.globalTag,None])))
             self.log("GLobal Statechange: "+oldstate+" -> "+self.stateMachine.currentState)
 
     def lockPartition(self):
@@ -668,25 +655,51 @@ class PCA:
                 self.autoConfigure = True
             else:
                 self.autoConfigure = False
-            if self.configTag and self.configTag != arg["configTag"]:
-                self.abort()
-            self.configTag = arg["configTag"]
+            systemConfig = DataObjectCollection(json.loads(arg["systemConfig"]),configObject)
+
+            for conf in systemConfig:
+                if conf.systemId in self.detectors:
+                    sys=self.detectors[conf.systemId]
+                    oldconfig = sys.getSystemConfig()
+                    if oldconfig and oldconfig.configId != conf.configId and sys.getState():
+                        sys.abort()
+                        self.transition(PCATransitions.error_Detector)
+                elif conf.systemId in self.globalSystems:
+                    sys=self.globalSystems[conf.systemId]
+                    oldconfig = sys.getSystemConfig()
+                    if oldconfig and oldconfig.configId != conf.configId and sys.getState():
+                        sys.abort()
+                        self.transition(pcaTransitions.errorTransitionForSystem(conf.systemId))
+                else:
+                    self.log("System %s is in received Config but is not this partition",True)
+                if sys:
+                    sys.setSystemConfig(conf)
+
+            #system needs to be reset if it get's a new config tag
+            #todo actually just the systems with different configId needs to be reset
+            #if self.globalTag and self.globalTag != arg["globalTag"]:
+            #    self.abort()
+
+            self.globalTag = arg["globalTag"]
         if self.stateMachine.currentState == PCAStates.Recording:
             for id in self.detectors.keyIterator():
                 d = self.detectors[id]
                 if d.getMappedState() != MappedStates.Active:
-                    d.getReady(configTag)
+                    d.getReady(globalTag)
             return ECSCodes.ok
         elif not self.stateMachine.checkIfPossible(PCATransitions.configure):
             return codes.error
         function = self.configureFunctionForState[self.stateMachine.currentState]
-        if function(self.configTag):
+        if function():
             self.transition(PCATransitions.configure)
             return codes.ok
         return codes.error
 
     def startRecording(self):
         """start taking Data"""
+        if self.partitionLocked:
+            self.log("Can't start because Partition is locked")
+            return codes.error
         if not self.stateMachine.checkIfPossible(PCATransitions.start_recording):
             return codes.error
         self.transition(PCATransitions.start_recording)
@@ -696,6 +709,9 @@ class PCA:
 
     def stopRecording(self):
         """stop taking Data"""
+        if self.partitionLocked:
+            self.log("Can't stop because Partition is locked")
+            return codes.error
         if not self.stateMachine.checkIfPossible(PCATransitions.stop_recording):
             return codes.error
         self.transition(PCATransitions.stop_recording)
@@ -703,11 +719,10 @@ class PCA:
         self.FLES.stopRecording()
         return codes.ok
 
-    def configureDCSandFLES(self,configTag):
-
-        if not self.DCS.getReady(configTag):
+    def configureDCSandFLES(self):
+        if not self.DCS.getReady():
             return False
-        if not self.FLES.getReady(configTag):
+        if not self.FLES.getReady():
             return False
         return True
 
@@ -725,16 +740,13 @@ class PCA:
             return codes.ok
         return codes.error
 
-    def threadFunctionCall(self,id,function,configTag,retq):
+    def threadFunctionCall(self,id,function,retq):
         """calls a function from Detector(id) und puts result in a given Queue"""
-        if configTag:
-            r = function(configTag)
-        else:
-            r = function()
+        r = function()
         if retq:
             retq.put(r)
 
-    def makeDetectorsReady(self,configTag):
+    def makeDetectorsReady(self):
         """tells all Detectors to get ready to start"""
         self.detector_configure_time_start = time.time()
         threadArray = []
@@ -744,7 +756,7 @@ class PCA:
         try:
             for id in self.detectors.keyIterator():
                 d = self.detectors[id]
-                t = threading.Thread(name='dready'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.getReady,configTag,self.returnQueue))
+                t = threading.Thread(name='dready'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.getReady,self.returnQueue))
                 threadArray.append(t)
                 t.start()
         except Exception as e:
@@ -763,11 +775,11 @@ class PCA:
         returnQueue = Queue()
         self.sem.acquire()
         try:
-            self.configTag=False
+            self.globalTag=False
             self.transition(PCATransitions.abort)
             for id in self.detectors.keyIterator():
                 d = self.detectors[id]
-                t = threading.Thread(name='dabort'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.abort,None, None))
+                t = threading.Thread(name='dabort'+str(d.id), target=self.threadFunctionCall, args=(d.id, d.abort, None))
                 threadArray.append(t)
                 t.start()
             self.TFC.abort()

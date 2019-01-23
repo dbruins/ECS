@@ -49,6 +49,7 @@ ECS Dashboard
 
       updateSocket.onopen = function(e){
         $(".tableRow").remove()
+        updateSocket.send("{{view.sessionId}}")
         //get stateTables
         $.ajax({
             type: "GET",

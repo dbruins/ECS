@@ -504,6 +504,15 @@ class ECS:
         else:
             return ret
 
+    def getCustomConfig(self,configList):
+        db = DataBaseWrapper(self.log)
+        ret = db.getCustomConfig(configList)
+        db.close()
+        if isinstance(ret,Exception):
+            return str(ret)
+        else:
+            return ret
+
     def moveDetector(self,detectorId,partitionId,forceMove=False):
         """moves a Detector between Partitions"""
         removed = False
@@ -553,7 +562,6 @@ class ECS:
             else:
                 if db.remapDetector(detectorId,newPartition.id,oldPartition.id) != codes.ok:
                     raise Exception("Error during changing Database")
-            print("db done")
             dbChanged = True
 
             #lock partitions(PCAs don't accept commands while locked)
@@ -607,7 +615,6 @@ class ECS:
                 #remove from Unused Detectors
                 self.unmappedDetectorController.removeDetector(detectorId)
             removed = True
-            print("removed")
 
             if newPartition:
                 if not skipAdd:
@@ -969,7 +976,7 @@ class ECS:
         else:
             logging.info(message)
         """spread log message through websocket"""
-        message = origin+": "+str
+        message = origin + ": "+str
         self.logQueue.append(message)
         self.webSocket.sendLogUpdate(message,"ecs")
 
@@ -1106,7 +1113,8 @@ class PCAHandler:
                 self.socketSubscription.close()
                 break
             if len(m) != 3:
-                print (m)
+                self.log("received malformed update: %s" % str(m))
+                continue
             else:
                 id,sequence,state = m
 
@@ -1139,7 +1147,7 @@ class PCAHandler:
             #self.sendUpdateToWebsockets("update",jsonWebUpdate)
 
     def log(self,message):
-        """spread log message through websocket(channel)"""
+        """spread log message through websocket"""
         self.logQueue.append(message)
         self.ecsLogfunction(message,origin=self.id)
         self.webSocket.sendLogUpdate(message,self.id)

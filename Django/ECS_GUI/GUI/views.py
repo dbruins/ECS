@@ -1,21 +1,19 @@
 from django.shortcuts import get_object_or_404,render,redirect
 from guardian.shortcuts import assign_perm, get_users_with_perms, remove_perm, get_user_perms
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
-from GUI.models import pcaModel
+from GUI.models import pcaModel, LoggedInUser
 from django.urls import reverse
 from django.conf import settings
 import json
 from django.contrib.auth.decorators import login_required, permission_required
 from django.contrib.auth.models import Permission
 from django.apps import apps
-import zmq
 import threading
-from multiprocessing import Queue
 import time
 from django.utils import timezone
 from django import forms
 import sys
-#ECS Codes and DataObjects should be in the same Path later
+
 projectPath = settings.PATH_TO_PROJECT
 sys.path.append(projectPath)
 from ECSCodes import ECSCodes
@@ -26,12 +24,20 @@ from ECS import ECS,DataBaseWrapper
 ecs = ECS()
 
 gui = apps.get_app_config('GUI')
-#
-from django.contrib.auth import user_logged_out
+
+from django.contrib.auth import user_logged_out, user_logged_in
 from django.dispatch import receiver
+
+@receiver(user_logged_in)
+def on_user_logged_in(sender, request, **kwargs):
+    print(request.session.session_key)
+    LoggedInUser.objects.get_or_create(user=request.user)
 
 @receiver(user_logged_out)
 def on_user_logged_out(sender, request, **kwargs):
+    """frees taken permissions on user logout"""
+    if request.user.is_authenticated:
+        LoggedInUser.objects.filter(user=request.user).delete()
     #pcas
     for pca in ecs.pcaHandlers.items():
         pcaObject = pcaModel.objects.filter(id=pca[0]).get()
@@ -133,6 +139,7 @@ class index(ecsMixin,TemplateView):
             self.userInControl = list(users.keys())[0]
         if self.userInControl == request.user:
             self.userInControl = "You"
+        self.sessionId = request.user.logged_in_user.session_key
         return super().dispatch(request, *args, **kwargs)
 
 class pcaView(ecsMixin,TemplateView):
@@ -159,6 +166,7 @@ class pcaView(ecsMixin,TemplateView):
                 break
         if self.userInControl == request.user:
             self.userInControl = "You"
+        self.sessionId = request.user.logged_in_user.session_key
         return super().dispatch(request, *args, **kwargs)
 
 class ecsPermissionMixin(PermissionRequiredMixin):
@@ -378,10 +386,21 @@ class ready(ecsMixin,pcaPermissionMixin,View):
     def post(self, request, *args, **kwargs):
         pcaId = self.kwargs['pcaId']
         autoConfigure = request.POST['autoConfigure']
-        configTag = request.POST['configTag']
+        globalTag = request.POST['globalTag']
         pca = ecs.getPCAHandler(pcaId)
+
+        if "customConfiguration[]" in request.POST:
+            customConfiguration = request.POST.getlist("customConfiguration[]")
+            systemConfig =ecs.getCustomConfig(customConfiguration)
+        else:
+            systemConfig = ecs.getConfigsForTag(globalTag)
+        if systemConfig == codes.idUnknown:
+            pca.log("tag %s not found" % globalTag)
+            return HttpResponse(status=500)
+
         arg = {
-            "configTag" : configTag,
+            "globalTag" : globalTag,
+            "systemConfig" : systemConfig.asJsonString(),
             "autoConfigure": autoConfigure,
         }
         pca.sendCommand(codes.getReady,json.dumps(arg))
@@ -435,20 +454,29 @@ class configTagModalView(ecsMixin,pcaPermissionMixin,TemplateView):
         if isinstance(configList,str):
             self.error = configList
             return super().dispatch(request, *args, **kwargs)
-
         if not tag:
             systemConfigForTag = {}
         else:
             self.currentTag=tag
             systemConfigForTag = ecs.getConfigsForTag(tag)
-            if configList == codes.idUnknown:
-                systemConfigForTag = {}
-            elif isinstance(systemConfigForTag,str):
-                self.error = configList
-                return super().dispatch(request, *args, **kwargs)
+
+        if isinstance(systemConfigForTag,str):
+            self.error = configList
+            return super().dispatch(request, *args, **kwargs)
 
         #config for currently selected tag
         self.systemConfigs = {}
+        if systemConfigForTag == codes.idUnknown:
+            #custom tag get config from stateMap
+            pcaTagList = []
+            self.customTag = True
+            for sysId in handler.stateMap.keyIterator():
+                state = handler.stateMap[sysId][1]
+                if state.configTag and sysId != pcaId:
+                    pcaTagList.append(state.configTag)
+            systemConfigForTag =ecs.getCustomConfig(pcaTagList)
+        else:
+            self.customTag = False
         for c in systemConfigForTag:
             self.systemConfigs[c.systemId] =  {c.configId:c.parameters}
 
@@ -459,14 +487,15 @@ class configTagModalView(ecsMixin,pcaPermissionMixin,TemplateView):
             if c.configId not in self.systemConfigs[c.systemId]:
                 self.systemConfigs[c.systemId][c.configId] = c.parameters
 
-        print(self.systemConfigs)
         tagList = ecs.getTagsForPCA(pcaId)
-        if isinstance(tagList,str):
-            self.error = tagList
-        else:
-            if tag:
-                tagList.remove(tag)
-            self.tagList = tagList
+        if tagList:
+            if isinstance(tagList,str):
+                self.error = tagList
+            else:
+                if tag:
+                    if tag in tagList:
+                        tagList.remove(tag)
+                self.tagList = tagList
 
         return super().dispatch(request, *args, **kwargs)
 @login_required
@@ -496,11 +525,12 @@ def getConfigsForTag(request):
     configList = ecs.getConfigsForTag(tag)
     if configList == codes.idUnknown:
         configList = {}
+    else:
+        configList = configList.asDictionary()
 
     if isinstance(configList,str):
         return JsonResponse({"error":configList})
-
-    return JsonResponse(configList.asDictionary())
+    return JsonResponse(configList)
 
 @login_required
 def getUnmappedDetectors(request):

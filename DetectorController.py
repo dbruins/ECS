@@ -9,7 +9,7 @@ codes = ECSCodes()
 import configparser
 from Statemachine import Statemachine
 import json
-from DataObjects import partitionDataObject, detectorDataObject, stateObject
+from DataObjects import partitionDataObject, detectorDataObject, stateObject, configObject
 from states import DetectorStates, DetectorTransitions
 import ECS_tools
 import subprocess
@@ -36,13 +36,13 @@ class DetectorController:
 
         config = configparser.ConfigParser()
         config.read("init.cfg")
-        self.conf = config["Default"]
+        self.configFile = config["Default"]
 
         self.portTransition = detectorData.portTransition
         self.portCommand = detectorData.portCommand
         #seuquence Number for sending Updates
         self.sequenceNumber = 0
-        self.receive_timeout = int(self.conf['receive_timeout'])
+        self.receive_timeout = int(self.configFile['receive_timeout'])
 
         self.context = zmq.Context()
         self.context.setsockopt(zmq.LINGER,0)
@@ -59,6 +59,7 @@ class DetectorController:
         configDet = configDet[confSection]
         self.stateMachine = Statemachine(configDet["stateFile"],startState)
         self.configTag = None
+        self.config = None
         self.pcaAddress = pcaData.address
         self.pcaUpdatePort = pcaData.portUpdates
         self.pcaID = pcaData.id
@@ -92,7 +93,9 @@ class DetectorController:
         try:
             os.mkfifo("pipeDetector"+self.MyId)
         except OSError as oe:
+            #Ignore file already exists Exception
             if oe.errno != errno.EEXIST:
+                #re-raise all other Exceptions
                 raise
         while True:
             with open("pipeDetector"+self.MyId) as fifo:
@@ -112,7 +115,7 @@ class DetectorController:
         """get PCA Information from ECS"""
         requestSocket = self.context.socket(zmq.REQ)
         requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-        requestSocket.connect("tcp://%s:%s" % (self.conf['ECSAddress'],self.conf['ECSRequestPort']))
+        requestSocket.connect("tcp://%s:%s" % (self.configFile['ECSAddress'],self.configFile['ECSRequestPort']))
 
         requestSocket.send_multipart([codes.detectorAsksForPCA, self.MyId.encode()])
         try:
@@ -228,12 +231,12 @@ class DetectorController:
                 ret = self.socketReceiver.recv_multipart()
                 print(ret)
                 if len(ret)  == 2:
-                    command,tag = ret
+                    command,conf = ret
                     command = command.decode()
-                    tag = tag.decode()
+                    conf =  configObject(json.loads(conf.decode()))
                 else:
                     command = ret[0].decode()
-                    tag=None
+                    conf=None
                 if self.stateMachine.currentState not in {DetectorStates.Active,DetectorStates.Unconfigured}  and command not in {DetectorTransitions.abort,DetectorTransitions.reset}:
                     self.socketReceiver.send(codes.busy)
                     print("busy")
@@ -246,9 +249,9 @@ class DetectorController:
                     self.socketReceiver.send(codes.ok)
                 self.abort = False
                 if command == DetectorTransitions.configure:
-                    self.transition(DetectorTransitions.configure,tag)
+                    self.transition(DetectorTransitions.configure,conf)
                     self.inTransition = True
-                    workThread = threading.Thread(name="worker", target=self.configure, args=(tag,))
+                    workThread = threading.Thread(name="worker", target=self.configure, args=(conf,))
                     workThread.start()
                 elif command == DetectorTransitions.abort:
                     self.abortFunction()
@@ -319,11 +322,15 @@ class DetectorController:
     def reset(self):
         self.transition(DetectorTransitions.reset)
 
-    def transition(self,transition,tag=None,comment=None):
+    def transition(self,transition,conf=None,comment=None):
         try:
             self.stateMachineLock.acquire()
             if self.stateMachine.transition(transition):
-                self.configTag = tag
+                if conf:
+                    self.configTag = conf.configId
+                else:
+                    self.configTag = None
+                self.config=conf
                 self.sequenceNumber = self.sequenceNumber+1
                 sequenceNumber = self.sequenceNumber
                 self.stateMachineLock.release()
@@ -343,11 +350,13 @@ class DetectorController:
 
 class DetectorA(DetectorController):
 
-    def configure(self,tag):
+    def configure(self,conf):
+        if conf.configId != self.config.configId:
+            self.abortFunction()
         for i in range(0,2):
             ret = self.executeScript("detectorScript.sh")
             if ret:
-                self.transition(DetectorTransitions.success,tag)
+                self.transition(DetectorTransitions.success,conf)
             else:
                 if self.abort:
                     self.abort = False
@@ -370,11 +379,11 @@ class DetectorA(DetectorController):
 
 class DetectorB(DetectorController):
 
-    def configure(self,tag):
+    def configure(self,conf):
         for i in range(0,3):
             ret = self.executeScript("detectorScript.sh")
             if ret:
-                self.transition(DetectorTransitions.success,tag)
+                self.transition(DetectorTransitions.success,conf)
             else:
                 if self.abort:
                     self.abort = False

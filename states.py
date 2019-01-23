@@ -46,6 +46,16 @@ class PCATransitions:
     start_recording = "start_recording"
     stop_recording = "stop_recording"
 
+    errorForSystem = {
+        "TFC": error_TFC,
+        "DCS": error_FLES_OR_DCS,
+        "FLES": error_FLES_OR_DCS,
+        "QA": error_QA
+    }
+
+    def errorTransitionForSystem(self,system):
+        return self.errorForSystem[system]
+
 class MappedStates:
     Active = "Active"
     Configuring = "Configuring"

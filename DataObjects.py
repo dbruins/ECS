@@ -42,6 +42,9 @@ class DataObjectCollection:
     def __iter__(self):
         return self.dataArray.__iter__()
 
+    def __getitem__(self,index):
+        return self.dataArray[index]
+
 class DataObject:
     def asArray(self):
         ret = []
@@ -122,6 +125,9 @@ class stateObject(DataObject):
         return json.dumps(self.asJson())
 
     def __init__(self,data):
+        self.unmappedState = None
+        self.configTag = None
+        self.comment = None
         if isinstance(data,dict):
             #from json
             self.state = data["state"]
