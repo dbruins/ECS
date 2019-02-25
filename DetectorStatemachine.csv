@@ -6,7 +6,7 @@ Configuring_Step1,error,Error
 Configuring_Step2,success,Active
 Configuring_Step2,abort,Unconfigured
 Configuring_Step2,error,Error
-Active,configure,Configuring
+Active,configure,Configuring_Step1
 Active,abort,Unconfigured
 Active,error,Error
 Error,resolved,Unconfigured

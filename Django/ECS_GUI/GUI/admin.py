@@ -1,12 +1,19 @@
 from django.contrib import admin
 from guardian.admin import GuardedModelAdmin
 
-from .models import pcaModel
+from .models import pcaModel, ecsModel
 
 
-class PCAAdmin(GuardedModelAdmin):
+class PCAAdminPCA(GuardedModelAdmin):
     prepopulated_fields = {"id": ("id",)}
-    exclude = ('has_control',)
+    exclude = ('has_pca_control',)
     ordering = ('-id',)
 
-admin.site.register(pcaModel,PCAAdmin)
+
+class PCAAdminECS(GuardedModelAdmin):
+    prepopulated_fields = {"id": ("id",)}
+    exclude = ('has_ecs_control',)
+    ordering = ('-id',)
+
+admin.site.register(pcaModel,PCAAdminPCA)
+admin.site.register(ecsModel,PCAAdminECS)

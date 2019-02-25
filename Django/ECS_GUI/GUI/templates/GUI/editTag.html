@@ -1,0 +1,281 @@
+{% extends "GUI/base.html" %}
+
+{% block title %}
+ECS Edit Configuration Tag
+{% endblock %}
+
+{% block script %}
+<script>
+unusedDetectors = new Set([{%for sys in view.detectors %}"{{sys}}",{%endfor%}]);
+detectors = new Set([{%for sys in view.detectors %}"{{sys}}",{%endfor%}]);
+numberOfDetectors =  {{ view.detectors|length }};
+globalSystems = new Set([{%for sys in view.globalSystems %}"{{sys}}",{%endfor%}]);
+detectorConfigs = {
+  {%for det,configs in view.detectorConfigsForSystem.items%}
+    "{{det}}" : "{% for config in configs %}<option>{{config.configId}}</option>,{% endfor %}",
+  {%endfor%}
+}
+
+rowCounter = 0;
+function getDetectorField(){
+  rowCounter += 1;
+  field='<div class="row" id="divDetector'+rowCounter+'">';
+  field+='<div class="col-2"><select class="form-control selectpicker" id="selDetector'+rowCounter+'" rowNumber="'+rowCounter+'" onchange="loadDetectorConfigs(this)" required><option selected hidden disabled>Select a Detector</option>';
+  for (let det of unusedDetectors.values()){
+    field+="<option value='"+det+"'>"+det+"</option>";
+  }
+  field+='</select></div>';
+  field+='<div class="col-2">';
+  field+='<select class="form-control selectpicker" id="selConfig'+rowCounter+'" required>';
+  field+='<option selected hidden disabled>Select a Detector first</option><select></div>'
+  field+='<div><button type="button" style="margin-top: 0.2em;" class="close" aria-label="delete" onclick="deleteField(this)" ><span aria-hidden="true">&times;</span></button></div>'
+  field+='</div></div>';
+  return field;
+}
+
+$(document).ready(function() {
+  $("#addButton").click(function(event){
+    if (numberOfDetectors -1 <= rowCounter){
+      $("#addButton")[0].disabled = true;
+    }
+    field = getDetectorField();
+    $('#addButton').closest("div .row").before(field);
+  });
+
+  $("#editButton").click(function(event){
+    var tag = $("#selExistTag")[0].selectedOptions[0].textContent;
+    $.ajax({
+        type: "POST",
+        url: "{% url 'GUI:getConfigsForTag'%}",
+        data:{
+          csrfmiddlewaretoken: '{{ csrf_token }}',
+          tag: tag,
+        },
+        error: function(jqXHR, textStatus, errorThrown) {
+            console.log(jqXHR.status);
+        },
+        "success": function(result) {
+            unusedDetectors = new Set(detectors);
+            $("div[id^='divDetector']").remove()
+            rowCounter=0;
+            for (config in result){
+                var system = result[config][0];
+                if (globalSystems.has(system)){
+                  $('#selConfig'+system).val(config)
+                  continue;
+                }
+                field = getDetectorField();
+                $('#addButton').closest("div .row").before(field);
+                $('#selDetector'+rowCounter).val(system);
+                $('#selDetector'+rowCounter).change();
+                //$('#selConfig'+rowCounter).html(detectorConfigs[system])
+                $('#selConfig'+rowCounter).val(config);
+                $('#tagName').val(tag);
+            }
+        },
+    });
+  });
+
+
+  $('#saveButton').click(function(event){
+    $('#alertBox').css('visibility', 'hidden');
+    form = $("#form")[0];
+    form.classList.remove('was-validated');
+    valid=form.checkValidity();
+    if (valid){
+      var configList = [];
+      var confSelects = $("select[id^='selConfig']")
+      console.log(confSelects)
+      $.each( confSelects, function( key, sel ) {
+        configList.push(sel.selectedOptions[0].text);
+      });
+      tagName = $('#tagName').val()
+      $.ajax({
+          type: "POST",
+          url: "{% url 'GUI:editConfigurationTag'%}",
+          data:{
+            csrfmiddlewaretoken: '{{ csrf_token }}',
+            tagName: $('#tagName').val(),
+            "configList[]": configList,
+          },
+          error: function(jqXHR, textStatus, errorThrown) {
+              console.log(jqXHR.status);
+              $('#alertBox').attr('class', 'alert alert-danger');
+              $('#alertBox').css('visibility', 'visible');
+              $('#alertBox').html("<strong>Error</strong> while saving Tag");
+          },
+          "success": function(result) {
+              form.classList.remove('was-validated');
+              $('#alertBox').attr('class', 'alert alert-success');
+              $('#alertBox').css('visibility', 'visible');
+              $('#alertBox').html("Tag <strong>successfully</strong> saved");
+              $("#selExistTag").append("<option>"+tagName+"</option>");
+          },
+      });
+    }
+    else{
+      form.classList.add('was-validated');
+    }
+  });
+
+  $('#deleteButton').click(function(event){
+    $('#alertBox').css('visibility', 'hidden');
+    var tagName = $("#selExistTag").find(":selected");
+    if (tagName[0].disabled){
+      $('#alertBox').attr('class', 'alert alert-danger');
+      $('#alertBox').css('visibility', 'visible');
+      $('#alertBox').html("Please select a Tag");
+      return;
+    }
+    tagName = tagName.val();
+    $.ajax({
+        type: "POST",
+        url: "{% url 'GUI:editConfigurationTag'%}",
+        data:{
+          csrfmiddlewaretoken: '{{ csrf_token }}',
+          tagName: tagName,
+          delete: true,
+        },
+        error: function(jqXHR, textStatus, errorThrown) {
+            console.log(jqXHR.status);
+            $('#alertBox').attr('class', 'alert alert-danger');
+            $('#alertBox').css('visibility', 'visible');
+            $('#alertBox').html("<strong>Error</strong> while deleting Tag");
+        },
+        "success": function(result) {
+            $('#alertBox').attr('class', 'alert alert-success');
+            $('#alertBox').css('visibility', 'visible');
+            $('#alertBox').html("Tag <strong>successfully</strong> deleted");
+            form.classList.remove('was-validated');
+            $("#selExistTag").find(":selected").remove();
+        },
+      });
+  });
+});
+
+function loadDetectorConfigs(event){
+  var id = event.id
+  var systemId = event.selectedOptions[0].textContent;
+  var rowNumber = event.attributes["rownumber"].value;
+
+  //remove new Detector from other selectboxes
+  $("select[id^='selDetector'][id!='"+id+"'] option[value='"+systemId+"']").remove();
+  unusedDetectors.delete(systemId);
+
+  var oldvalue = event.attributes["oldvalue"];
+  if (oldvalue != undefined){
+    //add oldvalue to other selectboxes
+    $("select[id!='"+id+"'][id^='selDetector']").append("<option value='"+oldvalue+"'>"+oldvalue+"</option>");
+    unusedDetectors.add(oldvalue);
+    event.attributes["oldvalue"] = systemId;
+  }
+  else{
+    //just set oldvalue
+    event.attributes["oldvalue"] = systemId;
+  }
+  $('#selConfig'+rowNumber).html(detectorConfigs[systemId]);
+};
+
+function deleteField(event){
+   var fieldDiv = $(event).closest("div .row");
+   var sysSelect = fieldDiv.find("[id^='selDetector']");
+   var value = sysSelect.val()
+
+   if (value != undefined){
+     //add current value to other selectboxes
+     $("select[id^='selDetector']").append("<option value='"+value+"'>"+value+"</option>");
+     unusedDetectors.add(value);
+   }
+   fieldDiv.remove();
+   rowCounter -= 1;
+   $("#addButton")[0].disabled = false;
+}
+</script>
+{% endblock script%}
+
+{% block configActivity%}active{% endblock %}
+
+{% block sideAndTopBar %}
+  {{block.super}}
+{% endblock %}
+
+{% block breadcrumb %}
+    <li class="breadcrumb-item">
+      <a href="{% url 'GUI:index' %}">Overview</a>
+    </li>
+    <li class="breadcrumb-item">Edit Configuration Tag</li>
+{% endblock %}
+
+{% block content %}
+  <div id="alertBox" class="alert alert-success" role="alert" style="visibility: hidden">
+    save successful
+  </div>
+  <div class="row">
+    <div class="col"><h2>Select existing Configuration Tag</h2></div>
+  </div>
+  <div class="row">
+    <div class="col-2">System</div>
+    <div class="col-2">Configuration</div>
+  </div>
+  <div class="row">
+    <div class="col-2">
+      <select class="form-control selectpicker" id="selExistTag">
+        <option selected hidden disabled>Select a Tag</option>
+        {% for tag in view.tags %}
+            <option>{{tag}}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-1">
+      <button type="button" id="editButton" class="btn btn-primary"/>edit</button>
+    </div>
+    <div class="col-1">
+      <button type="button" id="deleteButton" class="btn btn-primary"/>delete</button>
+    </div>
+  </div>
+  <hr>
+  <form id="form">
+  <div class="row">
+    <div class="col"><h2>Edit/Create Configuration Tag</h2></div>
+  </div>
+  <div class="row">
+    <div class="col-2">Tag Name</div>
+  </div>
+  <div class="row">
+        <div class="col-2"><input  id="tagName" class="form-control" type="text" placeholder="Tagname" required></div>
+  </div>
+  <div class="row">
+    <div class="col-2">Global System</div>
+    <div class="col-2">Config</div>
+  </div>
+  {%for sys,configs in view.gobalConfigsForSystem.items %}
+  <div class="row">
+    <div class="col-2">
+      <h6>{{sys}}</h6>
+    </div>
+    <div class="col-2">
+      <select class="form-control selectpicker" id="selConfig{{sys}}" required>
+        <option selected disabled hidden>Select a Configuration</option>
+        {% for config in configs %}
+          <option>{{config.configId}}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+  {%endfor%}
+
+  <div class="row">
+    <div class="col-2">Detector</div>
+    <div class="col-2">Config</div>
+  </div>
+  <div class="row">
+    <div class="col-1">
+      <button type="button" id="saveButton" class="btn btn-primary"/>save</button>
+    </div>
+    <div class="col">
+      <button type="button" id="addButton" class="btn btn-primary"/>add Detector</button>
+    </div>
+  </div>
+  </form>
+
+{% endblock content%}

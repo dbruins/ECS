@@ -11,12 +11,10 @@ ECS Delete Detectors
 {% endblock %}
 
 {% block breadcrumb %}
-  <ol class="breadcrumb">
     <li class="breadcrumb-item">
       <a href="{% url 'GUI:index' %}">Overview</a>
     </li>
     <li class="breadcrumb-item active">Delete Detectors</li>
-  </ol>
 {% endblock %}
 
 {% block content %}
@@ -37,9 +35,9 @@ ECS Delete Detectors
     <a>there had been errors while aborting some Detectors. Delete anyway?</a><br/>
     {% for d in view.failedDetectors %}
       <div class="form-check">
-        <input type="checkbox" class="form-check-input" name="selectedDetectors" value="{{d.0}}" id="check{{d.0}}">
+        <input type="checkbox" class="form-check-input" name="selectedDetectors" value="{{d}}" id="check{{d.0}}">
         <label class="form-check-label" for="check{{d.0}}">
-          Detector {{d.0}}
+          Detector {{d}}
         </label>
       </div>
     {% endfor %}

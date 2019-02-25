@@ -19,10 +19,8 @@ function resetSystem (systemId){
   });
 }
 function createWebSocket(){
-    //var updateSocket = new WebSocket('ws://'+ window.location.host + '/ws/{{pcaId}}/');
-    var updateSocket = new WebSocket("ws://"+ window.location.hostname+":{{view.webSocketPort}}/{{pcaId}}/{{request.user}}");
+    var updateSocket = new WebSocket("{% if ENCRYPT_WEBSOCKET %}wss{% else %}ws{% endif %}://"+ window.location.hostname+":{{WEB_SOCKET_PORT}}/{{pcaId}}/{{request.user}}");
     function updateState(id,newState,unmappedState,sequenceNumber,tag,comment,isGlobalSystem,buttons){
-      //console.log(id,newState,sequenceNumber)
       cssClass = newState;
       stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>';
       //reset Button
@@ -34,6 +32,8 @@ function createWebSocket(){
       if (id == "{{view.pcaId}}"){
         globalState.html(stateCircle+newState);
         globalTag.html(tag);
+        if (tag =="No Configuration Tag")
+          customConfiguration = false;
         selectedTag.html(tag)
         if (buttons){
           readyButton.prop("disabled",!buttons["configure"]);
@@ -116,7 +116,6 @@ function createWebSocket(){
 
     updateSocket.onmessage = function(e) {
         var data = JSON.parse(e.data);
-        //console.log(data)
         var message = data['message'];
         var type = data['type'];
         if (type == "state"){
@@ -159,9 +158,9 @@ function createWebSocket(){
           $('#alertBox').css('visibility', 'visible');
           $('#alertBox').html("<strong>Warning!</strong> Your permissions timed out");
           $('#PCAcontrolLink').html("take control of {{view.pcaObject}}");
-          $('#PCAcontrolLink').attr("href", "{% url 'GUI:take_control' pcaId pcaId%}");
+          $('#PCAcontrolLink').attr("href", "{% url 'GUI:take_pca_control' pcaId pcaId%}");
           $('#controlLink').html("take control of {{view.ecsObject}}");
-          $('#controlLink').attr("href", "{% url 'GUI:take_control' 'ecs' pcaId%}");
+          $('#controlLink').attr("href", "{% url 'GUI:take_ecs_control' pcaId%}");
         }
     };
 }
@@ -193,6 +192,7 @@ $(document).ready(function() {
     readyButton = $("#ready")
     startButton = $("#start")
     stopButton = $("#stop")
+    selectConfButton = $("#selectConfButton")
 
     logBox = $('#log')
 
@@ -205,24 +205,25 @@ $(document).ready(function() {
     $("#ready").click(function(e) {
         e.preventDefault();
         var form = $("#configure_form")[0];
-        console.log(customConfiguration);
+        if (selectedTag.html() == "No Configuration Tag" || (selectedTag.html() == "customTag" && !customConfiguration)){
+            selectConfButton.popover('show')
+            return;
+        }
+        else{
+          selectConfButton.popover('hide')
+        }
         if (typeof(customConfiguration)!= "undefined" && customConfiguration != false){
           var req_data = {csrfmiddlewaretoken: '{{ csrf_token }}', autoConfigure: $("#autoConfigureCheckBox").prop("checked"), globalTag: $("#selectedTag").html(), "customConfiguration[]" : customConfiguration};
         }
         else{
           var req_data = {csrfmiddlewaretoken: '{{ csrf_token }}', autoConfigure: $("#autoConfigureCheckBox").prop("checked"), globalTag: $("#selectedTag").html()};
         }
-        if (form.checkValidity()){
-          $.ajax({
-              type: "POST",
-              url: "{% url 'GUI:ready' pcaId%}",
-              data: req_data,
-              statusCode: returnCodeCases
-          });
-        }
-        else{
-          form.classList.add('was-validated');
-        }
+        $.ajax({
+            type: "POST",
+            url: "{% url 'GUI:ready' pcaId%}",
+            data: req_data,
+            statusCode: returnCodeCases
+        });
     });
     $("#start").click(function(e) {
         e.preventDefault();
@@ -256,6 +257,7 @@ $(document).ready(function() {
     $('#configuration-modal').on('show.bs.modal', function (event) {
       var button = $(event.relatedTarget) // Button that triggered the modal
       var modal = $(this)
+      selectConfButton.popover('hide')
       $.ajax({
           type: "GET",
           url: "{%url 'GUI:configureTagModal' view.pcaId%}",
@@ -281,28 +283,27 @@ function clearConfigModal(){
 {% endblock %}
 
 {% block control %}
-  {% if perms.GUI.can_take_control %}
-    {% load guardian_tags %}
-    {% get_obj_perms request.user for view.pcaObject as "pcaPerms" %}
-    {% get_obj_perms request.user for view.ecsObject as "ecsPerms" %}
-    {% if view.userInControl and view.userInControl != "You" %}
-      <h5 class="dropdown-header">Control already Taken by User : {{view.userInControl}}</h5>
-    {% endif %}
-    {% if "has_control" in ecsPerms %}
+  {% load guardian_tags %}
+  {% get_obj_perms request.user for view.pcaObject as "pcaPerms" %}
+  {% get_obj_perms request.user for view.ecsObject as "ecsPerms" %}
+  {% if perms.GUI.can_take_ecs_control %}
+    {% if "has_ecs_control" in ecsPerms %}
       <h5 class="dropdown-header">You are currently controlling the ECS</h5>
-      <a id="controlLink" class="dropdown-item" href="{% url 'GUI:giveup_control' 'ecs' pcaId%}">give up control of {{view.ecsObject}}</a>
-    {% elif not view.userInControl %}
-      <a id="controlLink" class="dropdown-item" href="{% url 'GUI:take_control' 'ecs' pcaId%}">take control of {{view.ecsObject}}</a>
+      <a id="controlLink" class="dropdown-item" href="{% url 'GUI:giveup_ecs_control' pcaId%}">give up control of {{view.ecsObject}}</a>
+    {% elif not view.userInECSControl %}
+      <a id="controlLink" class="dropdown-item" href="{% url 'GUI:take_ecs_control' pcaId%}">take control of {{view.ecsObject}}</a>
     {% endif %}
+  {% endif %}
+  {% if perms.GUI.can_take_pca_control %}
     <div class="dropdown-divider"></div>
     {% if view.userInPCAControl and view.userInPCAControl != "You" %}
-      <h5 class="dropdown-header">Control of PCA {{view.pcaId}} already Taken by User : {{view.userInControl}}</h5>
+      <h5 class="dropdown-header">Control of PCA {{view.pcaId}} already Taken by User : {{view.userInPCAControl}}</h5>
     {% endif %}
-    {% if "has_control" in pcaPerms %}
+    {% if "has_pca_control" in pcaPerms %}
       <h5 class="dropdown-header">You are currently controlling the Partition</h5>
-      <a id="PCAcontrolLink" class="dropdown-item" href="{% url 'GUI:giveup_control' pcaId pcaId%}">give up control of {{view.pcaObject}}</a>
+      <a id="PCAcontrolLink" class="dropdown-item" href="{% url 'GUI:giveup_pca_control' pcaId pcaId%}">give up control of {{view.pcaObject}}</a>
     {% elif not view.userInPCAControl %}
-      <a id="PCAcontrolLink" class="dropdown-item" href="{% url 'GUI:take_control' pcaId pcaId%}">take control of {{view.pcaObject}}</a>
+      <a id="PCAcontrolLink" class="dropdown-item" href="{% url 'GUI:take_pca_control' pcaId pcaId%}">take control of {{view.pcaObject}}</a>
     {% endif %}
     <div class="dropdown-divider"></div>
   {% endif %}
@@ -340,33 +341,37 @@ function clearConfigModal(){
   <div class="alert alert-danger" id="alertBox" style="visibility: hidden"></div>
   <div>
     <table class="table table-bordered" id="detectorStateTable">
-      <tr>
-        <th class="col-md-2">Detector</th>
-        <th class="col-md-2">Status as seen by PCA</th>
-        <th class="col-md-2">Status</th>
-        <th class="col-md-3">Config Tag</th>
-        <th class="col-md-3">Comment</th>
-      </tr>
+      <thead>
+        <tr>
+          <th style="width: 15%">Detector</th>
+          <th style="width: 20%">Status as seen by PCA</th>
+          <th style="width: 20%">Status</th>
+          <th style="width: 25%">Config Tag</th>
+          <th >Comment</th>
+        </tr>
+      </thead>
+      <tbody>
+      </tbody>
     </table>
   </div>
   <div>
     <table class="table table-bordered" id="globalSystemStateTable">
       <tr>
-        <th class="col-md-2">Global System</th>
-        <th class="col-md-2">Status as seen by PCA</th>
-        <th class="col-md-2">Status</th>
-        <th class="col-md-3">Config Tag</th>
-        <th class="col-md-3">Comment</th>
+        <th style="width: 15%">Global System</th>
+        <th style="width: 20%">Status as seen by PCA</th>
+        <th style="width: 20%">Status</th>
+        <th style="width: 25%">Config Tag</th>
+        <th class="col-3">Comment</th>
       </tr>
     </table>
   </div>
-  {% if "has_control" in pcaPerms %}
+  {% if "has_pca_control" in pcaPerms %}
     <div class="form-row">
       <form id="configure_form" class="form-group col-2">
           <label>Currently Selected Tag: </label><label id="selectedTag"></label>
       </form>
       <div class="form-group col-2">
-      <button class="btn btn-primary" data-toggle="modal" data-target="#configuration-modal" onclick="clearConfigModal()">
+      <button id="selectConfButton" class="btn btn-primary" data-toggle="modal" data-container="body" data-placement="bottom" data-content="Please select a configuration" data-target="#configuration-modal" onclick="clearConfigModal()">
         Select Configuration
       </button>
     </div>

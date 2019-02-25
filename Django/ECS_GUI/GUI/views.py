@@ -1,7 +1,7 @@
 from django.shortcuts import get_object_or_404,render,redirect
 from guardian.shortcuts import assign_perm, get_users_with_perms, remove_perm, get_user_perms
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
-from GUI.models import pcaModel, LoggedInUser
+from GUI.models import pcaModel, LoggedInUser, ecsModel
 from django.urls import reverse
 from django.conf import settings
 import json
@@ -19,7 +19,7 @@ sys.path.append(projectPath)
 from ECSCodes import ECSCodes
 codes = ECSCodes()
 from DataObjects import DataObjectCollection, detectorDataObject, partitionDataObject, stateObject, configObject
-from ECS import ECS,DataBaseWrapper
+from ECS import ECS
 
 ecs = ECS()
 
@@ -30,7 +30,6 @@ from django.dispatch import receiver
 
 @receiver(user_logged_in)
 def on_user_logged_in(sender, request, **kwargs):
-    print(request.session.session_key)
     LoggedInUser.objects.get_or_create(user=request.user)
 
 @receiver(user_logged_out)
@@ -41,12 +40,12 @@ def on_user_logged_out(sender, request, **kwargs):
     #pcas
     for pca in ecs.pcaHandlers.items():
         pcaObject = pcaModel.objects.filter(id=pca[0]).get()
-        if request.user.has_perm("has_control",pcaObject):
-         remove_perm('has_control', request.user, pcaObject)
+        if request.user.has_perm("has_pca_control",pcaObject):
+         remove_perm('has_pca_control', request.user, pcaObject)
     #ecs
-    pcaObject = pcaModel.objects.filter(id="ecs").get()
-    if request.user.has_perm("has_control",pcaObject):
-        remove_perm('has_control', request.user, pcaObject)
+    ecsObject = ecsModel.objects.filter(id="ecs").get()
+    if request.user.has_perm("has_ecs_control",ecsObject):
+        remove_perm('has_ecs_control', request.user, ecsObject)
 
 def permission_timeout():
     """remove permission has control if user has been inactive for a while"""
@@ -57,13 +56,23 @@ def permission_timeout():
         for pcaObject in allPCAs:
             usersWithPermission = get_users_with_perms(pcaObject, attach_perms = True)
             for user, perms in usersWithPermission.items():
-                if "has_control" in perms:
+                if "has_pca_control" in perms:
                     timedelta = timezone.now() - pcaObject.permissionTimestamp
                     if timedelta.total_seconds() > settings.PERMISSION_TIMEOUT:
                         print(str(timedelta.total_seconds()) +" timeout user: "+str(user) )
-                        remove_perm('has_control', user, pcaObject)
+                        remove_perm('has_pca_control', user, pcaObject)
                         #inform over websocket
                         ecs.webSocket.permissionTimeout(str(user))
+        ecsObject = ecsModel.objects.filter(id="ecs").get()
+        usersWithPermission = get_users_with_perms(ecsObject, attach_perms = True)
+        for user, perms in usersWithPermission.items():
+            if "has_ecs_control" in perms:
+                timedelta = timezone.now() - ecsObject.permissionTimestamp
+                if timedelta.total_seconds() > settings.PERMISSION_TIMEOUT:
+                    print(str(timedelta.total_seconds()) +" timeout user: "+str(user) )
+                    remove_perm('has_ecs_control', user, ecsObject)
+                    #inform over websocket
+                    ecs.webSocket.permissionTimeout(str(user))
 
 t = threading.Thread(name="permission_timeout", target=permission_timeout)
 t.start()
@@ -78,15 +87,20 @@ class resetUserTimeoutMixin(object):
         allPCAs = pcaModel.objects.all()
         for pcaObject in allPCAs:
             perm = get_user_perms(request.user,pcaObject)
-            if 'has_control' in perm:
+            if 'has_pca_control' in perm:
                 pcaObject.permissionTimestamp = timezone.now()
                 pcaObject.save()
+        ecsObject = ecsModel.objects.filter(id="ecs").get()
+        perm = get_user_perms(request.user,ecsObject)
+        if 'has_ecs_control' in perm:
+            ecsObject.permissionTimestamp = timezone.now()
+            ecsObject.save()
         return super().dispatch(request, *args, **kwargs)
 
 class ecsMixin(LoginRequiredMixin,resetUserTimeoutMixin):
     """combination of Login required and reset timeout """
     partitions = ecs.pcaHandlers.items()
-    ecsObject = pcaModel.objects.filter(id="ecs").get()
+    ecsObject = ecsModel.objects.filter(id="ecs").get()
 
 class pcaForm(forms.Form):
     id = forms.CharField(label="id")
@@ -102,7 +116,6 @@ class detectorForm(forms.Form):
     id = forms.CharField(label="id")
     address = forms.CharField(label="address")
     type = forms.CharField(label="type")
-    portTransition = forms.IntegerField(min_value= 1,label="Port Transition")
     portCommand = forms.IntegerField(min_value= 1,label="Port Command")
 
 
@@ -130,7 +143,7 @@ class index(ecsMixin,TemplateView):
             else:
                 self.usersInPCAControl[pca[0]]=None
         self.ecsMap["unmapped"] = ecs.unmappedDetectorController.statusMap.map
-        #check if another user has control over pca
+        #check if another user has control over ecs
         self.userInControl = None
         #get users who have control for ecs
         users = get_users_with_perms(self.ecsObject, attach_perms = True)
@@ -139,7 +152,8 @@ class index(ecsMixin,TemplateView):
             self.userInControl = list(users.keys())[0]
         if self.userInControl == request.user:
             self.userInControl = "You"
-        self.sessionId = request.user.logged_in_user.session_key
+        if hasattr(request.user, 'logged_in_user'):
+            self.sessionId = request.user.logged_in_user.session_key
         return super().dispatch(request, *args, **kwargs)
 
 class pcaView(ecsMixin,TemplateView):
@@ -152,27 +166,28 @@ class pcaView(ecsMixin,TemplateView):
         self.userInPCAControl = None
         usersWithPermission = get_users_with_perms(self.pcaObject, attach_perms = True)
         for user, perms in usersWithPermission.items():
-            if "has_control" in perms:
+            if "has_pca_control" in perms:
                 self.userInPCAControl = user
                 break
         if self.userInPCAControl == request.user:
             self.userInPCAControl = "You"
 
-        self.userInControl = None
+        self.userInECSControl = None
         usersWithPermission = get_users_with_perms(self.ecsObject, attach_perms = True)
         for user, perms in usersWithPermission.items():
-            if "has_control" in perms:
-                self.userInControl = user
+            if "has_ecs_control" in perms:
+                self.userInECSControl = user
                 break
-        if self.userInControl == request.user:
-            self.userInControl = "You"
-        self.sessionId = request.user.logged_in_user.session_key
+        if self.userInECSControl == request.user:
+            self.userInECSControl = "You"
+        if hasattr(request.user, 'logged_in_user'):
+            self.sessionId = request.user.logged_in_user.session_key
         return super().dispatch(request, *args, **kwargs)
 
 class ecsPermissionMixin(PermissionRequiredMixin):
     return_403 = True
-    permission_required = 'has_control'
-    permission_object = pcaModel.objects.filter(id="ecs").get()
+    permission_required = 'has_ecs_control'
+    permission_object = ecsModel.objects.filter(id="ecs").get()
 
 
 class create_pca(ecsMixin,ecsPermissionMixin,FormView):
@@ -213,7 +228,7 @@ class delete_pca(ecsMixin,ecsPermissionMixin,TemplateView):
         partitions = request.POST.getlist("selectedPartitions")
         self.failedPartitions = False
         for pcaId in partitions:
-            detectors = ecs.getDetectorsForPartition(pcaId)
+            detectors = ecs.database.getDetectorsForPartition(pcaId)
             self.forceDelete = False
             if "forceDelete" in request.POST:
                 self.forceDelete = True
@@ -239,20 +254,6 @@ class delete_pca(ecsMixin,ecsPermissionMixin,TemplateView):
             return self.get(request, *args, **kwargs)
         return HttpResponseRedirect('/')
 
-
-
-
-@login_required
-def input_edit_pca(request):
-    id = request.POST["id"]
-    partition = ecs.getPartition(id)
-    unmappedDetectors = ecs.getUnmappedDetectors()
-    return render(request, 'GUI/ECS_Edit_Partition.html', {"pca":partition, "unmappedDetectors" : unmappedDetectors})
-
-@login_required
-def edit_pca(request):
-    pass
-
 class create_detector(ecsMixin,ecsPermissionMixin,FormView):
     #FormView
     template_name = 'GUI/ECS_Create_Detector.html'
@@ -269,7 +270,6 @@ class create_detector(ecsMixin,ecsPermissionMixin,FormView):
                 "id" : form.cleaned_data["id"],
                 "address": form.cleaned_data["address"],
                 "type" : form.cleaned_data["type"],
-                "portTransition" : form.cleaned_data["portTransition"],
                 "portCommand" : form.cleaned_data["portCommand"],
         }
         obj = detectorDataObject(values)
@@ -285,7 +285,7 @@ class moveDetectors(ecsMixin,ecsPermissionMixin,TemplateView):
         raise_exception = True
 
         def dispatch(self, request, *args, **kwargs):
-            self.unmappedDetectors = ecs.getUnmappedDetectors()
+            self.unmappedDetectors = ecs.database.getAllUnmappedDetectors()
             return super().dispatch(request, *args, **kwargs)
 
         def post(self, request, *args, **kwargs):
@@ -310,7 +310,7 @@ class deleteDetector(ecsMixin,ecsPermissionMixin,TemplateView):
     raise_exception = True
 
     def dispatch(self, request, *args, **kwargs):
-        self.unmappedDetectors = ecs.getUnmappedDetectors()
+        self.unmappedDetectors = ecs.database.getAllUnmappedDetectors()
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
@@ -329,6 +329,79 @@ class deleteDetector(ecsMixin,ecsPermissionMixin,TemplateView):
             return self.get(request, *args, **kwargs)
         return HttpResponseRedirect('/')
 
+class editConfiguration(ecsMixin,ecsPermissionMixin,TemplateView):
+    template_name = 'GUI/editConfig.html'
+    raise_exception = True
+
+    def dispatch(self, request, *args, **kwargs):
+        """get the webpage"""
+        res = ecs.getAllSystems()
+        iJustWantTheIdLambda = lambda x:x.id
+        self.detectors = list(map(iJustWantTheIdLambda,res["detectors"].dataArray))
+        self.globalSystems = list(map(iJustWantTheIdLambda,res["globalSystems"].dataArray))
+
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        """saves selected system configuration as new tag in the database"""
+        #check if all needed values are there
+        if {'configId', 'systemId',"paramList"}.issubset( request.POST ):
+            configId = request.POST['configId']
+            systemId = request.POST['systemId']
+            params = request.POST["paramList"]
+            ret = ecs.database.saveConfig(configId,systemId,params)
+        elif {'configId', 'delete'}.issubset( request.POST ):
+            configId = request.POST['configId']
+            ret = ecs.database.deleteConfig(configId)
+        else:
+            return HttpResponse(status=406)
+        if isinstance(ret,Exception):
+            return HttpResponse(status=500)
+        else:
+            return HttpResponse(status=200)
+
+class editConfigurationTag(ecsMixin,ecsPermissionMixin,TemplateView):
+    template_name = 'GUI/editTag.html'
+    raise_exception = True
+
+    def dispatch(self, request, *args, **kwargs):
+        """get the webpage"""
+        res = ecs.getAllSystems()
+        iJustWantTheIdLambda = lambda x:x.id
+        self.detectors = list(map(iJustWantTheIdLambda,res["detectors"].dataArray))
+        self.globalSystems = list(map(iJustWantTheIdLambda,res["globalSystems"].dataArray))
+        self.tags = ecs.database.getAllConfigTags()
+        globalSystemConfigs = ecs.database.getConfigsForManySystems(self.globalSystems)
+        self.gobalConfigsForSystem = {}
+        for config in globalSystemConfigs:
+            if config.systemId not in self.gobalConfigsForSystem:
+                self.gobalConfigsForSystem[config.systemId] = []
+            self.gobalConfigsForSystem[config.systemId].append(config)
+        detectorConfigs = ecs.database.getConfigsForManySystems(self.detectors)
+        self.detectorConfigsForSystem = {}
+        for config in detectorConfigs:
+            if config.systemId not in self.detectorConfigsForSystem:
+                self.detectorConfigsForSystem[config.systemId] = []
+            self.detectorConfigsForSystem[config.systemId].append(config)
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        """saves selected system configuration as new tag in the database"""
+        if {'tagName', 'configList[]'}.issubset( request.POST ):
+            tagName = request.POST['tagName']
+            configs = request.POST.getlist("configList[]")
+            ret = ecs.database.saveConfigTag(tagName,configs)
+        elif {'tagName', 'delete'}.issubset( request.POST ):
+            tagName = request.POST['tagName']
+            ret = ecs.database.deleteConfigTag(tagName)
+        else:
+            return HttpResponse(status=406)
+        if isinstance(ret,Exception):
+            return HttpResponse(status=500)
+        else:
+            return HttpResponse(status=200)
+
+
 class clientPage(ecsMixin,ecsPermissionMixin,TemplateView):
     template_name = 'GUI/clients.html'
     raise_exception = True
@@ -338,7 +411,7 @@ class clientPage(ecsMixin,ecsPermissionMixin,TemplateView):
         self.detectors = {}
         for pca in ecs.pcaHandlers.items():
             self.pcas[pca[0]] = ecs.checkIfRunning(ecs.partitions[pca[0]])
-            for d in ecs.getDetectorsForPartition(pca[0]):
+            for d in ecs.database.getDetectorsForPartition(pca[0]):
                 self.detectors[d.id] = ecs.checkIfRunning(d)
         self.globalSystems = {}
         for gs in ecs.globalSystems.items():
@@ -351,7 +424,7 @@ class clientPage(ecsMixin,ecsPermissionMixin,TemplateView):
         if request.POST['type'] == "partition":
             object = ecs.partitions[id]
         elif request.POST['type'] == "detector":
-            object = ecs.getDetector(id)
+            object = ecs.database.getDetector(id)
         elif request.POST['type'] == "global":
             object = ecs.globalSystems[id]
         else:
@@ -374,7 +447,7 @@ class clientPage(ecsMixin,ecsPermissionMixin,TemplateView):
 class pcaPermissionMixin(PermissionRequiredMixin):
     #PermissionRequiredMixin
     return_403 = True
-    permission_required = 'has_control'
+    permission_required = 'has_pca_control'
 
     def dispatch(self, request, *args, **kwargs):
         pcaId = self.kwargs['pcaId']
@@ -391,9 +464,9 @@ class ready(ecsMixin,pcaPermissionMixin,View):
 
         if "customConfiguration[]" in request.POST:
             customConfiguration = request.POST.getlist("customConfiguration[]")
-            systemConfig =ecs.getCustomConfig(customConfiguration)
+            systemConfig =ecs.database.getCustomConfig(customConfiguration)
         else:
-            systemConfig = ecs.getConfigsForTag(globalTag)
+            systemConfig = ecs.database.getConfigsForTag(globalTag)
         if systemConfig == codes.idUnknown:
             pca.log("tag %s not found" % globalTag)
             return HttpResponse(status=500)
@@ -450,18 +523,18 @@ class configTagModalView(ecsMixin,pcaPermissionMixin,TemplateView):
         pcaId = self.kwargs['pcaId']
         handler = ecs.getPCAHandler(pcaId)
         tag = handler.stateMap[pcaId][1].configTag
-        configList = ecs.getConfigsForPCA(pcaId)
-        if isinstance(configList,str):
-            self.error = configList
+        configList = ecs.database.getConfigsForPCA(pcaId)
+        if isinstance(configList,Exception):
+            self.error = str(configList)
             return super().dispatch(request, *args, **kwargs)
         if not tag:
             systemConfigForTag = {}
         else:
             self.currentTag=tag
-            systemConfigForTag = ecs.getConfigsForTag(tag)
+            systemConfigForTag = ecs.database.getConfigsForTag(tag)
 
-        if isinstance(systemConfigForTag,str):
-            self.error = configList
+        if isinstance(systemConfigForTag,Exception):
+            self.error = str(systemConfigForTag)
             return super().dispatch(request, *args, **kwargs)
 
         #config for currently selected tag
@@ -474,35 +547,37 @@ class configTagModalView(ecsMixin,pcaPermissionMixin,TemplateView):
                 state = handler.stateMap[sysId][1]
                 if state.configTag and sysId != pcaId:
                     pcaTagList.append(state.configTag)
-            systemConfigForTag =ecs.getCustomConfig(pcaTagList)
+            systemConfigForTag =ecs.database.getCustomConfig(pcaTagList)
         else:
             self.customTag = False
         for c in systemConfigForTag:
             self.systemConfigs[c.systemId] =  {c.configId:c.parameters}
 
-        #all avaiable configs
+        #list for systems without configs
+        self.systemsWithoutConfig = []
+        #all available configs other than the allready selected
         for c in configList:
+            if c.configId == None:
+                self.systemsWithoutConfig.append(c.systemId)
+                continue
             if c.systemId not in self.systemConfigs:
                 self.systemConfigs[c.systemId] = {}
             if c.configId not in self.systemConfigs[c.systemId]:
                 self.systemConfigs[c.systemId][c.configId] = c.parameters
 
-        tagList = ecs.getTagsForPCA(pcaId)
+        tagList = ecs.database.getPcaCompatibleTags(pcaId)
         if tagList:
-            if isinstance(tagList,str):
-                self.error = tagList
+            if isinstance(tagList,Exception):
+                self.error = str(tagList)
             else:
-                if tag:
-                    if tag in tagList:
-                        tagList.remove(tag)
                 self.tagList = tagList
 
         return super().dispatch(request, *args, **kwargs)
 @login_required
 def getDetectorListForPCA(request):
-    """Ask ECS for DetectorList from Database"""
+    """Ask ECS for DetectorList from Database for a PCA"""
     pcaId = request.POST['pcaId']
-    detList = ecs.getDetectorsForPartition(pcaId)
+    detList = ecs.database.getDetectorsForPartition(pcaId)
     if detList == codes.error:
         return HttpResponse(status=404)
     else:
@@ -510,9 +585,9 @@ def getDetectorListForPCA(request):
 
 @login_required
 def getConfigsForSystem(request):
-    """Ask ECS for DetectorList from Database"""
+    """Ask ECS for Configurations from Database for a System"""
     id = request.POST['id']
-    configList = ecs.getConfigsForSystem(id)
+    configList = ecs.database.getConfigsForSystem(id)
     if configList == codes.idUnknown:
         return HttpResponse(status=404)
     else:
@@ -520,22 +595,22 @@ def getConfigsForSystem(request):
 
 @login_required
 def getConfigsForTag(request):
-    """Ask ECS for DetectorList from Database"""
+    """Ask ECS for DetectorList from Database for a Tag"""
     tag = request.POST['tag']
-    configList = ecs.getConfigsForTag(tag)
+    configList = ecs.database.getConfigsForTag(tag)
     if configList == codes.idUnknown:
         configList = {}
     else:
         configList = configList.asDictionary()
 
-    if isinstance(configList,str):
-        return JsonResponse({"error":configList})
+    if isinstance(configList,Exception):
+        return JsonResponse({"error":str(configList)})
     return JsonResponse(configList)
 
 @login_required
 def getUnmappedDetectors(request):
     """Ask ECS for DetectorList from Database"""
-    detList = ecs.getUnmappedDetectors()
+    detList = ecs.database.getAllUnmappedDetectors()
     if detList == codes.error:
         return HttpResponse(status=404)
     else:
@@ -584,33 +659,64 @@ def currentTableAndLogRequest(request,pcaId):
         }
     return JsonResponse(response)
 
-@permission_required('GUI.can_take_control')
+@permission_required('GUI.can_take_pca_control')
 @login_required
-def takeControl(request,pcaId,targetPage):
+def takePCAControl(request,pcaId,targetPage):
     if targetPage == "ecs":
         redirect = HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
     else:
         pca = ecs.getPCAHandler(targetPage)
         redirect = HttpResponseRedirect("/pca/"+targetPage,{'stateMap': pca.stateMap.map, "pcaId" : targetPage, "pcaObject" : pcaModel.objects.filter(id=targetPage).get()})
-    #check if other user has control for pca
-    pcaObject = pcaModel.objects.filter(id=pcaId).get()
-    usersWithPermission = get_users_with_perms(pcaObject, attach_perms = True)
+    #check if other user has control for ecs
+    object = pcaModel.objects.filter(id=pcaId).get()
+    usersWithPermission = get_users_with_perms(object, attach_perms = True)
     for user, perms in usersWithPermission.items():
-        if "has_control" in perms:
+        if "has_pca_control" in perms:
             return redirect
-    assign_perm('has_control', request.user, pcaObject)
-    pcaObject.permissionTimestamp = timezone.now()
-    pcaObject.save()
+    assign_perm("has_pca_control", request.user, object)
+    object.permissionTimestamp = timezone.now()
+    object.save()
     return redirect
 
-@permission_required('GUI.can_take_control')
+@permission_required('GUI.can_take_ecs_control')
 @login_required
-def giveUpControl(request,pcaId,targetPage):
+def takeECSControl(request,targetPage):
     if targetPage == "ecs":
         redirect = HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
     else:
         pca = ecs.getPCAHandler(targetPage)
         redirect = HttpResponseRedirect("/pca/"+targetPage,{'stateMap': pca.stateMap.map, "pcaId" : targetPage, "pcaObject" : pcaModel.objects.filter(id=targetPage).get()})
-    pcaObject = pcaModel.objects.filter(id=pcaId).get()
-    remove_perm('has_control', request.user, pcaObject)
+    #check if other user has control for ecs
+    object = ecsModel.objects.filter(id="ecs").get()
+    usersWithPermission = get_users_with_perms(object, attach_perms = True)
+    for user, perms in usersWithPermission.items():
+        if "has_ecs_control" in perms:
+            return redirect
+    assign_perm("has_ecs_control", request.user, object)
+    object.permissionTimestamp = timezone.now()
+    object.save()
+    return redirect
+
+@permission_required('GUI.can_take_pca_control')
+@login_required
+def giveUpPCAControl(request,pcaId,targetPage):
+    if targetPage == "ecs":
+        redirect = HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
+    else:
+        pca = ecs.getPCAHandler(targetPage)
+        redirect = HttpResponseRedirect("/pca/"+targetPage,{'stateMap': pca.stateMap.map, "pcaId" : targetPage, "pcaObject" : pcaModel.objects.filter(id=targetPage).get()})
+    object = pcaModel.objects.filter(id=pcaId).get()
+    remove_perm("has_pca_control", request.user, object)
+    return redirect
+
+@permission_required('GUI.can_take_ecs_control')
+@login_required
+def giveUpECSControl(request,targetPage):
+    if targetPage == "ecs":
+        redirect = HttpResponseRedirect('/',{"pcaList" : ecs.pcaHandlers.items()})
+    else:
+        pca = ecs.getPCAHandler(targetPage)
+        redirect = HttpResponseRedirect("/pca/"+targetPage,{'stateMap': pca.stateMap.map, "pcaId" : targetPage, "pcaObject" : pcaModel.objects.filter(id=targetPage).get()})
+    object = ecsModel.objects.filter(id="ecs").get()
+    remove_perm("has_ecs_control", request.user, object)
     return redirect

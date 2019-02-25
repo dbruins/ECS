@@ -9,7 +9,7 @@ ECS Dashboard
 {% block script %}
 <script>
   function createWebSocket(){
-      var updateSocket = new WebSocket("ws://"+ window.location.hostname+":{{view.webSocketPort}}/ecs/{{request.user}}");
+      var updateSocket = new WebSocket("{% if ENCRYPT_WEBSOCKET %}wss{% else %}ws{% endif %}://"+ window.location.hostname+":{{WEB_SOCKET_PORT}}/ecs/{{request.user}}");
 
       function updateState(id,newState,unmappedState,sequenceNumber,tag,comment,origin,isGlobalSystem){
         cssClass = newState;
@@ -148,10 +148,10 @@ ECS Dashboard
             $('#alertBox').css('visibility', 'visible');
             $('#alertBox').html("<strong>Warning!</strong> Your permission timed out")
             $('#controlLink').html("take control of ecs")
-            $('#controlLink').attr("href", "{% url 'GUI:take_control' 'ecs' 'ecs'%}");
+            $('#controlLink').attr("href", "{% url 'GUI:take_ecs_control' 'ecs'%}");
             {% for pca,user in view.usersInPCAControl.items %}
               $('#PCAcontrolLink{{pca}}').html("take control of {{pca}}")
-              $('#PCAcontrolLink{{pca}}').attr("href", "{% url 'GUI:take_control' pca 'ecs'%}");
+              $('#PCAcontrolLink{{pca}}').attr("href", "{% url 'GUI:take_pca_control' pca 'ecs'%}");
             {% endfor %}
           }
       };
@@ -178,21 +178,18 @@ ECS Dashboard
 
 {% block control %}
   {{block.super}}
-  {% if perms.GUI.can_take_control %}
+  {% if perms.GUI.can_take_pca_control %}
     {% for pca,user in view.usersInPCAControl.items %}
       {%if user == None %}
-        <a id="PCAcontrolLink{{pca}}" class="dropdown-item" href="{% url 'GUI:take_control' pca 'ecs'%}">take control of {{pca}}</a>
+        <a id="PCAcontrolLink{{pca}}" class="dropdown-item" href="{% url 'GUI:take_pca_control' pca 'ecs'%}">take control of {{pca}}</a>
       {% elif user != "You" %}
         <h5 class="dropdown-header">Control of PCA {{pca}} already Taken by User : {{user}}</h5>
       {%else%}
         <h5 class="dropdown-header">You are currently controlling the Partition</h5>
-        <a id="PCAcontrolLink{{pca}}" class="dropdown-item" href="{% url 'GUI:giveup_control' pca 'ecs'%}">give up control of {{pca}}</a>
+        <a id="PCAcontrolLink{{pca}}" class="dropdown-item" href="{% url 'GUI:giveup_pca_control' pca 'ecs'%}">give up control of {{pca}}</a>
       {% endif %}
       <div class="dropdown-divider"></div>
     {% endfor %}
-  {% endif %}
-  {% if view.userInControl and view.userInControl != "You" %}
-    <h5 class="dropdown-header">Control already Taken by User : {{view.userInControl}}</h5>
   {% endif %}
 {% endblock %}
 
@@ -231,31 +228,31 @@ ECS Dashboard
         </div>
         <table class="table table-bordered" id="detectorStateTable{{pca.0}}">
           <tr>
-            <th class="col-md-3">Detector</th>
-            <th class="col-md-3">Status as seen by PCA</th>
-            <th class="col-md-2">Status</th>
-            <th class="col-md-2">Config Tag</th>
-            <th class="col-md-3">Comment</th>
+            <th style="width: 15%">Detector</th>
+            <th style="width: 20%">Status as seen by PCA</th>
+            <th style="width: 20%">Status</th>
+            <th style="width: 25%">Config Tag</th>
+            <th>Comment</th>
           </tr>
         </table>
         <table class="table table-bordered" id="globalSystemStateTable{{pca.0}}">
           <tr>
-            <th class="col-md-3">Global System</th>
-            <th class="col-md-3">Status as seen by PCA</th>
-            <th class="col-md-2">Status</th>
-            <th class="col-md-2">Config Tag</th>
-            <th class="col-md-3">Comment</th>
+            <th style="width: 15%">Global System</th>
+            <th style="width: 20%">Status as seen by PCA</th>
+            <th style="width: 20%">Status</th>
+            <th style="width: 25%">Config Tag</th>
+            <th>Comment</th>
           </tr>
         </table>
       {%else%}
         <h2>Unused Detectors</h2>
         <table class="table table-bordered" id="detectorStateTable{{pca.0}}">
           <tr>
-            <th class="col-md-3">Detector</th>
-            <th class="col-md-3">Status as seen by PCA</th>
-            <th class="col-md-2">Status</th>
-            <th class="col-md-2">Config Tag</th>
-            <th class="col-md-3">Comment</th>
+            <th style="width: 15%">Detector</th>
+            <th style="width: 20%">Status as seen by PCA</th>
+            <th style="width: 20%">Status</th>
+            <th style="width: 25%">Config Tag</th>
+            <th>Comment</th>
           </tr>
         </table>
       {%endif%}

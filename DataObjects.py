@@ -68,14 +68,12 @@ class detectorDataObject(DataObject):
             self.id = queryResult["id"]
             self.address = queryResult["address"]
             self.type = queryResult["type"]
-            self.portTransition = queryResult["portTransition"]
             self.portCommand = queryResult["portCommand"]
         else:
             self.id = queryResult[0]
             self.address = queryResult[1]
             self.type = queryResult[2]
-            self.portTransition = queryResult[3]
-            self.portCommand = queryResult[4]
+            self.portCommand = queryResult[3]
 
 class partitionDataObject(DataObject):
     """class for storing a Partition database entry"""

@@ -14,7 +14,7 @@ class PCAStates:
     configuringStates = {Configuring_TFC,Configuring_Detectors,Configuring_FLES_and_DCS,Configuring_QA}
 
     #states in which configuring button should be enabled
-    configuringEnabled = {Idle,TFC_Active,Detectors_Active,FLES_and_DCS_Active}
+    configuringEnabled = {Idle,TFC_Active,Detectors_Active,FLES_and_DCS_Active,QA_Active}
     startEnabled = {QA_Active}
     stopEnabled = {Recording}
 
@@ -60,6 +60,7 @@ class MappedStates:
     Active = "Active"
     Configuring = "Configuring"
     Unconfigured = "Unconfigured"
+    Error = "Error"
 
 class CommonStates:
     ConnectionProblem = "Connection Problem"
@@ -71,6 +72,14 @@ class DetectorStates:
     Active = "Active"
     Error = "Error"
 
+class DetectorStatesB:
+    Unconfigured = "Unconfigured"
+    Configuring_Step1 = "Configuring_Step1"
+    Configuring_Step2 = "Configuring_Step2"
+    Configuring_Step3 = "Configuring_Step3"
+    Active = "Active"
+    Error = "Error"
+
 class DetectorTransitions:
     success = "success"
     abort = "abort"
@@ -78,6 +87,12 @@ class DetectorTransitions:
     error = "error"
     resolved = "resolved"
     reset = "reset"
+
+    userInducedTransitions = {reset,abort,configure,error}
+
+    def isUserTransition(self,transition):
+        return transition in self.userInducedTransitions
+
 
 class GlobalSystemStates:
     Unconfigured = "Unconfigured"

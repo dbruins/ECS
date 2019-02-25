@@ -8,6 +8,6 @@ Configuring_Step2,error,Unconfigured
 Configuring_Step3,success,Active
 Configuring_Step3,abort,Unconfigured
 Configuring_Step3,error,Unconfigured
-Active,configure,Configuring
+Active,configure,Configuring_Step1
 Active,abort,Unconfigured
 Active,error,Unconfigured

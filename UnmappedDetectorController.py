@@ -9,7 +9,7 @@ import time
 from _thread import start_new_thread
 from DataObjects import stateObject
 import json
-from states import DetectorStates
+from states import MappedStates
 
 class UnmappedDetectorController:
 
@@ -164,7 +164,7 @@ class UnmappedDetectorController:
         if not typeClass:
             return False
         confSection = types.getConfsectionForType(detector.type)
-        det = typeClass(detector.id,detector.address,detector.portTransition,detector.portCommand,confSection,self.log,self.handleDetectorTimeout,self.handleDetectorReconnect)
+        det = typeClass(detector.id,detector.address,detector.portCommand,confSection,self.log,self.handleDetectorTimeout,self.handleDetectorReconnect)
         self.detectors[det.id] = det
         self.publishQueue.put((det.id,det.getStateObject()))
 
@@ -174,7 +174,7 @@ class UnmappedDetectorController:
         """remove Detector from Dictionary"""
         if id not in self.detectors:
             self.log("Detector with id %s is unknown" % id,True)
-            return False
+            return True
         det = self.detectors[id]
         self.publishQueue.put((id,codes.removed))
         del self.detectors[id]
@@ -188,21 +188,14 @@ class UnmappedDetectorController:
         self.context.term()
 
     def isDetectorConnected(self,detectorId):
-        return self.detectors[detectorId].connected
+        if self.detectors[detectorId]:
+            return self.detectors[detectorId].connected
+        else:
+            return False
 
     def abortDetector(self,detId):
         det = self.detectors[detId]
-        if det.stateMachine.currentState == DetectorStates.Unconfigured:
+        if det.getMappedState() == MappedStates.Unconfigured:
             return True
         else:
             return det.abort()
-
-    def isShutdown(self,detectorId):
-        return self.detectors[detectorId].isShutdown()
-
-    def shutdownDetector(self,detId):
-        det = self.detectors[detId]
-        if not det.powerOff():
-            return False
-        else:
-            return True

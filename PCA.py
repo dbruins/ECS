@@ -11,7 +11,7 @@ import struct # for packing integers
 import logging
 from ECSCodes import ECSCodes
 codes = ECSCodes()
-from states import PCAStates, PCATransitions, MappedStates, CommonStates, DCSStates,DCSTransitions, DetectorStates, DetectorTransitions, FLESStates, FLESTransitions, QAStates, QATransitions, TFCStates, TFCTransitions, GlobalSystemStates, GlobalSystemTransitions
+from states import PCAStates, PCATransitions, MappedStates, CommonStates, DCSStates, FLESStates, QAStates, TFCStates
 pcaStates = PCAStates()
 pcaTransitions = PCATransitions()
 import configparser
@@ -158,7 +158,7 @@ class PCA:
         else:
             logging.getLogger().handlers[1].setLevel(logging.CRITICAL)
 
-        self.readyDetectorCount = 0
+        self.readyDetectorCount = {}
         #get your Detectorlist
         detList = None
         while detList == None:
@@ -425,7 +425,7 @@ class PCA:
                 return False
             #get the config Section for the Detector type
             confSection = types.getConfsectionForType(detector.type)
-            det = typeClass(detector.id,detector.address,detector.portTransition,detector.portCommand,confSection,self.log,self.handleDetectorTimeout,self.handleDetectorReconnect)
+            det = typeClass(detector.id,detector.address,detector.portCommand,confSection,self.log,self.handleDetectorTimeout,self.handleDetectorReconnect)
             self.detectors[det.id] = det
             #global state doesn't exist during start up
             if self.stateMachine:
@@ -448,6 +448,7 @@ class PCA:
             det = self.detectors[id]
             self.publishQueue.put((id,codes.removed))
             del self.detectors[id]
+            del self.readyDetectorCount[id]
             #this might take a few seconds dending on ping interval
             start_new_thread(det.terminate,())
         except Exception as e:
@@ -540,18 +541,19 @@ class PCA:
                 if ready:
                     self.transition(PCATransitions.success)
                     if self.autoConfigure:
-                        self.configure()
+                        if self.stateMachine.currentState in self.configureFunctionForState and self.configureFunctionForState[self.stateMachine.currentState]():
+                            self.transition(PCATransitions.configure)
             #check if all Detectors are configured
             elif self.stateMachine.currentState == PCAStates.Configuring_Detectors:
-                self.readyDetectorCount = 0
                 for id in self.detectors.keyIterator():
                     d = self.detectors[id]
-                    if d.getMappedState() == MappedStates.Active:
-                        self.readyDetectorCount += 1
-                if self.readyDetectorCount == len(self.detectors):
+                    #if d.getMappedState() == MappedStates.Active:
+                    self.readyDetectorCount[d.id] = (d.getMappedState() == MappedStates.Active)
+                if all(v == True for k,v in self.readyDetectorCount.items()):
                     self.transition(PCATransitions.success)
                     if self.autoConfigure:
-                        self.configure()
+                        if self.configureFunctionForState[self.stateMachine.currentState]():
+                            self.transition(PCATransitions.configure)
             #after stop transition check if all Detectors are still ready(detector error won't stop the Recording)
             elif self.stateMachine.currentState == PCAStates.QA_Active:
                 for id in self.detectors.keyIterator():
@@ -566,30 +568,39 @@ class PCA:
                 if self.TFC.getMappedState() == MappedStates.Active:
                     self.transition(PCATransitions.success)
                     if self.autoConfigure:
-                        self.configure()
+                        if self.configureFunctionForState[self.stateMachine.currentState]():
+                            self.transition(PCATransitions.configure)
+                        #self.configure()
                 #configuring failed
                 elif self.TFC.getMappedState() == MappedStates.Unconfigured:
                     self.transition(PCATransitions.failure)
             #TFC is not active
-            elif self.TFC.getMappedState() == MappedStates.Unconfigured or self.TFC.getMappedState() == CommonStates.ConnectionProblem:
+            elif self.TFC.getMappedState() in {MappedStates.Unconfigured,CommonStates.ConnectionProblem,MappedStates.Error}:
                 self.error_transition(PCATransitions.error_TFC)
+            #TFC started configuring
+            elif self.TFC.getMappedState() == MappedStates.Configuring:
+                self.transition(PCATransitions.configure)
         #Detector State changed
         elif id in self.detectors:
             det = self.detectors[id]
+            self.readyDetectorCount[id] = (det.getMappedState() == MappedStates.Active)
             #if configuring
-            if self.stateMachine.currentState == PCAStates.Configuring_Detectors and det.getMappedState() == MappedStates.Active :
-                self.readyDetectorCount += 1
-                if self.readyDetectorCount == len(self.detectors):
+            if self.stateMachine.currentState == PCAStates.Configuring_Detectors and self.readyDetectorCount[id]:
+                if all(v == True for k,v in self.readyDetectorCount.items()):
                     self.transition(PCATransitions.success)
                     self.log("detector configure time"+str(time.time()-self.detector_configure_time_start))
                     if self.autoConfigure:
-                        self.configure()
+                        if self.configureFunctionForState[self.stateMachine.currentState]():
+                            self.transition(PCATransitions.configure)
             #detector is not active
-            elif det.getMappedState() == MappedStates.Unconfigured or det.getMappedState() == CommonStates.ConnectionProblem or det.getMappedState() == DetectorStates.Error:
+            elif det.getMappedState() in {MappedStates.Unconfigured,CommonStates.ConnectionProblem,MappedStates.Error}:
                 if self.stateMachine.currentState == PCAStates.Configuring_Detectors:
                     self.transition(PCATransitions.failure)
                 else:
                     self.error_transition(PCATransitions.error_Detector)
+            #a detector started configuring
+            elif det.getMappedState() == MappedStates.Configuring:
+                self.transition(PCATransitions.configure)
         #FLES or DCS changed it's state
         elif id in {"FLES","DCS"}:
             if self.stateMachine.currentState == PCAStates.Configuring_FLES_and_DCS:
@@ -597,17 +608,20 @@ class PCA:
                 if self.FLES.getMappedState() == MappedStates.Active and self.DCS.getMappedState() == MappedStates.Active:
                     self.transition(PCATransitions.success)
                     if self.autoConfigure:
-                        self.configure()
+                        if self.configureFunctionForState[self.stateMachine.currentState]():
+                            self.transition(PCATransitions.configure)
                 #one of them failed
                 elif (id == "FLES" and self.FLES.getMappedState() == MappedStates.Unconfigured) or (id == "DCS" and self.DCS.getMappedState() == MappedStates.Unconfigured):
                         self.transition(PCATransitions.failure)
             #FLES OR DCS is not ready anymore
-            elif self.FLES.getMappedState() == MappedStates.Unconfigured or self.FLES.getMappedState() == CommonStates.ConnectionProblem or self.DCS.getMappedState() == MappedStates.Unconfigured or self.DCS.getMappedState() == CommonStates.ConnectionProblem:
+            elif self.FLES.getMappedState() in {MappedStates.Unconfigured,CommonStates.ConnectionProblem,MappedStates.Error} or self.DCS.getMappedState() in {MappedStates.Unconfigured,CommonStates.ConnectionProblem,MappedStates.Error}:
                 self.error_transition(PCATransitions.error_FLES_OR_DCS)
-            if id == "FLES":
-                #FLES should only be recording if PCA is in recording State
-                if self.FLES.stateMachine.currentState == FLESStates.Recording and self.stateMachine.currentState != PCAStates.Recording:
-                    self.FLES.stopRecording()
+                if id == "FLES":
+                    #FLES should only be recording if PCA is in recording State
+                    if self.FLES.stateMachine.currentState == FLESStates.Recording and self.stateMachine.currentState != PCAStates.Recording:
+                        self.FLES.stopRecording()
+            elif self.FLES.getMappedState() == MappedStates.Configuring or self.DCS.getMappedState() == MappedStates.Configuring:
+                self.transition(PCATransitions.configure)
         #QA Status changed
         elif id == "QA":
             if self.stateMachine.currentState == PCAStates.Configuring_QA:
@@ -620,11 +634,13 @@ class PCA:
                 elif self.QA.getMappedState() == MappedStates.Unconfigured:
                     self.transition(PCATransitions.failure)
             #QA is not active anymore
-            elif self.QA.getMappedState() == MappedStates.Unconfigured or self.QA.getMappedState() == CommonStates.ConnectionProblem:
+            elif self.QA.getMappedState() in {MappedStates.Unconfigured,CommonStates.ConnectionProblem,MappedStates.Error}:
                 self.error_transition(PCATransitions.error_QA)
-            #QA shoudn't record if PCA is not in recording State
+                #QA shoudn't record if PCA is not in recording State
             elif self.QA.stateMachine.currentState == QAStates.Recording and self.stateMachine.currentState != PCAStates.Recording:
                 self.QA.stopRecording()
+            elif self.QA.getMappedState() == MappedStates.Configuring:
+                self.transition(PCATransitions.configure)
 
     def transition(self,command):
         """try to transition the own Statemachine"""
@@ -637,11 +653,13 @@ class PCA:
     def lockPartition(self):
         """lock Partition (locked partitions refuse all incoming commands)"""
         self.partitionLocked = True
+        self.log("Partition locked by ECS")
         return codes.ok
 
     def unlockPartition(self):
         """unlock Parition"""
         self.partitionLocked = False
+        self.log("Partition unlocked by ECS")
         return codes.ok
 
     def configure(self,arg=None):
@@ -656,30 +674,22 @@ class PCA:
             else:
                 self.autoConfigure = False
             systemConfig = DataObjectCollection(json.loads(arg["systemConfig"]),configObject)
-
             for conf in systemConfig:
                 if conf.systemId in self.detectors:
                     sys=self.detectors[conf.systemId]
                     oldconfig = sys.getSystemConfig()
                     if oldconfig and oldconfig.configId != conf.configId and sys.getState():
-                        sys.abort()
                         self.transition(PCATransitions.error_Detector)
+
                 elif conf.systemId in self.globalSystems:
                     sys=self.globalSystems[conf.systemId]
                     oldconfig = sys.getSystemConfig()
                     if oldconfig and oldconfig.configId != conf.configId and sys.getState():
-                        sys.abort()
                         self.transition(pcaTransitions.errorTransitionForSystem(conf.systemId))
                 else:
-                    self.log("System %s is in received Config but is not this partition",True)
+                    self.log("System %s is in received Config but is not in this partition",True)
                 if sys:
                     sys.setSystemConfig(conf)
-
-            #system needs to be reset if it get's a new config tag
-            #todo actually just the systems with different configId needs to be reset
-            #if self.globalTag and self.globalTag != arg["globalTag"]:
-            #    self.abort()
-
             self.globalTag = arg["globalTag"]
         if self.stateMachine.currentState == PCAStates.Recording:
             for id in self.detectors.keyIterator():
@@ -687,11 +697,12 @@ class PCA:
                 if d.getMappedState() != MappedStates.Active:
                     d.getReady(globalTag)
             return ECSCodes.ok
+        elif self.stateMachine.currentState == PCAStates.QA_Active:
+            return ECSCodes.ok
         elif not self.stateMachine.checkIfPossible(PCATransitions.configure):
             return codes.error
         function = self.configureFunctionForState[self.stateMachine.currentState]
         if function():
-            self.transition(PCATransitions.configure)
             return codes.ok
         return codes.error
 

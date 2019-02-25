@@ -5,15 +5,24 @@ import websockets
 import threading
 import re
 import json
+import ssl
 from django.contrib.sessions.models import Session
 from django.contrib.auth.models import User
+from django.conf import settings
+
 class WebSocket:
     def __init__(self,address,port):
         self.openConnections = {}
         self.webSocketLocks = {}
 
+        if settings.ENCRYPT_WEBSOCKET:
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ssl_context.load_cert_chain(settings.SSL_CERT_FILE,settings.SSL_PEM_FILE)
+        else:
+            ssl_context = None
+            
         asyncio.set_event_loop(asyncio.new_event_loop())
-        start_server = websockets.serve(self.accept, address,port)
+        start_server = websockets.serve(self.accept,address,port, ssl=ssl_context)
 
         asyncio.get_event_loop().run_until_complete(start_server)
         f= asyncio.get_event_loop().run_forever

@@ -12,8 +12,8 @@ class pcaModel(models.Model):
         return self.id
     class Meta:
         permissions = (
-                        ("can_take_control", "can take control"),
-                        ("has_control", "has taken control"),
+                        ("can_take_pca_control", "can take pca control"),
+                        ("has_pca_control", "has taken control"),
                       )
 
 class ecsModel(models.Model):
@@ -24,8 +24,8 @@ class ecsModel(models.Model):
         return self.id
     class Meta:
         permissions = (
-                        ("can_take_control", "can take control"),
-                        ("has_control", "has taken control"),
+                        ("can_take_ecs_control", "can take ecs control"),
+                        ("has_ecs_control", "has taken control"),
                       )
 
 User = settings.AUTH_USER_MODEL

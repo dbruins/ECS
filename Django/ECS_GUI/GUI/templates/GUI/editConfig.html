@@ -1,0 +1,273 @@
+{% extends "GUI/base.html" %}
+
+{% block title %}
+ECS Edit Configuration
+{% endblock %}
+
+{% block script %}
+<script>
+$(document).ready(function() {
+  $("#selExistSystem").change(function(event){
+    var selectedOption = event.target.selectedOptions[0];
+    if (selectedOption.disabled)
+      return;
+    sysId=selectedOption.textContent;
+    $.ajax({
+        type: "POST",
+        url: "{% url 'GUI:getConfigsForSystem'%}",
+        data:{
+          csrfmiddlewaretoken: '{{ csrf_token }}',
+          id: sysId,
+        },
+        error: function(jqXHR, textStatus, errorThrown) {
+            console.log(jqXHR.status);
+        },
+        "success": function(result) {
+            var alertBox = $('#alertBox');
+            //only hide if no success
+            if (!(alertBox[0].classList.contains("alert-success")))
+              alertBox.css('visibility', 'hidden');
+            options = ""
+            for (configId in result){
+               options += "<option params='"+JSON.stringify(result[configId][1])+"''>"+configId+"</option>"
+            }
+            $("#selExistConfig").html(options);
+            $("#selExistConfig").change();
+        },
+    });
+  });
+  $("#selExistSystem").change();
+
+  function getParameterField(rowCounter,name,value){
+    field="";
+    field+="<div class='row'  id='divParam"+rowCounter+"'>";
+    field+="<div class='col-2 offset-4'><input class='form-control' id='paramName"+rowCounter+"' type='text' required value='"+name+"'/></div>";
+    field+="<div class='col-2'><input class='form-control' id='paramValue"+rowCounter+"' type='text' required value='"+value+"'/></div><div><button type='button' style='margin-top: 0.2em;' class='close' aria-label='delete' onclick='deleteField(this)' ><span aria-hidden='true'>&times;</span></button></div>";
+    field+="</div>"
+    return field;
+  }
+
+  rowCounter=1;
+
+  $("#editButton").click(function(event){
+    $("#selSystem").val($("#selExistSystem").val())
+    $('#alertBox').css('visibility', 'hidden');
+    var selectedOption = $("#selExistConfig").find(":selected");
+    if (selectedOption[0].disabled){
+      $('#alertBox').attr('class', 'alert alert-danger');
+      $('#alertBox').css('visibility', 'visible');
+      $('#alertBox').html("Please select a Configuration");
+      return;
+    }
+    //remove old params
+    $("div[id^='divParam']").remove()
+    var parameters=JSON.parse(selectedOption.attr("params"));
+    first = Object.keys(parameters)[0];
+    $("#firstParamName").val(first);
+    $("#firstValue").val(parameters[first]);
+    delete parameters[first];
+    fields="";
+    rowCounter=1;
+    for (param in parameters){
+      fields+=getParameterField(rowCounter,param,parameters[param]);
+      rowCounter+=1;
+    }
+    $('#addButton').closest("div .row").before(fields);
+    $('#configId').val($("#selExistConfig").val())
+  });
+
+  $("#deleteButton").click(function(event){
+    $('#alertBox').css('visibility', 'hidden');
+    var configId = $("#selExistConfig").find(":selected");
+    if (configId[0].disabled){
+      $('#alertBox').attr('class', 'alert alert-danger');
+      $('#alertBox').css('visibility', 'visible');
+      $('#alertBox').html("Please select a Configuration");
+      return;
+    }
+    configId = configId.val();
+    $.ajax({
+        type: "POST",
+        url: "{% url 'GUI:editConfiguration'%}",
+        data:{
+          csrfmiddlewaretoken: '{{ csrf_token }}',
+          configId: configId,
+          delete: true,
+        },
+        error: function(jqXHR, textStatus, errorThrown) {
+            console.log(jqXHR.status);
+            $('#alertBox').attr('class', 'alert alert-danger');
+            $('#alertBox').css('visibility', 'visible');
+            $('#alertBox').html("<strong>Error</strong> while deleting Configuration");
+        },
+        "success": function(result) {
+           //reload configSelect
+           $("#selExistSystem").change();
+
+           $('#alertBox').attr('class', 'alert alert-success');
+           $('#alertBox').css('visibility', 'visible');
+           $('#alertBox').html("Configuration <strong>successfully</strong> deleted");
+           form.classList.remove('was-validated');
+        },
+    });
+
+  });
+
+  $("#addButton").click(function(event){
+    rowCounter+=1;
+    field = getParameterField(rowCounter,"","");
+    $('#addButton').closest("div .row").before(field);
+    //JavaScript madness without this validation css does not work
+    var inputs = $('#addButton').closest("div .row").prev().find("input");
+    inputs[0].value="";
+    inputs[1].value="";
+  });
+
+  $("#saveButton").click(function(event){
+    $('#alertBox').css('visibility', 'hidden');
+    form = $("#form")[0];
+    form.classList.remove('was-validated');
+    valid=form.checkValidity();
+    if(valid){
+      var configId = $("#configId").val()
+      var systemId = $("#selSystem").val()
+      var parameters = {}
+      parameters[$("#firstParamName").val()] = $("#firstValue").val()
+      var inputDivs=$("div[id^='divParam']");
+      if (inputDivs.length > 0){
+       inputDivs.each(function( key ) {
+         div=$(inputDivs[key]);
+         var inputs = $(div).find("input");
+         parameters[inputs[0].value]=inputs[1].value;
+       });
+       $.ajax({
+           type: "POST",
+           url: "{% url 'GUI:editConfiguration'%}",
+           data:{
+             csrfmiddlewaretoken: '{{ csrf_token }}',
+             configId: configId,
+             systemId: systemId,
+             paramList: JSON.stringify(parameters),
+           },
+           error: function(jqXHR, textStatus, errorThrown) {
+               console.log(jqXHR.status);
+               $('#alertBox').attr('class', 'alert alert-danger');
+               $('#alertBox').css('visibility', 'visible');
+               $('#alertBox').html("<strong>Error</strong> while saving Configuration");
+           },
+           "success": function(result) {
+              //reload configSelect
+              $("#selExistSystem").change();
+
+              $('#alertBox').attr('class', 'alert alert-success');
+              $('#alertBox').css('visibility', 'visible');
+              $('#alertBox').html("Configuration <strong>successfully</strong> saved");
+              form.classList.remove('was-validated');
+           },
+       });
+     }
+    }
+  });
+});
+
+function deleteField(event){
+   $(event).closest("div .row").remove();
+}
+
+</script>
+{% endblock %}
+
+{% block configActivity%}active{% endblock %}
+
+{% block sideAndTopBar %}
+  {{block.super}}
+{% endblock %}
+
+{% block breadcrumb %}
+    <li class="breadcrumb-item">
+      <a href="{% url 'GUI:index' %}">Overview</a>
+    </li>
+    <li class="breadcrumb-item">Edit Configuration</li>
+{% endblock %}
+
+{% block content %}
+  <div id="alertBox" class="alert alert-success" role="alert" style="visibility: hidden">
+    save successful
+  </div>
+  <div class="row">
+    <div class="col"><h2>Select existing Configuration</h2></div>
+  </div>
+  <div class="row">
+    <div class="col-2">System</div>
+    <div class="col-2">Configuration</div>
+  </div>
+  <form id="form">
+  <div class="row">
+    <div class="col-2">
+      <select class="form-control selectpicker" id="selExistSystem">
+        <option selected hidden disabled>Select a System</option>
+        <optgroup label="Detectors">
+        {%for sys in view.detectors %}
+           <option>{{sys}}</option>
+        {%endfor%}
+        </optgroup>
+        <optgroup label="Global Systems">
+          {%for sys in view.globalSystems %}
+             <option>{{sys}}</option>
+          {%endfor%}
+        </optgroup>
+      </select>
+    </div>
+    <div class="col-2">
+      <select class="form-control selectpicker" id="selExistConfig">
+        <option selected hidden disabled>Select a System first</option>
+      </select>
+    </div>
+    <div class="col-1">
+      <button type="button" id="editButton" class="btn btn-primary"/>edit</button>
+    </div>
+    <div class="col-1">
+      <button type="button" id="deleteButton" class="btn btn-primary"/>delete</button>
+    </div>
+  </div>
+  <hr>
+  <div class="row">
+    <div class="col"><h2>Edit/Create Configuration</h2></div>
+  </div>
+  <div class="row">
+    <div class="col-2">Name</div>
+    <div class="col-2">System</div>
+    <div class="col-2">Paramter</div>
+    <div class="col-2">Value</div>
+  </div>
+  <div class="row">
+    <div class="col-2"><input id="configId" class="form-control" type="text" required/></div>
+    <div class="col-2">
+      <select class="form-control selectpicker" id="selSystem">
+        <option selected hidden disabled>Select a System</option>
+        <optgroup label="Detectors">
+        {%for sys in view.detectors %}
+           <option>{{sys}}</option>
+        {%endfor%}
+        </optgroup>
+        <optgroup label="Global Systems">
+          {%for sys in view.globalSystems %}
+             <option>{{sys}}</option>
+          {%endfor%}
+        </optgroup>
+      </select>
+    </div>
+    <div class="col-2"><input id="firstParamName" class="form-control" type="text" required/></div>
+    <div class="col-2"><input id="firstValue" class="form-control" type="text" required/></div>
+  </div>
+  <div class="row">
+    <div class="col-1">
+      <button type="button" id="saveButton" class="btn btn-primary"/>save</button>
+    </div>
+    <div class="col offset-3">
+      <button type="button" id="addButton" class="btn btn-primary"/>add parameter</button>
+    </div>
+  </div>
+  </form>
+
+{% endblock content%}

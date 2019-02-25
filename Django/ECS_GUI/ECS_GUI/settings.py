@@ -66,6 +66,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'GUI.context_processors.template_settings',
             ],
         },
     },
@@ -159,7 +160,12 @@ GLOBALSYSTEM_CODE_FILE = "GlobalSystemClient.py"
 CHECK_IF_RUNNING_SCRIPT = "checkIfRunning.py"
 LOG_PATH_ECS = "./logECS"
 PYTHON_VIRTENV_ACTIVATE_FILE = "virtenv"
+ECS_DATABASE = PATH_TO_PROJECT+"/Django/ECS_GUI/ECS_database.db"
+START_CLIENTS = True
 
+ENCRYPT_WEBSOCKET=True
+SSL_CERT_FILE="/etc/apache2/ssl/crt/apache.crt"
+SSL_PEM_FILE="/etc/apache2/ssl/key/apache.key"
 WEB_SOCKET_PORT = 5678
 
 # Redirect to home URL after login (Default redirects to /accounts/profile/)
@@ -170,7 +176,7 @@ AUTHENTICATION_BACKENDS = (
     'guardian.backends.ObjectPermissionBackend',
 )
 #in seconds
-PERMISSION_TIMEOUT = 5*60
+PERMISSION_TIMEOUT = 20*60
 
 #number of send Log entrys on connect
 BUFFERED_LOG_ENTRIES =  50

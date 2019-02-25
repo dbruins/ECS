@@ -1,8 +1,7 @@
 #!/usr/bin/python3
 from DataObjects import DataObjectCollection, globalSystemDataObject, mappingDataObject, partitionDataObject, configObject
-from states import GlobalSystemStates,GlobalSystemTransitions,DCSStates,DCSTransitions, FLESStates, FLESTransitions, QAStates, QATransitions, TFCStates, TFCTransitions
+from states import GlobalSystemStates, GlobalSystemTransitions, DCSStates, DCSTransitions, FLESStates, FLESTransitions, QAStates, QATransitions, TFCStates, TFCTransitions
 import subprocess
-import zc.lockfile
 import time
 from ECSCodes import ECSCodes
 codes = ECSCodes()
@@ -11,38 +10,24 @@ from Statemachine import Statemachine
 import json
 import zmq
 import threading
-import _thread
 import sys
 import re
 import time
 import os
-import errno
+from BaseController import BaseController
 
-class GlobalSystemControler:
+class GlobalSystemControler(BaseController):
     def __init__(self,type):
-        #create lock
-        try:
-            self.lock = zc.lockfile.LockFile('/tmp/lock'+type, content_template='{pid}')
-        except zc.lockfile.LockError:
-            print("other Process is already Running "+type)
-            exit(1)
-
-        #get pca data from ECS
         config = configparser.ConfigParser()
         config.read("init.cfg")
         self.conf = config["Default"]
         self.receive_timeout = int(self.conf['receive_timeout'])
 
-        self.context = zmq.Context()
-        self.context.setsockopt(zmq.LINGER,0)
-        self.scriptProcess = None
-        self.abort = False
-
         mapping = None
         #ask ECS For required Data
         while mapping == None:
             try:
-                requestSocket = self.context.socket(zmq.REQ)
+                requestSocket = zmq.Context().socket(zmq.REQ)
                 requestSocket.connect("tcp://%s:%s" % (self.conf['ECSAddress'],self.conf['ECSRequestPort']))
                 requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
 
@@ -64,6 +49,8 @@ class GlobalSystemControler:
                 pass
             finally:
                 requestSocket.close()
+
+        super().__init__(globalSystemInfo.id,globalSystemInfo.portCommand)
 
         #holds information which detector belongs to which Partition
         self.detectorMapping = {}
@@ -90,32 +77,14 @@ class GlobalSystemControler:
             self.pcaSequenceNumber[p.id] = 0
             self.pcaStatemachineLock[p.id] = threading.Lock()
 
-        self.commandSocket = self.context.socket(zmq.REP)
-        self.commandSocket.bind("tcp://*:%i" % globalSystemInfo.portCommand)
-
-        #send update to All PCAs
+        #send first update to All PCAs
         self.sendUpdateToAll()
 
-        t = threading.Thread(name="waitForCommands", target=self.waitForCommands)
-        t.start()
+        self.commandThread = threading.Thread(name="waitForCommands", target=self.waitForCommands)
+        self.commandThread.start()
 
-        t = threading.Thread(name="waitForPipeMessages", target=self.waitForPipeMessages)
-        t.start()
-
-    def waitForPipeMessages(self):
-        try:
-            os.mkfifo("pipe"+self.MyId)
-        except OSError as oe:
-            if oe.errno != errno.EEXIST:
-                raise
-        while True:
-            with open("pipe"+self.MyId) as fifo:
-                while True:
-                    message = fifo.read().replace('\n', '')
-                    if len(message) == 0:
-                        #pipe closed
-                        break
-                    self.handleSystemMessage(message)
+        self.pipeThread = threading.Thread(name="waitForPipeMessages", target=self.waitForPipeMessages)
+        self.pipeThread.start()
 
     def sendUpdate(self,pcaId,sequenceNumber,comment=None):
         """send current status update to a Parition with id pcaId"""
@@ -153,6 +122,7 @@ class GlobalSystemControler:
 
     def addPartition(self,partitionData):
         self.PCAs[partitionData.id] = partitionData
+        self.pcaStatemachineLock[partitionData.id] = threading.Lock()
         self.StateMachineForPca[partitionData.id] = Statemachine(self.StateMachineFile,"Unconfigured")
         self.isPCAinTransition[partitionData.id] = False
 
@@ -165,7 +135,7 @@ class GlobalSystemControler:
         if pcaId in self.pcaConfig:
             del self.pcaConfig[pcaId]
 
-    def handleCommonCommands(self,message):
+    def handleCommand(self,message):
         """handles command common for all Global Systems; returns False if command is unknown"""
         command = message[0]
         pcaId = None
@@ -205,7 +175,6 @@ class GlobalSystemControler:
             conf = None
             if len(message) > 2:
                 conf = configObject(json.loads(message[2].decode()))
-            print(conf)
             if self.StateMachineForPca[pcaId].currentState not in {GlobalSystemStates.Active,GlobalSystemStates.Unconfigured}:
                 self.commandSocket.send(codes.busy)
             elif not self.StateMachineForPca[pcaId].checkIfPossible(GlobalSystemTransitions.configure) or not conf:
@@ -263,17 +232,6 @@ class GlobalSystemControler:
             if self.pcaStatemachineLock[pcaId].locked():
                 self.pcaStatemachineLock[pcaId].release()
 
-    def executeScript(self,scriptname):
-        self.scriptProcess = subprocess.Popen(["exec ./"+scriptname], shell=True)
-        ret = self.scriptProcess.wait()
-        if self.abort:
-            return
-        if ret:
-            return False
-        else:
-            return True
-
-
     def error(self,pcaId=None):
         if pcaId:
             self.transition(pcaId,GlobalSystemTransitions.error)
@@ -309,6 +267,7 @@ class GlobalSystemControler:
     def terminate(self):
         self.context.term()
         self.abort = True
+        self.endPipeThread()
         if self.scriptProcess:
             self.scriptProcess.terminate()
 
@@ -316,18 +275,6 @@ class DCSControler(GlobalSystemControler):
 
     def __init__(self):
         super().__init__("DCS")
-
-    def waitForCommands(self):
-        """wait for command on the command socket"""
-        while True:
-            try:
-                message = self.commandSocket.recv_multipart()
-                if self.handleCommonCommands(message):
-                    continue
-                self.commandSocket.send(codes.unknownCommand)
-            except zmq.error.ContextTerminated:
-                self.commandSocket.close()
-                break
 
     def configure(self,pcaId,tag):
         ret = self.executeScript("detectorScript.sh")
@@ -389,18 +336,6 @@ class TFCControler(GlobalSystemControler):
     def __init__(self):
         super().__init__("TFC")
 
-
-    def waitForCommands(self):
-        while True:
-            try:
-                message = self.commandSocket.recv_multipart()
-                if self.handleCommonCommands(message):
-                    continue
-                self.commandSocket.send(codes.unknownCommand)
-            except zmq.error.ContextTerminated:
-                self.commandSocket.close()
-                break
-
     def configure(self,pcaId,tag):
         ret = self.executeScript("detectorScript.sh")
         if ret:
@@ -427,39 +362,31 @@ class QAControler(GlobalSystemControler):
     def __init__(self):
         super().__init__("QA")
 
-
-    def waitForCommands(self):
-        """wait for command on the command socket"""
-        while True:
-            try:
-                message = self.commandSocket.recv_multipart()
-                if self.handleCommonCommands(message):
-                    continue
-                pcaId = None
-                conf = None
-                if len(message) > 1:
-                    pcaId = message[1].decode()
-                if len(message) > 2:
-                    conf = configObject(json.loads(message[2].decode()))
-                command = message[0].decode()
-                if command == QATransitions.start:
-                    if pcaId and pcaId in self.PCAs:
-                        self.commandSocket.send(codes.ok)
-                        self.transition(pcaId,QATransitions.start,self.pcaConfig[pcaId])
-                    else:
-                        self.commandSocket.send(codes.error)
-                    continue
-                if command == QATransitions.stop:
-                    if pcaId and pcaId in self.PCAs:
-                        self.commandSocket.send(codes.ok)
-                        self.transition(pcaId,QATransitions.stop,self.pcaConfig[pcaId])
-                    else:
-                        self.commandSocket.send(codes.error)
-                    continue
-                self.commandSocket.send(codes.unknownCommand)
-            except zmq.error.ContextTerminated:
-                self.commandSocket.close()
-                break
+    def handleCommand(self,message):
+        if super().handleCommand(message):
+            return True
+        pcaId = None
+        conf = None
+        if len(message) > 1:
+            pcaId = message[1].decode()
+        if len(message) > 2:
+            conf = configObject(json.loads(message[2].decode()))
+        command = message[0].decode()
+        if command == QATransitions.start:
+            if pcaId and pcaId in self.PCAs:
+                self.commandSocket.send(codes.ok)
+                self.transition(pcaId,QATransitions.start,self.pcaConfig[pcaId])
+            else:
+                self.commandSocket.send(codes.error)
+        elif command == QATransitions.stop:
+            if pcaId and pcaId in self.PCAs:
+                self.commandSocket.send(codes.ok)
+                self.transition(pcaId,QATransitions.stop,self.pcaConfig[pcaId])
+            else:
+                self.commandSocket.send(codes.error)
+        else:
+            return False
+        return True
 
     def configure(self,pcaId,tag):
         ret = self.executeScript("detectorScript.sh")
@@ -522,39 +449,32 @@ class FLESControler(GlobalSystemControler):
         self.jobIds = {}
         super().__init__("FLES")
 
+    def handleCommand(self,message):
+        if super().handleCommand(message):
+            return True
+        pcaId = None
+        conf = None
+        if len(message) > 1:
+            pcaId = message[1].decode()
+        if len(message) > 2:
+            conf = configObject(json.loads(message[2].decode()))
+        command = message[0].decode()
+        if command == FLESTransitions.start:
+            if pcaId and pcaId in self.PCAs:
+                self.commandSocket.send(codes.ok)
+                self.transition(pcaId,FLESTransitions.start,self.pcaConfig[pcaId])
+            else:
+                self.commandSocket.send(codes.error)
+        elif command == FLESTransitions.stop:
+            if pcaId and pcaId in self.PCAs:
+                self.commandSocket.send(codes.ok)
+                self.transition(pcaId,FLESTransitions.stop,self.pcaConfig[pcaId])
+            else:
+                self.commandSocket.send(codes.error)
+        else:
+            return False
+        return True
 
-    def waitForCommands(self):
-        """wait for command on the command socket"""
-        while True:
-            try:
-                message = self.commandSocket.recv_multipart()
-                if self.handleCommonCommands(message):
-                    continue
-                pcaId = None
-                conf = None
-                if len(message) > 1:
-                    pcaId = message[1].decode()
-                if len(message) > 2:
-                    conf = configObject(json.loads(message[2].decode()))
-                command = message[0].decode()
-                if command == FLESTransitions.start:
-                    if pcaId and pcaId in self.PCAs:
-                        self.commandSocket.send(codes.ok)
-                        self.transition(pcaId,FLESTransitions.start,self.pcaConfig[pcaId])
-                    else:
-                        self.commandSocket.send(codes.error)
-                    continue
-                if command == FLESTransitions.stop:
-                    if pcaId and pcaId in self.PCAs:
-                        self.commandSocket.send(codes.ok)
-                        self.transition(pcaId,FLESTransitions.stop,self.pcaConfig[pcaId])
-                    else:
-                        self.commandSocket.send(codes.error)
-                    continue
-                self.commandSocket.send(codes.unknownCommand)
-            except zmq.error.ContextTerminated:
-                self.commandSocket.close()
-                break
     def configure(self,pcaId,tag):
         ret = self.executeScript("detectorScript.sh")
         if ret:
@@ -611,6 +531,7 @@ class FLESControler(GlobalSystemControler):
         else:
             self.transition(pcaId,FLESTransitions.error,comment="transition failed")
             self.isPCAinTransition[pcaId] = False
+
     def abortFunction(self,pcaId):
         #terminate Transition if active
         if pcaId in self.jobIds:
@@ -627,31 +548,27 @@ if __name__ == "__main__":
         print("please enter a SystemType (TFC,DCS,QA,FLES,all)")
         sys.exit(1)
     elif "all" in sys.argv:
-        TFCControler()
-        DCSControler()
-        QAControler()
-        FLESControler()
-        x = input()
+        tfc = TFCControler()
+        dcs = DCSControler()
+        qa =  QAControler()
+        fles = FLESControler()
+        try:
+            fles.commandThread.join()
+        except KeyboardInterrupt:
+            tfc.terminate()
+            dcs.terminate()
+            qa.terminate()
+            fles.terminate()
         sys.exit(0)
-    dcs = None
     if "TFC" in sys.argv:
         test = TFCControler()
     if "DCS" in sys.argv:
-        dcs = DCSControler()
+        test = DCSControler()
     if "QA" in sys.argv:
         test = QAControler()
     if "FLES" in sys.argv:
         test = FLESControler()
-    if dcs:
-        while True:
-            try:
-                x = input()
-                message = x.split()
-                dcs.waitForDCSMessages(message)
-            except KeyboardInterrupt:
-                dcs.terminate()
-                break
-            except EOFError:
-                time.sleep(500000)
-                continue
-    x = input()
+    try:
+        test.commandThread.join()
+    except KeyboardInterrupt:
+        test.terminate()

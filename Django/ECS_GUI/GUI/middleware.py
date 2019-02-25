@@ -17,7 +17,11 @@ class OneSessionPerUserMiddleware:
 
             #if session keys don't match destroy currently stored session
             if stored_session_key and stored_session_key != request.session.session_key:
-                Session.objects.get(session_key=stored_session_key).delete()
+                try:
+                    Session.objects.get(session_key=stored_session_key).delete()
+                except Session.DoesNotExist:
+                    pass
+
 
             request.user.logged_in_user.session_key = request.session.session_key
             request.user.logged_in_user.save()

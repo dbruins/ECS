@@ -190,11 +190,3 @@ def getStateSnapshot(stateMap,address,port,timeout=2000,pcaid=None):
         else:
             socketGetCurrentStateTable.close()
             return True
-
-#todo same as in Detector
-def getConfsectionForType(type):
-        confSection = {
-            "DetectorA" : "DETECTOR_A",
-            "DetectorB" : "DETECTOR_B",
-        }
-        return confSection[type]
