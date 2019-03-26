@@ -13,6 +13,34 @@ class PCAStates:
     #states in which PCA is configuring something
     configuringStates = {Configuring_TFC,Configuring_Detectors,Configuring_FLES_and_DCS,Configuring_QA}
 
+    globalSystemsForConfigureState = {
+        Configuring_TFC : ("TFC",),
+        Configuring_QA : ("QA",),
+        Configuring_FLES_and_DCS : ("FLES","DCS"),
+    }
+
+    #next to configuring system for non configuring state
+    nextToConfigureSystems = {
+        Idle:("TFC",),
+        TFC_Active:("Detectors",),
+        Detectors_Active:("FLES","DCS",),
+        FLES_and_DCS_Active:("QA",),
+    }
+
+    hierarchie = {
+        "TFC":1,
+        "Detectors":2,
+        "DCS":3,
+        "FLES":3,
+        "QA":4,
+    }
+    def isLowerInHierarchie(self,system,system2):
+        return self.hierarchie[system] < self.hierarchie[system2]
+
+    def systemsHigherInHierachie(self,system):
+        #filter out lower systems und turn into list
+        return list(map(lambda x:x[0],filter(lambda x:x[1]>self.hierarchie[system],self.hierarchie.items())))
+
     #states in which configuring button should be enabled
     configuringEnabled = {Idle,TFC_Active,Detectors_Active,FLES_and_DCS_Active,QA_Active}
     startEnabled = {QA_Active}
@@ -61,6 +89,7 @@ class MappedStates:
     Configuring = "Configuring"
     Unconfigured = "Unconfigured"
     Error = "Error"
+    Recording = "Recording"
 
 class CommonStates:
     ConnectionProblem = "Connection Problem"

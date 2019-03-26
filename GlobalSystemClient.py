@@ -17,7 +17,7 @@ import os
 from BaseController import BaseController
 
 class GlobalSystemControler(BaseController):
-    def __init__(self,type):
+    def __init__(self,type,startState="Unconfigured",configTag=None):
         config = configparser.ConfigParser()
         config.read("init.cfg")
         self.conf = config["Default"]
@@ -28,7 +28,7 @@ class GlobalSystemControler(BaseController):
         while mapping == None:
             try:
                 requestSocket = zmq.Context().socket(zmq.REQ)
-                requestSocket.connect("tcp://%s:%s" % (self.conf['ECSAddress'],self.conf['ECSRequestPort']))
+                requestSocket.connect("tcp://%s:%s" % (self.conf['ECAAddress'],self.conf['ECARequestPort']))
                 requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
 
                 requestSocket.send_multipart([codes.getAllPCAs])
@@ -60,7 +60,7 @@ class GlobalSystemControler(BaseController):
         self.MyId = globalSystemInfo.id
 
         configDet = configparser.ConfigParser()
-        configDet.read("detector.cfg")
+        configDet.read("subsystem.cfg")
         configDet = configDet[type]
         self.StateMachineFile = configDet["stateFile"]
         self.StateMachineForPca = {}
@@ -72,7 +72,9 @@ class GlobalSystemControler(BaseController):
         self.pcaStatemachineLock = {}
         for p in partitions:
             self.PCAs[p.id] = p
-            self.StateMachineForPca[p.id] = Statemachine(self.StateMachineFile,"Unconfigured")
+            self.StateMachineForPca[p.id] = Statemachine(self.StateMachineFile,startState)
+            if configTag:
+                self.pcaConfigTag[p.id] = configTag
             self.isPCAinTransition[p.id] = False
             self.pcaSequenceNumber[p.id] = 0
             self.pcaStatemachineLock[p.id] = threading.Lock()
@@ -98,6 +100,7 @@ class GlobalSystemControler(BaseController):
             data["tag"] = self.pcaConfigTag[pcaId]
         if comment:
             data["comment"] = comment
+        printErrorMessage = True
         #repeat until update is received
         while True:
             try:
@@ -109,7 +112,9 @@ class GlobalSystemControler(BaseController):
                 #success
                 return
             except zmq.Again:
-                print("timeout sending status %s" % pcaId)
+                if printErrorMessage:
+                    print("timeout sending status %s" % pcaId)
+                    printErrorMessage = False
                 if sequenceNumber < self.pcaSequenceNumber[pcaId]:
                     #if there is already a new update give up
                     return
@@ -175,14 +180,13 @@ class GlobalSystemControler(BaseController):
             conf = None
             if len(message) > 2:
                 conf = configObject(json.loads(message[2].decode()))
-            if self.StateMachineForPca[pcaId].currentState not in {GlobalSystemStates.Active,GlobalSystemStates.Unconfigured}:
+            if self.isPCAinTransition[pcaId]:
                 self.commandSocket.send(codes.busy)
             elif not self.StateMachineForPca[pcaId].checkIfPossible(GlobalSystemTransitions.configure) or not conf:
                 self.commandSocket.send(codes.error)
                 print("error")
             else:
                 self.commandSocket.send(codes.ok)
-                self.transition(pcaId,GlobalSystemTransitions.configure,conf)
                 self.isPCAinTransition[pcaId] = True
                 workThread = threading.Thread(name="worker", target=self.configure, args=(pcaId,conf))
                 workThread.start()
@@ -225,7 +229,6 @@ class GlobalSystemControler(BaseController):
                 self.pcaSequenceNumber[pcaId] = self.pcaSequenceNumber[pcaId]+1
                 sequenceNumber = self.pcaSequenceNumber[pcaId]
                 self.pcaStatemachineLock[pcaId].release()
-                #self.sendUpdate(pcaId,sequenceNumber,comment)
                 t = threading.Thread(name='update'+str(0), target=self.sendUpdate, args=(pcaId,sequenceNumber,comment))
                 t.start()
         finally:
@@ -242,13 +245,6 @@ class GlobalSystemControler(BaseController):
                     self.abort = True
                     self.scriptProcess.terminate()
 
-    def resolved(self,pcaId=None):
-        if pcaId:
-            self.transition(pcaId,GlobalSystemTransitions.resolved)
-        else:
-            for partition in self.PCAs:
-                self.transition(partition,GlobalSystemTransitions.resolved)
-
     def reset(self,pcaId=None):
         if pcaId:
             self.transition(pcaId,GlobalSystemTransitions.reset)
@@ -260,7 +256,7 @@ class GlobalSystemControler(BaseController):
         if message == "error":
             self.error()
         elif message == "resolved":
-            self.resolved()
+            self.reset()
         else:
             print('received unknown message via pipe: %s' % (message,))
 
@@ -273,22 +269,28 @@ class GlobalSystemControler(BaseController):
 
 class DCSControler(GlobalSystemControler):
 
-    def __init__(self):
-        super().__init__("DCS")
+    def __init__(self,startState="Unconfigured",configTag=None):
+        super().__init__("DCS",startState,configTag)
 
-    def configure(self,pcaId,tag):
-        ret = self.executeScript("detectorScript.sh")
-        if ret:
-            if self.abort:
-                self.abort = False
-                self.transition(pcaId,DCSTransitions.abort,comment="transition aborted")
-                self.isPCAinTransition[pcaId] = False
-                return
-            self.transition(pcaId,DCSTransitions.success,tag)
-            self.isPCAinTransition[pcaId] = False
+    def configure(self,pcaId,conf):
+        if pcaId in self.pcaConfigTag:
+            oldconfigTag = self.pcaConfigTag[pcaId]
         else:
-            self.transition(pcaId,DCSTransitions.error,comment="transition failed")
-            self.isPCAinTransition[pcaId] = False
+            oldconfigTag =  None
+        self.transition(pcaId,GlobalSystemTransitions.configure,conf)
+        if oldconfigTag == self.pcaConfigTag[pcaId]:
+            self.transition(pcaId,DCSTransitions.success,conf)
+        else:
+            ret = self.executeScript("detectorScript.sh")
+            if ret:
+                self.transition(pcaId,DCSTransitions.success,conf)
+            else:
+                if self.abort:
+                    self.abort = False
+                    self.transition(pcaId,DCSTransitions.abort,comment="transition aborted")
+                else:
+                    self.transition(pcaId,DCSTransitions.error,comment="transition failed")
+        self.isPCAinTransition[pcaId] = False
 
     def abortFunction(self,pcaId):
         #terminate Transition if active
@@ -333,22 +335,28 @@ class DCSControler(GlobalSystemControler):
             socketSendUpdateToPCA.close()
 class TFCControler(GlobalSystemControler):
 
-    def __init__(self):
-        super().__init__("TFC")
+    def __init__(self,startState="Unconfigured",configTag=None):
+        super().__init__("TFC",startState,configTag)
 
-    def configure(self,pcaId,tag):
-        ret = self.executeScript("detectorScript.sh")
-        if ret:
-            if self.abort:
-                self.abort = False
-                self.transition(pcaId,TFCTransitions.abort,comment="transition aborted")
-                self.isPCAinTransition[pcaId] = False
-                return
-            self.transition(pcaId,TFCTransitions.success,tag)
-            self.isPCAinTransition[pcaId] = False
+    def configure(self,pcaId,conf):
+        if pcaId in self.pcaConfigTag:
+            oldconfigTag = self.pcaConfigTag[pcaId]
         else:
-            self.transition(pcaId,TFCTransitions.error,comment="transition failed")
-            self.isPCAinTransition[pcaId] = False
+            oldconfigTag =  None
+        self.transition(pcaId,GlobalSystemTransitions.configure,conf)
+        if oldconfigTag == self.pcaConfigTag[pcaId]:
+            self.transition(pcaId,TFCTransitions.success,conf)
+        else:
+            ret = self.executeScript("detectorScript.sh")
+            if ret:
+                self.transition(pcaId,TFCTransitions.success,conf)
+            else:
+                if self.abort:
+                    self.abort = False
+                    self.transition(pcaId,TFCTransitions.abort,comment="transition aborted")
+                else:
+                    self.transition(pcaId,TFCTransitions.error,comment="transition failed")
+        self.isPCAinTransition[pcaId] = False
 
     def abortFunction(self,pcaId):
         #terminate Transition if active
@@ -359,8 +367,14 @@ class TFCControler(GlobalSystemControler):
             self.transition(pcaId,TFCTransitions.abort)
 
 class QAControler(GlobalSystemControler):
-    def __init__(self):
-        super().__init__("QA")
+    def __init__(self,startState="Unconfigured",configTag=None):
+        super().__init__("QA",startState,configTag)
+
+    def startRecording(self,pcaId):
+        self.transition(pcaId,QATransitions.start,self.pcaConfig[pcaId])
+
+    def stopRecording(self,pcaId):
+        self.transition(pcaId,QATransitions.stop,self.pcaConfig[pcaId])
 
     def handleCommand(self,message):
         if super().handleCommand(message):
@@ -375,32 +389,38 @@ class QAControler(GlobalSystemControler):
         if command == QATransitions.start:
             if pcaId and pcaId in self.PCAs:
                 self.commandSocket.send(codes.ok)
-                self.transition(pcaId,QATransitions.start,self.pcaConfig[pcaId])
+                self.startRecording(pcaId)
             else:
                 self.commandSocket.send(codes.error)
         elif command == QATransitions.stop:
             if pcaId and pcaId in self.PCAs:
                 self.commandSocket.send(codes.ok)
-                self.transition(pcaId,QATransitions.stop,self.pcaConfig[pcaId])
+                self.stopRecording(pcaId)
             else:
                 self.commandSocket.send(codes.error)
         else:
             return False
         return True
 
-    def configure(self,pcaId,tag):
-        ret = self.executeScript("detectorScript.sh")
-        if ret:
-            if self.abort:
-                self.abort = False
-                self.transition(pcaId,QATransitions.abort,comment="transition aborted")
-                self.isPCAinTransition[pcaId] = False
-                return
-            self.transition(pcaId,QATransitions.success,tag)
-            self.isPCAinTransition[pcaId] = False
+    def configure(self,pcaId,conf):
+        if pcaId in self.pcaConfigTag:
+            oldconfigTag = self.pcaConfigTag[pcaId]
         else:
-            self.transition(pcaId,QATransitions.error,comment="transition failed")
-            self.isPCAinTransition[pcaId] = False
+            oldconfigTag =  None
+        self.transition(pcaId,GlobalSystemTransitions.configure,conf)
+        if oldconfigTag == self.pcaConfigTag[pcaId]:
+            self.transition(pcaId,QATransitions.success,conf)
+        else:
+            ret = self.executeScript("detectorScript.sh")
+            if ret:
+                self.transition(pcaId,QATransitions.success,conf)
+            else:
+                if self.abort:
+                    self.abort = False
+                    self.transition(pcaId,QATransitions.abort,comment="transition aborted")
+                else:
+                    self.transition(pcaId,QATransitions.error,comment="transition failed")
+        self.isPCAinTransition[pcaId] = False
 
     def abortFunction(self,pcaId):
         #terminate Transition if active
@@ -445,9 +465,15 @@ class QAControler(GlobalSystemControler):
             socketSendUpdateToPCA.close()
 
 class FLESControler(GlobalSystemControler):
-    def __init__(self):
+    def __init__(self,startState="Unconfigured",configTag=None):
         self.jobIds = {}
-        super().__init__("FLES")
+        super().__init__("FLES",startState,configTag)
+
+    def startRecording(self,pcaId):
+        self.transition(pcaId,FLESTransitions.start,self.pcaConfig[pcaId])
+
+    def stopRecording(self,pcaId):
+        self.transition(pcaId,FLESTransitions.stop,self.pcaConfig[pcaId])
 
     def handleCommand(self,message):
         if super().handleCommand(message):
@@ -462,32 +488,38 @@ class FLESControler(GlobalSystemControler):
         if command == FLESTransitions.start:
             if pcaId and pcaId in self.PCAs:
                 self.commandSocket.send(codes.ok)
-                self.transition(pcaId,FLESTransitions.start,self.pcaConfig[pcaId])
+                self.startRecording(pcaId)
             else:
                 self.commandSocket.send(codes.error)
         elif command == FLESTransitions.stop:
             if pcaId and pcaId in self.PCAs:
                 self.commandSocket.send(codes.ok)
-                self.transition(pcaId,FLESTransitions.stop,self.pcaConfig[pcaId])
+                self.stopRecording(pcaId)
             else:
                 self.commandSocket.send(codes.error)
         else:
             return False
         return True
 
-    def configure(self,pcaId,tag):
-        ret = self.executeScript("detectorScript.sh")
-        if ret:
-            if self.abort:
-                self.abort = False
-                self.transition(pcaId,QATransitions.abort,comment="transition aborted")
-                self.isPCAinTransition[pcaId] = False
-                return
-            self.transition(pcaId,QATransitions.success,tag)
-            self.isPCAinTransition[pcaId] = False
+    def configure(self,pcaId,conf):
+        if pcaId in self.pcaConfigTag:
+            oldconfigTag = self.pcaConfigTag[pcaId]
         else:
-            self.transition(pcaId,QATransitions.error,comment="transition failed")
-            self.isPCAinTransition[pcaId] = False
+            oldconfigTag =  None
+        self.transition(pcaId,GlobalSystemTransitions.configure,conf)
+        if oldconfigTag == self.pcaConfigTag[pcaId]:
+            self.transition(pcaId,FLESTransitions.success,conf)
+        else:
+            ret = self.executeScript("detectorScript.sh")
+            if ret:
+                self.transition(pcaId,FLESTransitions.success,conf)
+            else:
+                if self.abort:
+                    self.abort = False
+                    self.transition(pcaId,FLESTransitions.abort,comment="transition aborted")
+                else:
+                    self.transition(pcaId,FLESTransitions.error,comment="transition failed")
+        self.isPCAinTransition[pcaId] = False
 
     def abortFunction(self,pcaId):
         #terminate Transition if active
@@ -514,7 +546,7 @@ class FLESControler(GlobalSystemControler):
             return False
         return ret.group(1)
 
-    def configure(self,pcaId,tag):
+    def configure(self,pcaId,conf):
         ret = self.executeScript("bash -c 'cd ~/flesnet; ./startTest readoutTest.cfg'")
         print(ret)
         if ret:
@@ -526,7 +558,7 @@ class FLESControler(GlobalSystemControler):
                 self.transition(pcaId,FLESTransitions.abort,comment="transition aborted")
                 self.isPCAinTransition[pcaId] = False
                 return
-            self.transition(pcaId,FLESTransitions.success,tag)
+            self.transition(pcaId,FLESTransitions.success,conf)
             self.isPCAinTransition[pcaId] = False
         else:
             self.transition(pcaId,FLESTransitions.error,comment="transition failed")
@@ -544,14 +576,35 @@ class FLESControler(GlobalSystemControler):
 
 """
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    import getopt
+    def printHelp():
+        print('GlobalSystem.py -s <startState(optional)> -o <startConfig(optional)> <System (TFC,DCS,QA,FLES,all)>')
+    try:
+        opts, args = getopt.getopt(sys.argv[1:],"hs:c:",["help","startState","startConfig"])
+    except getopt.GetoptError:
+        printHelp()
+        sys.exit(1)
+    if len(args) < 1:
+        printHelp()
         print("please enter a SystemType (TFC,DCS,QA,FLES,all)")
         sys.exit(1)
-    elif "all" in sys.argv:
-        tfc = TFCControler()
-        dcs = DCSControler()
-        qa =  QAControler()
-        fles = FLESControler()
+    startState = GlobalSystemStates.Unconfigured
+    startTag = None
+
+    for opt,arg in opts:
+        if opt in ("-s", "--startState"):
+            startState = arg
+        elif opt in ("-c", "--startConfig"):
+            startTag = arg
+        elif opt in ("-h", "--help"):
+            printHelp()
+            sys.exit(0)
+
+    if "all" in args:
+        tfc = TFCControler(startState,startTag)
+        dcs = DCSControler(startState,startTag)
+        qa =  QAControler(startState,startTag)
+        fles = FLESControler(startState,startTag)
         try:
             fles.commandThread.join()
         except KeyboardInterrupt:
@@ -560,14 +613,14 @@ if __name__ == "__main__":
             qa.terminate()
             fles.terminate()
         sys.exit(0)
-    if "TFC" in sys.argv:
-        test = TFCControler()
-    if "DCS" in sys.argv:
-        test = DCSControler()
-    if "QA" in sys.argv:
-        test = QAControler()
-    if "FLES" in sys.argv:
-        test = FLESControler()
+    if "TFC" in args:
+        test = TFCControler(startState,startTag)
+    if "DCS" in args:
+        test = DCSControler(startState,startTag)
+    if "QA" in args:
+        test = QAControler(startState,startTag)
+    if "FLES" in args:
+        test = FLESControler(startState,startTag)
     try:
         test.commandThread.join()
     except KeyboardInterrupt:

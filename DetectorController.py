@@ -42,7 +42,7 @@ class DetectorController(BaseController):
 
         confSection = DetectorTypes.getConfsectionForType(detectorData.type)
         configDet = configparser.ConfigParser()
-        configDet.read("detector.cfg")
+        configDet.read("subsystem.cfg")
         configDet = configDet[confSection]
         self.stateMachine = Statemachine(configDet["stateFile"],startState)
         self.configTag = configTag
@@ -52,11 +52,11 @@ class DetectorController(BaseController):
         self.pcaID = pcaData.id
 
         #Subscription needs its own context so we can terminate it seperately in case of a pca Change
-        self.subContext = zmq.Context()
-        self.socketSubscription = self.subContext.socket(zmq.SUB)
-        self.socketSubscription.connect("tcp://%s:%s" % (pcaData.address,pcaData.portPublish))
+        #self.subContext = zmq.Context()
+        #self.socketSubscription = self.subContext.socket(zmq.SUB)
+        #self.socketSubscription.connect("tcp://%s:%s" % (pcaData.address,pcaData.portPublish))
         #subscribe to everything
-        self.socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
+        #self.socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
 
         #send state to PCA
         t = threading.Thread(name='update'+str(0), target=self.sendUpdate, args=(0,))
@@ -64,9 +64,9 @@ class DetectorController(BaseController):
 
         self.inTransition = False
 
-        self.updateThread = threading.Thread(name='waitForUpdates', target=self.waitForUpdates)
-        self.updateThread.start()
-        ECS_tools.getStateSnapshot(self.stateMap,pcaData.address,pcaData.portCurrentState,timeout=self.receive_timeout)
+        #self.updateThread = threading.Thread(name='waitForUpdates', target=self.waitForUpdates)
+        #self.updateThread.start()
+        #ECS_tools.getStateSnapshot(self.stateMap,pcaData.address,pcaData.portCurrentState,timeout=self.receive_timeout)
         self.commandThread = threading.Thread(name='waitForCommands', target=self.waitForCommands)
         self.commandThread.start()
         self.pipeThread = threading.Thread(name='waitForPipeMessages', target=self.waitForPipeMessages)
@@ -76,7 +76,7 @@ class DetectorController(BaseController):
         if message == "error":
             self.error()
         elif message == "resolved":
-            self.resolved()
+            self.reset()
         else:
             print('received unknown message via pipe: %s' % (message,))
 
@@ -84,7 +84,7 @@ class DetectorController(BaseController):
         """get PCA Information from ECS"""
         requestSocket = self.context.socket(zmq.REQ)
         requestSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-        requestSocket.connect("tcp://%s:%s" % (self.configFile['ECSAddress'],self.configFile['ECSRequestPort']))
+        requestSocket.connect("tcp://%s:%s" % (self.configFile['ECAAddress'],self.configFile['ECARequestPort']))
 
         requestSocket.send_multipart([codes.detectorAsksForPCA, self.MyId.encode()])
         try:
@@ -221,7 +221,7 @@ class DetectorController(BaseController):
 
     def terminate(self):
         self.context.term()
-        self.subContext.term()
+        #self.subContext.term()
         self.abort = True
         self.endPipeThread()
         if self.scriptProcess:
@@ -239,9 +239,6 @@ class DetectorController(BaseController):
             self.abort = True
             if self.scriptProcess:
                 self.scriptProcess.terminate()
-
-    def resolved(self):
-        self.transition(DetectorTransitions.resolved)
 
     def reset(self):
         self.transition(DetectorTransitions.reset)
@@ -278,7 +275,7 @@ class DetectorA(DetectorController):
         else:
             command = message[0].decode()
             conf=None
-        if self.stateMachine.currentState not in {DetectorStates.Active,DetectorStates.Unconfigured}  and command not in {DetectorTransitions.abort,DetectorTransitions.reset}:
+        if self.inTransition and command not in {DetectorTransitions.abort,DetectorTransitions.reset}:
             self.commandSocket.send(codes.busy)
             return True
         elif not self.stateMachine.checkIfPossible(command):
@@ -288,7 +285,6 @@ class DetectorA(DetectorController):
             self.commandSocket.send(codes.ok)
         self.abort = False
         if command == DetectorTransitions.configure:
-            self.transition(DetectorTransitions.configure,conf)
             self.inTransition = True
             workThread = threading.Thread(name="worker", target=self.configure, args=(conf,))
             workThread.start()
@@ -303,19 +299,26 @@ class DetectorA(DetectorController):
         return True
 
     def configure(self,conf):
-        for i in range(0,2):
-            ret = self.executeScript("detectorScript.sh")
-            if ret:
-                self.transition(DetectorTransitions.success,conf)
-            else:
-                if self.abort:
-                    self.abort = False
-                    self.transition(DetectorTransitions.abort,comment="transition aborted")
+        oldconfigTag = self.configTag
+        self.transition(DetectorTransitions.configure,conf)
+        if oldconfigTag == self.configTag:
+            #nothing to be done
+            self.transition(DetectorTransitions.success,conf)
+            self.transition(DetectorTransitions.success,conf)
+        else:
+            for i in range(0,2):
+                ret = self.executeScript("detectorScript.sh")
+                if ret:
+                    self.transition(DetectorTransitions.success,conf)
+                else:
+                    if self.abort:
+                        self.abort = False
+                        self.transition(DetectorTransitions.abort,comment="transition aborted")
+                        self.inTransition = False
+                        break
+                    self.transition(DetectorTransitions.error,comment="transition failed")
                     self.inTransition = False
                     break
-                self.transition(DetectorTransitions.error,comment="transition failed")
-                self.inTransition = False
-                break
         self.inTransition = False
 
     def abortFunction(self):
@@ -409,52 +412,71 @@ class DetectorB(DetectorController):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    import getopt
+    def printHelp():
+        print('DetectorController.py -s <startState(optional)> -o <startConfig(optional)> <Detector Id>')
+    try:
+        opts, args = getopt.getopt(sys.argv[1:],"hs:c:",["help","startState","startConfig"])
+    except getopt.GetoptError:
+        printHelp()
+        sys.exit(1)
+    if len(args) < 1:
+        printHelp()
         print("please enter the detector id")
         sys.exit(1)
-    else:
-        #get Detector Information
-        config = configparser.ConfigParser()
-        config.read("init.cfg")
-        conf = config["Default"]
-        detectorData = None
-        while detectorData == None:
-            try:
-                context = zmq.Context()
-                requestSocket = context.socket(zmq.REQ)
-                requestSocket.connect("tcp://%s:%s" % (conf['ECSAddress'],conf['ECSRequestPort']))
-                requestSocket.setsockopt(zmq.RCVTIMEO, int(conf['receive_timeout']))
-                requestSocket.setsockopt(zmq.LINGER,0)
+    startState = "Unconfigured"
+    startTag = None
+    for opt,arg in opts:
+        if opt in ("-s", "--startState"):
+            startState = arg
+        elif opt in ("-c", "--startConfig"):
+            startTag = arg
+        elif opt in ("-h", "--help"):
+            printHelp()
+            sys.exit(0)
 
-                requestSocket.send_multipart([codes.getDetectorForId, sys.argv[1].encode()])
-                detectorDataJSON = requestSocket.recv()
-                if detectorDataJSON == codes.idUnknown:
-                    print("The ECS doesn't know who I am :(")
-                    sys.exit(1)
-                detectorDataJSON = json.loads(detectorDataJSON.decode())
-                detectorData = detectorDataObject(detectorDataJSON)
-            except zmq.Again:
-                print("timeout getting detector Data")
-                continue
-            finally:
-                requestSocket.close()
-                context.term()
-        if detectorData.type == "DetectorA":
-            test = DetectorA(detectorData)
-        elif detectorData.type == "DetectorB":
-            test = DetectorB(detectorData)
-        elif detectorData.type == "TRD":
-            test = TRD(detectorData)
-        elif detectorData.type == "STS":
-            test = STS(detectorData)
-        elif detectorData.type == "MVD":
-            test = MVD(detectorData)
-        elif detectorData.type == "TOF":
-            test = TOF(detectorData)
-        elif detectorData.type == "RICH":
-            test = RICH(detectorData)
-        else:
-            raise Exception("Detector Type unknown")
+    #get Detector Information
+    config = configparser.ConfigParser()
+    config.read("init.cfg")
+    conf = config["Default"]
+    detectorData = None
+    while detectorData == None:
+        try:
+            context = zmq.Context()
+            requestSocket = context.socket(zmq.REQ)
+            requestSocket.connect("tcp://%s:%s" % (conf['ECAAddress'],conf['ECARequestPort']))
+            requestSocket.setsockopt(zmq.RCVTIMEO, int(conf['receive_timeout']))
+            requestSocket.setsockopt(zmq.LINGER,0)
+
+            requestSocket.send_multipart([codes.getDetectorForId, args[0].encode()])
+            detectorDataJSON = requestSocket.recv()
+            if detectorDataJSON == codes.idUnknown:
+                print("The ECS doesn't know who I am :(")
+                sys.exit(1)
+            detectorDataJSON = json.loads(detectorDataJSON.decode())
+            detectorData = detectorDataObject(detectorDataJSON)
+        except zmq.Again:
+            print("timeout getting detector Data")
+            continue
+        finally:
+            requestSocket.close()
+            context.term()
+    if detectorData.type == "DetectorA":
+        test = DetectorA(detectorData,startState,startTag)
+    elif detectorData.type == "DetectorB":
+        test = DetectorB(detectorData,startState,startTag)
+    elif detectorData.type == "TRD":
+        test = TRD(detectorData,startState,startTag)
+    elif detectorData.type == "STS":
+        test = STS(detectorData,startState,startTag)
+    elif detectorData.type == "MVD":
+        test = MVD(detectorData,startState,startTag)
+    elif detectorData.type == "TOF":
+        test = TOF(detectorData,startState,startTag)
+    elif detectorData.type == "RICH":
+        test = RICH(detectorData,startState,startTag)
+    else:
+        raise Exception("Detector Type unknown")
     try:
         test.commandThread.join()
     except KeyboardInterrupt:

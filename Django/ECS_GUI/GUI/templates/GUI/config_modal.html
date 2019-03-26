@@ -91,53 +91,58 @@
          <p>No config tags for this detector assignment. You can only select a custom configuration</p>
        </div>
     {%endif%}
-  </div>
-    <form cass="form-row" id="configureSave_form">
-        <input  id="configureTagSave_input" class="form-control" type="text" placeholder="Tagname" required>
-        <div class="invalid-feedback">
-          Please enter a Name
-        </div>
-        <button id="ready" class="btn btn-primary" type="button" onclick="saveConfigTag()">Save as new Configtag</button>
-    </form>
 
-    <script>
-      function saveConfigTag(){
-        form = $("#configureSave_form")[0];
-        form.classList.remove('was-validated');
-        valid=form.checkValidity();
-        if (valid){
-          var configList = [];
-          var confSelects = $("select[id^='selConf']")
-          $.each( confSelects, function( key, sel ) {
-            configList.push(sel.selectedOptions[0].attributes["value"].textContent);
-          });
-          $.ajax({
-              type: "POST",
-              url: "{% url 'GUI:editConfigurationTag'%}",
-              data:{
-                csrfmiddlewaretoken: '{{ csrf_token }}',
-                tagName: $('#configureTagSave_input').val(),
-                "configList[]": configList,
-              },
-              error: function(jqXHR, textStatus, errorThrown) {
-                  console.log(jqXHR.status);
-              },
-              "success": function(result) {
-                  form.classList.remove('was-validated');
-                  if(noTags==true){
-                    noTags=false;
-                    $("#selTagDiv").show()
-                    $("#noTagsDiv").hide()
-                  }
-                  $("#selTag").find("optgroup:first").append("<option>"+$('#configureTagSave_input').val()+"</option>");
-              },
-          });
-        }
-        else{
-          form.classList.add('was-validated');
-        }
+  </div>
+  {% load guardian_tags %}
+  {% get_obj_perms request.user for view.ecsObject as "ecsPerms" %}
+  {% if "has_ecs_control" in ecsPerms %}
+  <form cass="form-row" id="configureSave_form">
+      <input  id="configureTagSave_input" class="form-control" type="text" placeholder="Tagname" required>
+      <div class="invalid-feedback">
+        Please enter a Name
+      </div>
+      <button id="ready" class="btn btn-primary" type="button" onclick="saveConfigTag()">Save as new Configtag</button>
+  </form>
+
+  <script>
+    function saveConfigTag(){
+      form = $("#configureSave_form")[0];
+      form.classList.remove('was-validated');
+      valid=form.checkValidity();
+      if (valid){
+        var configList = [];
+        var confSelects = $("select[id^='selConf']")
+        $.each( confSelects, function( key, sel ) {
+          configList.push(sel.selectedOptions[0].attributes["value"].textContent);
+        });
+        $.ajax({
+            type: "POST",
+            url: "{% url 'GUI:editConfigurationTag'%}",
+            data:{
+              csrfmiddlewaretoken: '{{ csrf_token }}',
+              tagName: $('#configureTagSave_input').val(),
+              "configList[]": configList,
+            },
+            error: function(jqXHR, textStatus, errorThrown) {
+                console.log(jqXHR.status);
+            },
+            "success": function(result) {
+                form.classList.remove('was-validated');
+                if(noTags==true){
+                  noTags=false;
+                  $("#selTagDiv").show()
+                  $("#noTagsDiv").hide()
+                }
+                $("#selTag").find("optgroup:first").append("<option>"+$('#configureTagSave_input').val()+"</option>");
+            },
+        });
       }
-    </script>
+      else{
+        form.classList.add('was-validated');
+      }
+    }
+  </script>
+  {%endif%}
 </div>
 {%endblock body%}
 

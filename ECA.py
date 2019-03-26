@@ -25,7 +25,7 @@ PCAStates = PCAStates()
 from DataBaseWrapper import DataBaseWrapper
 from WebSocket import WebSocket
 
-class ECS:
+class ECA:
     """The Experiment Control System"""
     def __init__(self):
         self.database = DataBaseWrapper(self.log)
@@ -56,11 +56,11 @@ class ECS:
 
         #socket for receiving requests
         self.replySocket = self.zmqContextNoTimeout.socket(zmq.REP)
-        self.replySocket.bind("tcp://*:%s" % settings.ECS_REQUEST_PORT)
+        self.replySocket.bind("tcp://*:%s" % settings.ECA_REQUEST_PORT)
 
         #log publish socket
         self.socketLogPublish = self.zmqContext.socket(zmq.PUB)
-        self.socketLogPublish.bind("tcp://*:%s" % settings.ECS_LOG_PORT)
+        self.socketLogPublish.bind("tcp://*:%s" % settings.ECA_LOG_PORT)
 
         #init logger
         self.logfile = settings.LOG_PATH_ECS

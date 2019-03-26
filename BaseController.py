@@ -14,7 +14,7 @@ class BaseController:
         try:
             self.lock = zc.lockfile.LockFile('/tmp/lock'+self.MyId, content_template='{pid}')
         except zc.lockfile.LockError:
-            print("other Process is already Running "+self.MyId)
+            print("another Process is already Running "+self.MyId)
             exit(1)
 
         self.context = zmq.Context()
@@ -48,6 +48,8 @@ class BaseController:
                     #pipe closed
                     break
                 elif message == "closeThread":
+                    if os.path.exists("pipe"+self.MyId):
+                        os.remove("pipe"+self.MyId)
                     return
                 self.handleSystemMessage(message)
 

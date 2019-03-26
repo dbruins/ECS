@@ -26,13 +26,14 @@ except ImproperlyConfigured:
 class PartitionComponent:
     def __init__(self,address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction):
         configParser = configparser.ConfigParser()
-        configParser.read(systemPath+"detector.cfg")
+        configParser.read(systemPath+"subsystem.cfg")
         conf = configParser[confSection]
         self.logfunction = logfunction
         self.abort_bool = False
         self.currentStateObject = None
         self.sequenceNumber = 0
         self.config = None
+        self.needsReconfiguring = False
 
         self.pcaReconnectFunction = pcaReconnectFunction
         self.pcaTimeoutFunction = pcaTimeoutFunction
@@ -76,8 +77,7 @@ class PartitionComponent:
                         continue
                     state,configTag = ret
                     self.connected = True
-                    self.setState(state,configTag,None)
-                    self.reconnectFunction()
+                    self.reconnectFunction(stateObject([self.getMappedStateForState(state),state,configTag,None]))
             except zmq.Again:
                 if self.connected == True or self.connected == None:
                     self.connected = False
@@ -101,17 +101,19 @@ class PartitionComponent:
             return True
         return False
 
-    def setState(self,state,configTag,Comment):
+    def setState(self,stateObj):
         """set the current State"""
-        self.stateMachine.currentState = state
-        self.currentStateObject = stateObject([self.getMappedState(),state,configTag,Comment])
+        self.stateMachine.currentState = stateObj.unmappedState
+        self.currentStateObject = stateObj
+        #self.currentStateObject = stateObject([self.getMappedState(),state,configTag,Comment])
 
     def getStateObject(self):
-        """gets current state + transition for Publishing"""
-        if not self.connected:
-            return stateObject(self.getMappedState())
-        else:
-            return self.currentStateObject
+        """gets current state Object"""
+        return self.currentStateObject
+        # if not self.connected:
+        #     return stateObject(self.getMappedState())
+        # else:
+        #     return self.currentStateObject
 
     def getState(self):
         if not self.connected:
@@ -119,12 +121,19 @@ class PartitionComponent:
         return self.stateMachine.currentState
 
     def getMappedState(self):
-        if not self.connected:
+        if not self.connected or not self.stateMachine.currentState:
             return CommonStates.ConnectionProblem
         if self.stateMachine.currentState in self.mapper:
             return self.mapper[self.stateMachine.currentState]
         else:
             self.logfunction("Mapped State for %s is not defined" % self.stateMachine.currentState)
+
+    def getMappedStateForState(self,state):
+        if state == CommonStates.ConnectionProblem:
+            return CommonStates.ConnectionProblem
+        if state in self.mapper:
+            return self.mapper[state]
+        return False
 
     def getSystemConfig(self):
         return self.config
@@ -139,8 +148,8 @@ class Detector(PartitionComponent):
         self.name = "Detector %s" % id
         super().__init__(address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction)
 
-    def reconnectFunction(self):
-        self.pcaReconnectFunction(self.id,self.getStateObject())
+    def reconnectFunction(self,state):
+        self.pcaReconnectFunction(self.id,state)
 
     def timeoutFunction(self):
         self.pcaTimeoutFunction(self.id)
@@ -233,10 +242,6 @@ class Detector(PartitionComponent):
 class DetectorA(Detector):
 
     def getReady(self):
-        if self.getMappedState() not in {MappedStates.Unconfigured, CommonStates.ConnectionProblem,MappedStates.Error}:
-            if self.config.configId == self.currentStateObject.configTag:
-                self.logfunction("nothing to be done for Detector %s" % self.id)
-                return True
         return self.transitionRequest(DetectorTransitions.configure,sendConfig=True)
 
     def abort(self):
@@ -279,8 +284,8 @@ class GlobalSystemComponent(PartitionComponent):
         self.name = "Unset Name"
         super().__init__(address,portCommand,confSection,logfunction,pcaTimeoutFunction,pcaReconnectFunction)
 
-    def reconnectFunction(self):
-        self.pcaReconnectFunction(self.name)
+    def reconnectFunction(self,state):
+        self.pcaReconnectFunction(self.name,state)
 
     def timeoutFunction(self):
         self.pcaTimeoutFunction(self.name)
@@ -360,10 +365,6 @@ class DCS(GlobalSystemComponent):
         self.name = "DCS"
 
     def getReady(self):
-        if self.getMappedState() not in {MappedStates.Unconfigured, CommonStates.ConnectionProblem,MappedStates.Error}:
-            if self.config.configId == self.currentStateObject.configTag:
-                self.logfunction("nothing to be done for %s" % self.name)
-                return True
         return self.transitionRequest(DCSTransitions.configure,sendConfig=True)
 
     def abort(self):
@@ -377,10 +378,6 @@ class TFC(GlobalSystemComponent):
         self.name = "TFC"
 
     def getReady(self):
-        if self.getMappedState() not in {MappedStates.Unconfigured, CommonStates.ConnectionProblem,MappedStates.Error}:
-            if self.config.configId == self.currentStateObject.configTag:
-                self.logfunction("nothing to be done for %s" % self.name)
-                return True
         return self.transitionRequest(TFCTransitions.configure,sendConfig=True)
 
     def abort(self):
@@ -404,10 +401,6 @@ class QA(GlobalSystemComponent):
         return False
 
     def getReady(self):
-        if self.getMappedState() not in {MappedStates.Unconfigured, CommonStates.ConnectionProblem,MappedStates.Error}:
-            if self.config.configId == self.currentStateObject.configTag:
-                self.logfunction("nothing to be done for %s" % self.name)
-                return True
         return self.transitionRequest(QATransitions.configure,sendConfig=True)
 
     def abort(self):
@@ -431,10 +424,6 @@ class FLES(GlobalSystemComponent):
         return False
 
     def getReady(self):
-        if self.getMappedState() not in {MappedStates.Unconfigured, CommonStates.ConnectionProblem,MappedStates.Error}:
-            if self.config.configId == self.currentStateObject.configTag:
-                self.logfunction("nothing to be done for %s" % self.name)
-                return True
         return self.transitionRequest(FLESTransitions.configure,sendConfig=True)
 
     def abort(self):

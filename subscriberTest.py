@@ -24,7 +24,7 @@ def getPCAData():
     configFile = config["Default"]
 
     requestSocket = subContext.socket(zmq.REQ)
-    requestSocket.connect("tcp://%s:%s" % (configFile['ECSAddress'],configFile['ECSRequestPort']))
+    requestSocket.connect("tcp://%s:%s" % (configFile['ECAAddress'],configFile['ECARequestPort']))
 
     requestSocket.send_multipart([codes.detectorAsksForPCA, detId.encode()])
     try:
