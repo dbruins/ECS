@@ -448,9 +448,6 @@ class PCA:
             det = typeClass(detector.id,detector.address,detector.portCommand,confSection,self.log,self.handleDetectorTimeout,self.handleDetectorReconnect)
             self.detectors[det.id] = det
             self.readyDetectors[det.id]=False
-            #global state doesn't exist during start up
-            #if self.stateMachine:
-            #    start_new_thread(self.transitionDetectorIntoGlobalState,(det.id,))
         except Exception as e:
             self.log("Exception while adding Detector %s: %s" %(detector.id,str(e)))
         finally:

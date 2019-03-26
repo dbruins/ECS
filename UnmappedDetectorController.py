@@ -77,6 +77,8 @@ class UnmappedDetectorController:
             elif state == codes.removed:
                 #remove code for Web Browser
                 state = "remove"
+            elif id in self.detectors:
+                self.detectors[id].setState(state)
 
             if isinstance(state,stateObject):
                 state = state.asJson()
@@ -90,6 +92,7 @@ class UnmappedDetectorController:
             self.webSocket.sendUpdate(jsonWebUpdate,"unmapped")
 
     def waitForUpdates(self):
+        """wait for updates from unmapped detectors"""
         while True:
             try:
                 message = self.socketDetectorUpdates.recv()
@@ -109,8 +112,7 @@ class UnmappedDetectorController:
                     configTag = message["tag"]
                 if "comment" in message:
                     comment = message["comment"]
-                det.setState(state,configTag,comment)
-                self.publishQueue.put((det.id,det.getStateObject()))
+                self.publishQueue.put((det.id,stateObject([det.getMappedStateForState(state),state,configTag,comment])))
             except zmq.error.ContextTerminated:
                 self.socketDetectorUpdates.close()
                 break
@@ -166,7 +168,7 @@ class UnmappedDetectorController:
         confSection = types.getConfsectionForType(detector.type)
         det = typeClass(detector.id,detector.address,detector.portCommand,confSection,self.log,self.handleDetectorTimeout,self.handleDetectorReconnect)
         self.detectors[det.id] = det
-        self.publishQueue.put((det.id,det.getStateObject()))
+        #self.publishQueue.put((det.id,det.getStateObject()))
 
         return True
 

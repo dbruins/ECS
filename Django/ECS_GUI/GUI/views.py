@@ -629,6 +629,7 @@ def currentTableAndLogRequest(request,pcaId):
         map = {}
         for pca in eca.pcaHandlers.items():
             map[pca[0]] = dict((k,(v[0],v[1].asJson(),k in eca.globalSystems)) for k,v in pca[1].stateMap.map.items())
+        eca.unmappedDetectorController.statusMap.map.items()
         map["unmapped"] = dict((k,(v[0],v[1].asJson(),k in eca.globalSystems)) for k,v in eca.unmappedDetectorController.statusMap.map.items())
         if len(eca.logQueue) > 0:
             bufferdLog = "\n".join(list(eca.logQueue))
