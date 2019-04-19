@@ -13,6 +13,7 @@ ECS Dashboard
 
       function updateState(id,newState,unmappedState,sequenceNumber,tag,comment,origin,isGlobalSystem){
         cssClass = newState;
+        //colored state circle
         stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>'
         if (tag == ""){
           tag = "No Configuration Tag"

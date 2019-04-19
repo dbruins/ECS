@@ -2,6 +2,7 @@ from channels.generic.websocket import WebsocketConsumer
 from channels.exceptions import StopConsumer
 from asgiref.sync import async_to_sync
 import json
+#  >>>code for django channels websockets (not used anymore)<<<
 
 class updateConsumer(WebsocketConsumer):
     def connect(self):

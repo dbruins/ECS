@@ -24,8 +24,8 @@ class DataBaseWrapper:
 
     def handleError(self, exception, errorMessage):
         #full exception to log
-        self.log(errorMessage+": %s" % str(e),True)
-        #exception shown to user
+        self.log(errorMessage+": %s" % str(errorMessage),True)
+        #error message shown to user
         return Exception(errorMessage)
 
     def getAllDetectors(self):
@@ -160,7 +160,7 @@ class DataBaseWrapper:
         c = connection.cursor()
         data = dataObject.asArray()
         try:
-            c.execute("INSERT INTO Partition VALUES (?,?,?,?,?,?,?,?)", data)
+            c.execute("INSERT INTO Partition VALUES (?,?,?,?,?,?,?)", data)
             connection.commit()
             return codes.ok
         except Exception as e:
@@ -328,6 +328,7 @@ class DataBaseWrapper:
             connection.close()
 
     def getAllConfigTags(self):
+        """gets all config tags"""
         connection = sqlite3.connect(self.dataBaseFile)
         c = connection.cursor()
         try:

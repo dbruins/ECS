@@ -30,11 +30,13 @@ from django.dispatch import receiver
 
 @receiver(user_logged_in)
 def on_user_logged_in(sender, request, **kwargs):
+    """trigger for user login"""
     LoggedInUser.objects.get_or_create(user=request.user)
 
 @receiver(user_logged_out)
 def on_user_logged_out(sender, request, **kwargs):
     """frees taken permissions on user logout"""
+
     if request.user.is_authenticated:
         LoggedInUser.objects.filter(user=request.user).delete()
     #pcas
@@ -50,19 +52,21 @@ def on_user_logged_out(sender, request, **kwargs):
 def permission_timeout():
     """remove permission has control if user has been inactive for a while"""
     while True:
-        #seconds
         time.sleep(settings.PERMISSION_TIMEOUT)
         allPCAs = pcaModel.objects.all()
+        #check for all pca
         for pcaObject in allPCAs:
             usersWithPermission = get_users_with_perms(pcaObject, attach_perms = True)
             for user, perms in usersWithPermission.items():
                 if "has_pca_control" in perms:
                     timedelta = timezone.now() - pcaObject.permissionTimestamp
+                    #check if there is a timeout
                     if timedelta.total_seconds() > settings.PERMISSION_TIMEOUT:
                         print(str(timedelta.total_seconds()) +" timeout user: "+str(user) )
                         remove_perm('has_pca_control', user, pcaObject)
                         #inform over websocket
                         eca.webSocket.permissionTimeout(str(user))
+        #check for ecs
         ecsObject = ecsModel.objects.filter(id="ecs").get()
         usersWithPermission = get_users_with_perms(ecsObject, attach_perms = True)
         for user, perms in usersWithPermission.items():
@@ -109,7 +113,6 @@ class pcaForm(forms.Form):
     portLog = forms.IntegerField(min_value= 1,label="Port Logmessages")
     portUpdates = forms.IntegerField(min_value= 1,label="Port Updates")
     portCurrentState = forms.IntegerField(min_value= 1,label="Port Current State")
-    portSingleRequest = forms.IntegerField(min_value= 1)
     portCommand = forms.IntegerField(min_value= 1,label="Port Command")
 
 class detectorForm(forms.Form):
@@ -117,7 +120,6 @@ class detectorForm(forms.Form):
     address = forms.CharField(label="address")
     type = forms.CharField(label="type")
     portCommand = forms.IntegerField(min_value= 1,label="Port Command")
-
 
 #views
 class index(ecsMixin,TemplateView):
@@ -209,7 +211,6 @@ class create_pca(ecsMixin,ecsPermissionMixin,FormView):
                 "portLog" :  form.cleaned_data["portLog"],
                 "portUpdates" :  form.cleaned_data["portUpdates"],
                 "portCurrentState" :  form.cleaned_data["portCurrentState"],
-                "portSingleRequest" :  form.cleaned_data["portSingleRequest"],
                 "portCommand" :  form.cleaned_data["portCommand"],
         }
         obj = partitionDataObject(values)
@@ -336,9 +337,8 @@ class editConfiguration(ecsMixin,ecsPermissionMixin,TemplateView):
     def dispatch(self, request, *args, **kwargs):
         """get the webpage"""
         res = eca.getAllSystems()
-        iJustWantTheIdLambda = lambda x:x.id
-        self.detectors = list(map(iJustWantTheIdLambda,res["detectors"].dataArray))
-        self.globalSystems = list(map(iJustWantTheIdLambda,res["globalSystems"].dataArray))
+        self.detectors = list(map(lambda x:x.id,res["detectors"].dataArray))
+        self.globalSystems = list(map(lambda x:x.id,res["globalSystems"].dataArray))
 
         return super().dispatch(request, *args, **kwargs)
 
@@ -367,9 +367,11 @@ class editConfigurationTag(ecsMixin,ecsPermissionMixin,TemplateView):
     def dispatch(self, request, *args, **kwargs):
         """get the webpage"""
         res = eca.getAllSystems()
-        iJustWantTheIdLambda = lambda x:x.id
-        self.detectors = list(map(iJustWantTheIdLambda,res["detectors"].dataArray))
-        self.globalSystems = list(map(iJustWantTheIdLambda,res["globalSystems"].dataArray))
+        #get ids of all systems
+        self.detectors = list(map(lambda x:x.id,res["detectors"].dataArray))
+        self.globalSystems = list(map(lambda x:x.id,res["globalSystems"].dataArray))
+
+        #get all configs for all
         self.tags = eca.database.getAllConfigTags()
         globalSystemConfigs = eca.database.getConfigsForManySystems(self.globalSystems)
         self.gobalConfigsForSystem = {}
@@ -445,7 +447,7 @@ class clientPage(ecsMixin,ecsPermissionMixin,TemplateView):
             return HttpResponse(status=500)
 
 class pcaPermissionMixin(PermissionRequiredMixin):
-    #PermissionRequiredMixin
+    #PermissionRequiredMixin for PCAs
     return_403 = True
     permission_required = 'has_pca_control'
 
@@ -463,6 +465,7 @@ class ready(ecsMixin,pcaPermissionMixin,View):
         pca = eca.getPCAHandler(pcaId)
 
         if "customConfiguration[]" in request.POST:
+            #get custom configuration
             customConfiguration = request.POST.getlist("customConfiguration[]")
             systemConfig =eca.database.getCustomConfig(customConfiguration)
         else:

@@ -5,4 +5,5 @@ class GuiConfig(AppConfig):
     name = 'GUI'
     def ready(self):
         #called as soon as App is ready
-        self.test = "ready"
+        pass
+        #self.test = "ready"

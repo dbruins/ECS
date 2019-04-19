@@ -11,6 +11,7 @@ class OneSessionPerUserMiddleware:
         # Code to be executed for each request before the view (and later middleware) are called.
 
         #this doesn't work for superusers because the login and logout signals are not called
+        #skip for unauthenticated users and superusers
         if request.user.is_authenticated and not request.user.is_superuser:
             #get user associated session key from database
             stored_session_key = request.user.logged_in_user.session_key

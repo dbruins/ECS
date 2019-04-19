@@ -26,6 +26,7 @@ class BaseController:
         self.scriptProcess = None
 
     def executeScript(self,scriptname):
+        """excutes script and waits for return value"""
         self.scriptProcess = subprocess.Popen(["exec ./"+scriptname], shell=True)
         ret = self.scriptProcess.wait()
         if self.abort:
@@ -36,6 +37,7 @@ class BaseController:
             return True
 
     def waitForPipeMessages(self):
+        """waits for messages on subsystem pipe"""
         try:
             os.mkfifo("pipe"+self.MyId)
         except OSError as oe:
@@ -54,6 +56,7 @@ class BaseController:
                 self.handleSystemMessage(message)
 
     def endPipeThread(self):
+        """terminates the pipeThread"""
         pipe = open("pipe"+self.MyId, 'w')
         pipe.write("closeThread")
 

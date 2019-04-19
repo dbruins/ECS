@@ -40,6 +40,7 @@ class DetectorController(BaseController):
             pcaData = self.getPCAData()
         self.stateMap = ECS_tools.MapWrapper()
 
+        #read and set configuration
         confSection = DetectorTypes.getConfsectionForType(detectorData.type)
         configDet = configparser.ConfigParser()
         configDet.read("subsystem.cfg")
@@ -51,6 +52,7 @@ class DetectorController(BaseController):
         self.pcaUpdatePort = pcaData.portUpdates
         self.pcaID = pcaData.id
 
+        #subscriber test
         #Subscription needs its own context so we can terminate it seperately in case of a pca Change
         #self.subContext = zmq.Context()
         #self.socketSubscription = self.subContext.socket(zmq.SUB)
@@ -64,6 +66,7 @@ class DetectorController(BaseController):
 
         self.inTransition = False
 
+        #start threads
         #self.updateThread = threading.Thread(name='waitForUpdates', target=self.waitForUpdates)
         #self.updateThread.start()
         #ECS_tools.getStateSnapshot(self.stateMap,pcaData.address,pcaData.portCurrentState,timeout=self.receive_timeout)
@@ -73,6 +76,7 @@ class DetectorController(BaseController):
         self.pipeThread.start()
 
     def handleSystemMessage(self,message):
+        """handle pipe message from subsystem"""
         if message == "error":
             self.error()
         elif message == "resolved":
@@ -111,16 +115,16 @@ class DetectorController(BaseController):
         self.pcaID = partition.id
 
         #blocks until subscription socket is closed
-        self.subContext.term()
-        self.subContext =  zmq.Context()
-        self.socketSubscription = self.subContext.socket(zmq.SUB)
-        self.socketSubscription.connect("tcp://%s:%s" % (partition.address,partition.portPublish))
+        # self.subContext.term()
+        # self.subContext =  zmq.Context()
+        # self.socketSubscription = self.subContext.socket(zmq.SUB)
+        # self.socketSubscription.connect("tcp://%s:%s" % (partition.address,partition.portPublish))
         #subscribe to everything
-        self.socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
-        self.updateThread.join()
-        self.updateThread = threading.Thread(name='waitForUpdates', target=self.waitForUpdates)
-        self.updateThread.start()
-        ECS_tools.getStateSnapshot(self.stateMap,partition.address,partition.portCurrentState,timeout=self.receive_timeout)
+        # self.socketSubscription.setsockopt(zmq.SUBSCRIBE, b'')
+        # self.updateThread.join()
+        # self.updateThread = threading.Thread(name='waitForUpdates', target=self.waitForUpdates)
+        # self.updateThread.start()
+        # ECS_tools.getStateSnapshot(self.stateMap,partition.address,partition.portCurrentState,timeout=self.receive_timeout)
 
 
     def sendUpdate(self,sequenceNumber,comment=None):
@@ -167,6 +171,7 @@ class DetectorController(BaseController):
 
 
     def waitForUpdates(self):
+        """waits for subscription updates"""
         #watch subscription for further updates
         while True:
             try:
@@ -220,6 +225,7 @@ class DetectorController(BaseController):
         return True
 
     def terminate(self):
+        """terminates the agent"""
         self.context.term()
         #self.subContext.term()
         self.abort = True
@@ -234,6 +240,7 @@ class DetectorController(BaseController):
         pass
 
     def error(self):
+        """perform error transition"""
         self.transition(DetectorTransitions.error)
         if self.inTransition:
             self.abort = True
@@ -241,9 +248,11 @@ class DetectorController(BaseController):
                 self.scriptProcess.terminate()
 
     def reset(self):
+        """reset transition"""
         self.transition(DetectorTransitions.reset)
 
     def transition(self,transition,conf=None,comment=None):
+        """perform a state machine transition"""
         try:
             self.stateMachineLock.acquire()
             if self.stateMachine.transition(transition):
@@ -299,6 +308,7 @@ class DetectorA(DetectorController):
         return True
 
     def configure(self,conf):
+        """configure the system with a given configuration"""
         oldconfigTag = self.configTag
         self.transition(DetectorTransitions.configure,conf)
         if oldconfigTag == self.configTag:
@@ -322,6 +332,7 @@ class DetectorA(DetectorController):
         self.inTransition = False
 
     def abortFunction(self):
+        """reset the detector to unconfigured"""
         #terminate Transition if active
         if self.inTransition:
             self.abort = True

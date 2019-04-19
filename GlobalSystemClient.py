@@ -17,6 +17,7 @@ import os
 from BaseController import BaseController
 
 class GlobalSystemControler(BaseController):
+    """generic global system controller"""
     def __init__(self,type,startState="Unconfigured",configTag=None):
         config = configparser.ConfigParser()
         config.read("init.cfg")
@@ -59,6 +60,7 @@ class GlobalSystemControler(BaseController):
 
         self.MyId = globalSystemInfo.id
 
+        #init data structures and configs
         configDet = configparser.ConfigParser()
         configDet.read("subsystem.cfg")
         configDet = configDet[type]
@@ -82,6 +84,7 @@ class GlobalSystemControler(BaseController):
         #send first update to All PCAs
         self.sendUpdateToAll()
 
+        #start threads
         self.commandThread = threading.Thread(name="waitForCommands", target=self.waitForCommands)
         self.commandThread.start()
 
@@ -126,15 +129,19 @@ class GlobalSystemControler(BaseController):
                 socketSendUpdateToPCA.close()
 
     def addPartition(self,partitionData):
+        """adds a new partition"""
         self.PCAs[partitionData.id] = partitionData
         self.pcaStatemachineLock[partitionData.id] = threading.Lock()
         self.StateMachineForPca[partitionData.id] = Statemachine(self.StateMachineFile,"Unconfigured")
         self.isPCAinTransition[partitionData.id] = False
+        self.pcaSequenceNumber[partitionData.id] = 0
 
     def deletePartition(self,pcaId):
+        """deletes a partition"""
         del self.PCAs[pcaId]
         del self.StateMachineForPca[pcaId]
         del self.isPCAinTransition[pcaId]
+        del self.pcaSequenceNumber[pcaId]
         if pcaId in self.pcaConfigTag:
             del self.pcaConfigTag[pcaId]
         if pcaId in self.pcaConfig:
@@ -205,16 +212,19 @@ class GlobalSystemControler(BaseController):
         return True
 
     def sendUpdateToAll(self,comment=None):
+        """send current state to all PCAs"""
         for pca in self.PCAs:
             t = threading.Thread(name='update'+str(0), target=self.sendUpdate, args=(pca,0,))
             t.start()
             #self.sendUpdate(pca,0)
 
     def abortAll(self):
+        """reset all state machines"""
         for partition in self.PCAs:
             self.abortFunction(partition.id)
 
     def transition(self,pcaId,transition,conf=None,comment=None):
+        """transition a state machine for a pca"""
         try:
             self.pcaStatemachineLock[pcaId].acquire()
             if self.StateMachineForPca[pcaId].transition(transition):
@@ -236,6 +246,7 @@ class GlobalSystemControler(BaseController):
                 self.pcaStatemachineLock[pcaId].release()
 
     def error(self,pcaId=None):
+        """performs an error transition for a pca or for all pca if no pca id is provided"""
         if pcaId:
             self.transition(pcaId,GlobalSystemTransitions.error)
         else:
@@ -246,6 +257,7 @@ class GlobalSystemControler(BaseController):
                     self.scriptProcess.terminate()
 
     def reset(self,pcaId=None):
+        """resets the state machine for a pca or for all pca if no pca id is provided"""
         if pcaId:
             self.transition(pcaId,GlobalSystemTransitions.reset)
         else:
@@ -253,6 +265,7 @@ class GlobalSystemControler(BaseController):
                 self.transition(partition,GlobalSystemTransitions.reset)
 
     def handleSystemMessage(self,message):
+        """handle a pipe message from the subsystem"""
         if message == "error":
             self.error()
         elif message == "resolved":
@@ -261,6 +274,7 @@ class GlobalSystemControler(BaseController):
             print('received unknown message via pipe: %s' % (message,))
 
     def terminate(self):
+        """termiantes the controller"""
         self.context.term()
         self.abort = True
         self.endPipeThread()
@@ -273,6 +287,7 @@ class DCSControler(GlobalSystemControler):
         super().__init__("DCS",startState,configTag)
 
     def configure(self,pcaId,conf):
+        """configures the subsystem with a given configuration for a given partition"""
         if pcaId in self.pcaConfigTag:
             oldconfigTag = self.pcaConfigTag[pcaId]
         else:
@@ -293,6 +308,7 @@ class DCSControler(GlobalSystemControler):
         self.isPCAinTransition[pcaId] = False
 
     def abortFunction(self,pcaId):
+        """aborts the subsystem for a partition"""
         #terminate Transition if active
         if self.isPCAinTransition[pcaId]:
             self.abort = True
@@ -301,8 +317,10 @@ class DCSControler(GlobalSystemControler):
             self.transition(pcaId,DCSTransitions.abort)
 
     def handleSystemMessage(self,data):
+        """handle pipe message from subsystem"""
         message = data.split()[0]
         if message == "detectorError":
+            #handle dcs detector error
             message,detId = data.split()
             pcaId = self.detectorMapping[detId]
             partition = self.PCAs[pcaId]
@@ -316,6 +334,7 @@ class DCSControler(GlobalSystemControler):
             super().handleSystemMessage(message)
 
     def sendDCSMessage(self,data,partition):
+        """sends a dcs data message to a partition"""
         data=json.dumps(data).encode()
         try:
             socketSendUpdateToPCA = self.context.socket(zmq.REQ)
@@ -339,6 +358,7 @@ class TFCControler(GlobalSystemControler):
         super().__init__("TFC",startState,configTag)
 
     def configure(self,pcaId,conf):
+        """configures the subsystem with a given configuration for a given partition"""
         if pcaId in self.pcaConfigTag:
             oldconfigTag = self.pcaConfigTag[pcaId]
         else:
@@ -359,6 +379,7 @@ class TFCControler(GlobalSystemControler):
         self.isPCAinTransition[pcaId] = False
 
     def abortFunction(self,pcaId):
+        """aborts the subsystem for a partition"""
         #terminate Transition if active
         if self.isPCAinTransition[pcaId]:
             self.abort = True
@@ -371,12 +392,16 @@ class QAControler(GlobalSystemControler):
         super().__init__("QA",startState,configTag)
 
     def startRecording(self,pcaId):
+        """start data taking"""
         self.transition(pcaId,QATransitions.start,self.pcaConfig[pcaId])
 
     def stopRecording(self,pcaId):
+        """stop data taking"""
         self.transition(pcaId,QATransitions.stop,self.pcaConfig[pcaId])
 
     def handleCommand(self,message):
+        """handles received command"""
+        #look inside base class
         if super().handleCommand(message):
             return True
         pcaId = None
@@ -403,6 +428,7 @@ class QAControler(GlobalSystemControler):
         return True
 
     def configure(self,pcaId,conf):
+        """configures the subsystem with a given configuration for a given partition"""
         if pcaId in self.pcaConfigTag:
             oldconfigTag = self.pcaConfigTag[pcaId]
         else:
@@ -423,6 +449,7 @@ class QAControler(GlobalSystemControler):
         self.isPCAinTransition[pcaId] = False
 
     def abortFunction(self,pcaId):
+        """aborts the subsystem for a partition"""
         #terminate Transition if active
         if self.isPCAinTransition[pcaId]:
             self.abort = True
@@ -431,6 +458,7 @@ class QAControler(GlobalSystemControler):
             self.transition(pcaId,QATransitions.abort)
 
     def handleSystemMessage(self,data):
+        """handle pipe messages from QA"""
         message = data.split()[0]
         if message == "QAError":
             message,detID = data.split()
@@ -446,6 +474,7 @@ class QAControler(GlobalSystemControler):
             super().handleSystemMessage(message)
 
     def sendQAMessage(self,message,partition):
+        """send message to a pca"""
         try:
             data=json.dumps(data).encode()
             socketSendUpdateToPCA = self.context.socket(zmq.REQ)
@@ -470,12 +499,16 @@ class FLESControler(GlobalSystemControler):
         super().__init__("FLES",startState,configTag)
 
     def startRecording(self,pcaId):
+        """start data taking"""
         self.transition(pcaId,FLESTransitions.start,self.pcaConfig[pcaId])
 
     def stopRecording(self,pcaId):
+        """stop data taking"""
         self.transition(pcaId,FLESTransitions.stop,self.pcaConfig[pcaId])
 
     def handleCommand(self,message):
+        """handles received command"""
+        #look inside base class
         if super().handleCommand(message):
             return True
         pcaId = None
@@ -502,6 +535,7 @@ class FLESControler(GlobalSystemControler):
         return True
 
     def configure(self,pcaId,conf):
+        """configures the subsystem with a given configuration for a given partition"""
         if pcaId in self.pcaConfigTag:
             oldconfigTag = self.pcaConfigTag[pcaId]
         else:
@@ -522,6 +556,7 @@ class FLESControler(GlobalSystemControler):
         self.isPCAinTransition[pcaId] = False
 
     def abortFunction(self,pcaId):
+        """aborts the subsystem for a partition"""
         #terminate Transition if active
         if self.isPCAinTransition[pcaId]:
             self.abort = True

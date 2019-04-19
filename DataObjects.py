@@ -2,7 +2,7 @@
 import json
 
 class DataObjectCollection:
-    """class for storing many database entrys"""
+    """class for storing a list of several database entrys"""
 
     def __init__(self,data,dataClass):
         self.dataArray = []
@@ -21,6 +21,7 @@ class DataObjectCollection:
             raise TypeError("expected a list or a dictionary")
 
     def add(self,obj):
+        """add object to list"""
         if isinstance(obj,self.dataClass):
             self.dataArray.append(obj)
         else:
@@ -36,6 +37,7 @@ class DataObjectCollection:
         return dict
 
     def asJsonString(self):
+        """return data a json string"""
         dict = self.asDictionary()
         return json.dumps(dict)
 
@@ -46,16 +48,20 @@ class DataObjectCollection:
         return self.dataArray[index]
 
 class DataObject:
+    """Base class for data objects"""
     def asArray(self):
+        """returns data in an array"""
         ret = []
         for k,v in self.__dict__.items():
             ret.append(v)
         return ret
 
     def asJsonString(self):
+        """returns data as an json string"""
         return json.dumps(self.__dict__)
 
     def asJson(self):
+        """returns data as a dictionary"""
         return self.__dict__
 
     def __str__(self):
@@ -85,7 +91,6 @@ class partitionDataObject(DataObject):
             self.portLog = queryResult["portLog"]
             self.portUpdates= queryResult["portUpdates"]
             self.portCurrentState = queryResult["portCurrentState"]
-            self.portSingleRequest = queryResult["portSingleRequest"]
             self.portCommand = queryResult["portCommand"]
         else:
             self.id = queryResult[0]
@@ -94,8 +99,7 @@ class partitionDataObject(DataObject):
             self.portLog = queryResult[3]
             self.portUpdates= queryResult[4]
             self.portCurrentState = queryResult[5]
-            self.portSingleRequest = queryResult[6]
-            self.portCommand = queryResult[7]
+            self.portCommand = queryResult[6]
 
 class mappingDataObject(DataObject):
     def __init__(self,queryResult):

@@ -22,9 +22,10 @@ function createWebSocket(){
     var updateSocket = new WebSocket("{% if ENCRYPT_WEBSOCKET %}wss{% else %}ws{% endif %}://"+ window.location.hostname+":{{WEB_SOCKET_PORT}}/{{pcaId}}/{{request.user}}");
     function updateState(id,newState,unmappedState,sequenceNumber,tag,comment,isGlobalSystem,buttons){
       cssClass = newState;
+      //colored state circle
       stateCircle = '<i class="fas fa-circle '+cssClass+'"></i>';
-      //reset Button
       if (newState == "Error")
+        //add reset Button
         newState = newState + "<button style='margin-left: 0.5em;' id='reset"+id+"' class='btn btn-primary' onclick='resetSystem(\""+id+"\")' >reset</button>";
       if (tag == ""){
         tag = "No Configuration Tag";
@@ -36,14 +37,16 @@ function createWebSocket(){
           customConfiguration = false;
         selectedTag.html(tag)
         if (buttons){
+          //enable and disable control buttons
           readyButton.prop("disabled",!buttons["configure"]);
           startButton.prop("disabled",!buttons["start"]);
           stopButton.prop("disabled",!buttons["stop"]);
         }
         return;
       }
-      //check if state already exists
+      //check if state already exists in html table
       if(id in states){
+          //update
           var stateObject = states[id];
           if(parseInt(stateObject.attr("sequencenumber")) < sequenceNumber)
             stateObject.attr("sequencenumber",sequenceNumber);
@@ -53,6 +56,7 @@ function createWebSocket(){
             comments[id].html(comment);
       }
       else{
+          //create new html table entry
           if (isGlobalSystem)
             var table = globalSystemTable;
           else
@@ -67,9 +71,11 @@ function createWebSocket(){
     }
 
     updateSocket.onopen = function(e){
+      //called when web socket connection is open
       $(".tableRow").remove()
+      //send current session id for authentification
       updateSocket.send("{{view.sessionId}}")
-      //get stateTables
+      //get current stata table and logs
       $.ajax({
           type: "GET",
           url: "{% url 'GUI:currentTableAndLogRequest' pcaId %}",
@@ -108,6 +114,7 @@ function createWebSocket(){
         //normal shutdown
         return
       else{
+       //try periodic reconnects
        setTimeout(function(){
       		createWebSocket();
   	   },2000);
@@ -115,10 +122,12 @@ function createWebSocket(){
     }
 
     updateSocket.onmessage = function(e) {
+        //called on received websocket message
         var data = JSON.parse(e.data);
         var message = data['message'];
         var type = data['type'];
         if (type == "state"){
+          //is state update
           var update = JSON.parse(message);
           var id = update['id'];
           var stateObject = update['state'];
@@ -131,10 +140,12 @@ function createWebSocket(){
               comments= {};
           }
           else if (stateObject == "remove"){
+              //detector has been removed from partition
               //delete Row
               $('#dRow'+id).remove();
           }
           else{
+            // state update
             var newState = stateObject["state"];
             var sequenceNumber = update['sequenceNumber'];
             var unmappedState = stateObject["unmappedState"];
@@ -149,12 +160,14 @@ function createWebSocket(){
           }
         }
         else if (type == "log"){
+          //logmessage
           logBox.append(message+"\n");
           //allways scroll directly to bottom
           var textarea = document.getElementById('log');
           textarea.scrollTop = textarea.scrollHeight;
         }
         else if (type == "permissionTimeout"){
+          //permission timeout
           $('#alertBox').css('visibility', 'visible');
           $('#alertBox').html("<strong>Warning!</strong> Your permissions timed out");
           $('#PCAcontrolLink').html("take control of {{view.pcaObject}}");
@@ -166,6 +179,7 @@ function createWebSocket(){
 }
 createWebSocket()
 
+//functions for ajax return codes
 returnCodeCases = {
   200: function(){
     $('#alertBox').css('visibility', 'hidden');
@@ -181,6 +195,7 @@ returnCodeCases = {
 
 };
 $(document).ready(function() {
+    //called when page is ready
     //cache jquery selections
     detectorTable = $("#detectorStateTable");
     globalSystemTable = $("#globalSystemStateTable");
@@ -203,8 +218,10 @@ $(document).ready(function() {
     comments= {}
 
     $("#ready").click(function(e) {
+        //click function for configure button
         e.preventDefault();
         var form = $("#configure_form")[0];
+        //check if there is a selected configuration
         if (selectedTag.html() == "No Configuration Tag" || (selectedTag.html() == "customTag" && !customConfiguration)){
             selectConfButton.popover('show')
             return;
@@ -212,6 +229,7 @@ $(document).ready(function() {
         else{
           selectConfButton.popover('hide')
         }
+        //set request data
         if (typeof(customConfiguration)!= "undefined" && customConfiguration != false){
           var req_data = {csrfmiddlewaretoken: '{{ csrf_token }}', autoConfigure: $("#autoConfigureCheckBox").prop("checked"), globalTag: $("#selectedTag").html(), "customConfiguration[]" : customConfiguration};
         }
@@ -226,6 +244,7 @@ $(document).ready(function() {
         });
     });
     $("#start").click(function(e) {
+        //click function for start button
         e.preventDefault();
         $.ajax({
             type: "POST",
@@ -235,6 +254,7 @@ $(document).ready(function() {
         });
     });
     $("#stop").click(function(e) {
+        //click function for stop button
         e.preventDefault();
         $.ajax({
             type: "POST",
@@ -244,6 +264,7 @@ $(document).ready(function() {
         });
     });
     $("#abort").click(function(e) {
+        //click function for abort button
         e.preventDefault();
         $.ajax({
             type: "POST",

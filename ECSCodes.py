@@ -1,4 +1,5 @@
 class ECSCodes:
+    """ecs byte codes"""
     ok = b'\x00'
     error = b'\x01'
     errorCreatingPartition = b'\x14'
@@ -58,28 +59,3 @@ class ECSCodes:
     toggleAutoConfigure = b'\x21'
 
     subsystemMessage = b'\x55'
-
-    def stringForCode(self,code):
-        if code in self.stringForStatusCode:
-            return self.stringForStatusCode[code]
-        else:
-            return "No known String for code %s" % code
-
-    stringForStatusCode = {
-        start : "start",
-        ok : "ok",
-        error : "error",
-        errorCreatingPartition : "error while creating Partition",
-        errorMapping : "error while mapping Detector",
-        detectorChangePartition: "detector has a new Partition",
-        unknownCommand : "command is unknown",
-
-        reset: "start/restart",
-
-        busy: "is already in a Transition",
-        idUnknown: "id is unknown",
-
-        getReady: "configure",
-        start: "start",
-        abort: "abort",
-    }

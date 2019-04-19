@@ -4,7 +4,6 @@ from django.conf.urls import include
 from . import views
 
 app_name='GUI'
-#todo maybe one Path for all requests?
 urlpatterns = [
     path('accounts/', include('django.contrib.auth.urls')),
     path('', views.index.as_view(), name='index'),

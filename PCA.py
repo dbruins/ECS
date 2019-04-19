@@ -55,11 +55,13 @@ class PCA:
         self.ECARequestPort = conf['ECARequestPort']
 
         def checkConsistencyRequest(detectorList):
+            #currently unused
             detectorList = DataObjectCollection(json.loads(detectorList),detectorDataObject)
             start_new_thread(self.checkSystemConsistency,(detectorList,))
             return codes.ok
 
         def measureConfigureTime(arg=None):
+            """just for timemeasure purpose use self.configure instead"""
             self.start_time = time.time()
             return self.configure(arg)
 
@@ -274,6 +276,7 @@ class PCA:
         self.initdone.set()
 
     def getCurrentglobalTag(self):
+        """gets the current global configuration tag"""
         return self.globalTag
 
     def waitForCommands(self):
@@ -355,7 +358,6 @@ class PCA:
                     continue
                 self.socketDetectorUpdates.send(codes.ok)
                 if not subSystemObject.checkSequence(message["sequenceNumber"]):
-                    #print(id,state,subSystemObject.sequenceNumber,message["sequenceNumber"],subSystemObject.stateMachine.currentState)
                     #update is obsolete
                     continue
 
@@ -486,6 +488,7 @@ class PCA:
         self.publishQueue.put((id,stateObj))
 
     def handleSystemMessage(self,arg):
+        """handle message from a subsystem e.g. DCS"""
         message = json.loads(arg)
 
         if "id" not in message:
@@ -849,6 +852,7 @@ class PCA:
         return True
 
     def resetSystem(self,arg):
+        """reset a given subsystem"""
         arg = json.loads(arg)
         systemId = arg["systemId"]
         if systemId in self.detectors:
@@ -923,6 +927,7 @@ class PCA:
         return codes.ok
 
     def log(self,logmessage,error=False):
+        """log to console and logfile and publish log to external systems"""
         str=datetime.now().strftime("%Y-%m-%d %H:%M:%S")+":" + logmessage
         try:
             #publish log on zmq socket
@@ -936,6 +941,7 @@ class PCA:
 
 
     def terminatePCA(self,_signo, _stack_frame):
+        """termiante the PCA"""
         self.log("terminating")
         for id in self.detectors.keyIterator():
             d = self.detectors[id]
@@ -954,15 +960,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     test = PCA(sys.argv[1])
-
-    x = ""
-    while x != "end":
-        try:
-            x = input()
-        except KeyboardInterrupt:
-            test.terminatePCA(0,0)
-            break
-        except EOFError:
-            test.terminate.wait()
-            test.terminatePCA(0,0)
-            break
+    try:
+        test.terminate.wait()
+    except KeyboardInterrupt:
+        test.terminatePCA(0,0)

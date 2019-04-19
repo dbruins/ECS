@@ -1,4 +1,5 @@
 class PCAStates:
+    """binds states to python variables und provides helper functions for PCA States"""
     Idle = "Idle"
     Configuring_TFC = "Configuring_TFC"
     TFC_Active = "TFC_Active"
@@ -27,6 +28,7 @@ class PCAStates:
         FLES_and_DCS_Active:("QA",),
     }
 
+    #hierarchie of systems
     hierarchie = {
         "TFC":1,
         "Detectors":2,
@@ -41,7 +43,7 @@ class PCAStates:
         #filter out lower systems und turn into list
         return list(map(lambda x:x[0],filter(lambda x:x[1]>self.hierarchie[system],self.hierarchie.items())))
 
-    #states in which configuring button should be enabled
+    #states in which UI buttons should be enabled
     configuringEnabled = {Idle,TFC_Active,Detectors_Active,FLES_and_DCS_Active,QA_Active}
     startEnabled = {QA_Active}
     stopEnabled = {Recording}

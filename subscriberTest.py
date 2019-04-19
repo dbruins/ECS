@@ -8,6 +8,8 @@ codes = ECSCodes()
 import configparser
 import json
 
+#create n subscribers for a pca
+
 if len(sys.argv) < 3:
     print("please provide number of subscriptions and some detector Id")
     sys.exit(1)

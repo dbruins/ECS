@@ -11,7 +11,6 @@ import time
 import ECS_tools
 from datetime import datetime
 import paramiko
-#import DataObjects
 from  UnmappedDetectorController import UnmappedDetectorController
 from GUI.models import pcaModel, ecsModel
 from django.conf import settings
@@ -26,15 +25,16 @@ from DataBaseWrapper import DataBaseWrapper
 from WebSocket import WebSocket
 
 class ECA:
-    """The Experiment Control System"""
+    """The Experiment Control Agent"""
     def __init__(self):
+        #data stuff
         self.database = DataBaseWrapper(self.log)
         self.partitions = ECS_tools.MapWrapper()
         self.disconnectedDetectors = ECS_tools.MapWrapper()
         self.stateMap = ECS_tools.MapWrapper()
         self.logQueue = deque(maxlen=settings.BUFFERED_LOG_ENTRIES)
-        #signal.signal(signal.SIGTERM, self.terminateECS)
 
+        #set settings
         self.receive_timeout = settings.TIMEOUT
         self.pingInterval = settings.PINGINTERVAL
         self.pingTimeout = settings.PINGTIMEOUT
@@ -47,10 +47,12 @@ class ECA:
         self.checkIfRunningScript = settings.CHECK_IF_RUNNING_SCRIPT
         self.virtenvFile =  settings.PYTHON_VIRTENV_ACTIVATE_FILE
 
+        #zmq context with timeouts
         self.zmqContext = zmq.Context()
         self.zmqContext.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
         self.zmqContext.setsockopt(zmq.LINGER,0)
 
+        #zmq context without timeouts
         self.zmqContextNoTimeout = zmq.Context()
         self.zmqContextNoTimeout.setsockopt(zmq.LINGER,0)
 
@@ -67,7 +69,6 @@ class ECA:
         debugMode = settings.DEBUG
         logging.basicConfig(
             format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p',
-            #level = logging.DEBUG,
             handlers=[
             #logging to file
             logging.FileHandler(self.logfile),
@@ -95,7 +96,6 @@ class ECA:
             "portLog" : "-1",
             "portUpdates" : settings.UNUSED_DETECTORS_UPDATES_PORT,
             "portCurrentState" : settings.UNUSED_DETECTORS_CURRENT_STATE_PORT,
-            "portSingleRequest" : "-1",
             "portCommand" : "-1",
 
         }
@@ -128,7 +128,7 @@ class ECA:
             for p in self.partitions:
                 ret = self.startClient(p)
 
-        #clear database from Previous runs
+        #clear permissions in database from previous runs
         pcaModel.objects.all().delete()
         ecsModel.objects.all().delete()
 
@@ -148,11 +148,12 @@ class ECA:
         unmappedDetectors = self.database.getAllUnmappedDetectors()
         self.unmappedDetectorController = UnmappedDetectorController(unmappedDetectors,self.unmappedDetectorControllerData.portPublish,self.unmappedDetectorControllerData.portUpdates,self.unmappedDetectorControllerData.portCurrentState,self.log,self.webSocket)
 
-        #todo obsolete?
+        #currently unused
         t = threading.Thread(name="consistencyCheckThread", target=self.consistencyCheckThread)
         #t.start()
 
     def getPCAHandler(self,id):
+        """get pca handler for given id"""
         if id in self.pcaHandlers:
             return self.pcaHandlers[id]
         else:
@@ -167,7 +168,7 @@ class ECA:
             self.checkSystemConsistency()
 
     def checkIfRunning(self,clientObject):
-        """check if client is Running"""
+        """check if a client is Running"""
         if isinstance(clientObject,detectorDataObject):
             path = self.pathToDetectorCodeFile
         elif isinstance(clientObject,globalSystemDataObject):
@@ -200,7 +201,7 @@ class ECA:
             return False
 
     def startClient(self,clientObject):
-        """starts a PCA or Detector client via SSH returns the process Id on success"""
+        """starts a PCA or controller agent client via SSH and returns the process Id on success"""
         if isinstance(clientObject,detectorDataObject):
             path = self.pathToDetectorCodeFile
             fileName = self.DetectorCodeFileName
@@ -237,7 +238,7 @@ class ECA:
             return False
 
     def stopClient(self,clientObject):
-        """kills a PCA or Detector Client via SSH"""
+        """kills a PCA or controller agent client via SSH"""
         if not (isinstance(clientObject,detectorDataObject) or isinstance(clientObject,partitionDataObject) or isinstance(clientObject,globalSystemDataObject)):
             raise Exception("Expected detector, partition or globalSystem Object but got %s" % type(clientObject))
         id = clientObject.id
@@ -930,6 +931,7 @@ class ECA:
 class PCAHandler:
     """Handler Object for Partition Agents"""
     def __init__(self,partitionInfo,ecsLogfunction,globalSystems,webSocket):
+        #settings
         self.id = partitionInfo.id
         self.address = partitionInfo.address
         self.portLog = partitionInfo.portLog
@@ -974,6 +976,7 @@ class PCAHandler:
         t.start()
 
     def createCommandSocket(self):
+        """creates and returns a command socket"""
         socket = self.context.socket(zmq.REQ)
         socket.connect(self.commandSocketAddress)
         socket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
@@ -1014,6 +1017,7 @@ class PCAHandler:
                 time.sleep(self.pingInterval)
 
     def handleDisconnection(self):
+        """handler function for a pca disconnection"""
         if self.PCAConnection:
             self.log("PCA %s Connection Lost" % self.id)
         self.PCAConnection = False
@@ -1078,14 +1082,12 @@ class PCAHandler:
                 jsonWebUpdate["buttons"] = PCAStates.UIButtonsForState(state["state"])
             jsonWebUpdate = json.dumps(jsonWebUpdate)
             self.webSocket.sendUpdate(jsonWebUpdate,self.id)
-            #self.sendUpdateToWebsockets("update",jsonWebUpdate)
 
     def log(self,message):
         """spread log message through websocket"""
         self.logQueue.append(message)
         self.ecsLogfunction(message,origin=self.id)
         self.webSocket.sendLogUpdate(message,self.id)
-        #self.sendUpdateToWebsockets("logUpdate",message)
 
     def waitForLogUpdates(self):
         """wait for new log messages from PCA"""

@@ -81,14 +81,6 @@ class MapWrapper:
         finally:
             self.semaphore.release()
 
-    def size(self):
-        self.semaphore.acquire()
-        try:
-            ret = len(self.map)
-            return ret
-        finally:
-            self.semaphore.release()
-
     def delMany(self,items):
         """deletes a given list of ids"""
         self.semaphore.acquire()
@@ -101,22 +93,12 @@ class MapWrapper:
 
 
     def reset(self):
+        """reset the map data"""
         self.semaphore.acquire()
         try:
             self.map = {}
         finally:
             self.semaphore.release()
-
-def resetSocket(self,socket,address,port,type):
-    """resets a socket with address and zmq Type; if socket is None a new socket will be created"""
-    if socket != None:
-        socket.close()
-    socket = self.zmqContext.socket(type)
-    socket.connect("tcp://%s:%s" % (address,port))
-    if type == zmq.REQ:
-        socket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-    socket.setsockopt(zmq.LINGER,0)
-    return socket
 
 def intToBytes(x):
     """convert an integer to a byte array"""

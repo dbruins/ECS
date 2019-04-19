@@ -12,6 +12,7 @@ import json
 from states import MappedStates
 
 class UnmappedDetectorController:
+    """lightweight PCA for unammaped detectors"""
 
     def __init__(self,detectorData,publishPort,updatePort,currentStatePort,logfunction,webSocket):
         self.detectors = ECS_tools.MapWrapper()
@@ -53,6 +54,7 @@ class UnmappedDetectorController:
         for t in threadArray:
             t.join()
 
+        #start threads
         t = threading.Thread(name='updates', target=self.waitForUpdates, args=())
         t.start()
 
@@ -60,6 +62,7 @@ class UnmappedDetectorController:
         t.start()
 
     def publisher(self):
+        """update subsystem states, publish state changes and check the current global state"""
         while True:
             id,state = self.publishQueue.get()
             if self.terminate.is_set():
@@ -146,12 +149,15 @@ class UnmappedDetectorController:
 
 
     def handleDetectorTimeout(self,id):
+        """handler function for ping timeout"""
         self.publishQueue.put((id,stateObject("Connection Problem")))
 
     def handleDetectorReconnect(self,id,stateObj):
+        """handler function for detector reconnect"""
         self.publishQueue.put((id,stateObj))
 
     def checkIfTypeIsKnown(self,detector):
+        """check if there is a corresponding class dor the detector type"""
         types = PartitionComponents.DetectorTypes()
         typeClass = types.getClassForType(detector.type)
         if not typeClass:
@@ -168,8 +174,6 @@ class UnmappedDetectorController:
         confSection = types.getConfsectionForType(detector.type)
         det = typeClass(detector.id,detector.address,detector.portCommand,confSection,self.log,self.handleDetectorTimeout,self.handleDetectorReconnect)
         self.detectors[det.id] = det
-        #self.publishQueue.put((det.id,det.getStateObject()))
-
         return True
 
     def removeDetector(self,id):
@@ -190,12 +194,14 @@ class UnmappedDetectorController:
         self.context.term()
 
     def isDetectorConnected(self,detectorId):
+        """returns True if detector is connected"""
         if self.detectors[detectorId]:
             return self.detectors[detectorId].connected
         else:
             return False
 
     def abortDetector(self,detId):
+        """sends abort command to detector"""
         det = self.detectors[detId]
         if det.getMappedState() == MappedStates.Unconfigured:
             return True

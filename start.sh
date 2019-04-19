@@ -14,7 +14,6 @@ done
 
 terminate() {
 	for k in `seq 1 $i`
-	#for k in `seq 50 $(($1+50))`
 	do
 		kill ${arr[$k]}
 	done
