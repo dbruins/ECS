@@ -987,7 +987,6 @@ class PCAHandler:
         """send heartbeat/ping"""
         socket = self.createCommandSocket()
         while True:
-            nextPing = time.time() + self.pingInterval
             try:
                 socket.send(codes.ping)
                 r = socket.recv()
@@ -1009,12 +1008,7 @@ class PCAHandler:
                 self.log("Exception while sending Ping: %s" % str(e))
                 socket.close()
                 socket = self.createCommandSocket()
-            finally:
-                nextPing = time.time() + self.pingInterval
-            if time.time() > nextPing:
-                nextPing = time.time() + self.pingInterval
-            else:
-                time.sleep(self.pingInterval)
+            time.sleep(self.pingInterval)
 
     def handleDisconnection(self):
         """handler function for a pca disconnection"""

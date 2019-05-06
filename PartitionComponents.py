@@ -59,16 +59,18 @@ class PartitionComponent:
                     self.mapper[row[0]] = row[1]
         start_new_thread(self.ping,())
 
+    def createPingSocket(self):
+        pingSocket = self.zmqContext.socket(zmq.REQ)
+        pingSocket.connect(self.commandAddress)
+        pingSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
+        pingSocket.setsockopt(zmq.LINGER,0)
+        return pingSocket
 
     def ping(self):
         """sends periodic heartbeats to the subsystem"""
+        pingSocket = self.createPingSocket()
         while True:
-            pingSocket = None
             try:
-                pingSocket = self.zmqContext.socket(zmq.REQ)
-                pingSocket.connect(self.commandAddress)
-                pingSocket.setsockopt(zmq.RCVTIMEO, self.receive_timeout)
-                pingSocket.setsockopt(zmq.LINGER,0)
                 pingSocket.send(codes.ping)
                 pingSocket.recv()
                 if self.connected != True:
@@ -81,18 +83,22 @@ class PartitionComponent:
                     self.connected = True
                     self.reconnectFunction(stateObject([self.getMappedStateForState(state),state,configTag,None]))
             except zmq.Again:
+                #timeout
                 if self.connected == True or self.connected == None:
                     self.connected = False
                     self.logfunction("timeout pinging %s" % self.name, True)
                     self.timeoutFunction()
+                #reset socket
+                pingSocket.close()
+                pingSocket = self.createPingSocket()
             except zmq.error.ContextTerminated:
-                #termination during sending ping
+                #process is terminating; end loop
                 break
             except zmq.error.ZMQError:
-                break
-            finally:
-                if pingSocket:
-                    pingSocket.close()
+                #unexpected error
+                #reset socket
+                pingSocket.close()
+                pingSocket = self.createPingSocket()
             time.sleep(self.pingInterval)
 
     def checkSequence(self,sequenceNumber):
